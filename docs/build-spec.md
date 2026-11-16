@@ -85,7 +85,8 @@ forwarder logged the right caller name.
 ## 3. Repo layout
 
 npm workspaces, four packages. Workspaces (rather than one package) because the broker's package boundary is a
-security property: `packages/broker/package.json` has **no runtime dependencies**, and a test asserts it.
+security property: `packages/broker/package.json` has **no runtime dependencies**, and a test asserts it
+(section 9.7, invariant 21).
 
 ```
 package.json            workspaces, scripts: check, test, dev, build
@@ -130,7 +131,7 @@ launchd/
 |---|---|---|
 | Language | TypeScript, strict, ESM. | One language. |
 | Running server code | `node src/main.ts`. Node 24+ strips types itself. No build step, no bundler, no `ts-node`. | No part. Consequence: erasable syntax only (`erasableSyntaxOnly`: no enums, no parameter properties, no namespaces), and relative imports end in `.ts`. |
-| `contract` at run time | Types are imported with `import type`. The few constants in `names.ts` are plain `.ts` and import nothing. | Keeps `contract` free of behaviour. |
+| `contract` at run time | Types are imported with `import type`. The constants and name rules in `names.ts` are plain `.ts` and import nothing; they are the only values the broker takes from another package. | Keeps `contract` free of behaviour, and the header name, id shapes and ports stated once. |
 | SQLite | `node:sqlite` (`DatabaseSync`). | Built in: no native build, no dependency, and the broker stays dependency-free. Synchronous calls suit one-writer processes. Each package wraps it in its own `db.ts` (open with `journal_mode=WAL`, `foreign_keys=ON`, `busy_timeout=5000`; `tx(fn)` runs `BEGIN IMMEDIATE … COMMIT`). |
 | Migrations | An ordered array of SQL strings in `db.ts`, applied by `PRAGMA user_version`. | No migration tool. |
 | Tests | `node --test`, repo-wide, with `node:assert/strict`. | Built in. The web package tests only `src/logic/*.ts`; there are no component tests. |
@@ -708,8 +709,8 @@ All example text in the repo is generic.
 CREATE TABLE credentials (
   team_id TEXT NOT NULL, host TEXT NOT NULL,
   scheme TEXT NOT NULL CHECK (scheme IN ('bearer','basic','header')),
-  username TEXT,                 -- basic
-  header_name TEXT,              -- header
+  username TEXT CHECK ((username IS NOT NULL) = (scheme = 'basic')),
+  header_name TEXT CHECK ((header_name IS NOT NULL) = (scheme = 'header')),
   nonce BLOB NOT NULL, secret_enc BLOB NOT NULL,       -- AES-256-GCM; ciphertext then 16-byte tag
   created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL,
   rejected_at INTEGER,           -- the host answered 401 with this credential
@@ -738,7 +739,7 @@ CREATE INDEX requests_pending ON requests (status, team_id);
 
 CREATE TABLE audit (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
-  at INTEGER NOT NULL, team_id TEXT NOT NULL, agent_id TEXT,
+  at INTEGER NOT NULL, team_id TEXT NOT NULL, agent_id TEXT,     -- team_id is '' when the caller is unknown
   actor TEXT NOT NULL CHECK (actor IN ('agent','owner','broker')),
   action TEXT NOT NULL,          -- call | deny | credential.set | credential.delete | credential.rejected
                                  -- grant.create | grant.revoke | grant.expire
@@ -756,10 +757,12 @@ and never asks the app who a caller is.
 
 - Key: 32 random bytes, base64, in the macOS login Keychain as a generic password (service `a12s-studio-broker`,
   account `vault-key`). `vault.ts` reads it with `/usr/bin/security find-generic-password … -w` at start and creates
-  it on first start. The key source is a constructor argument so tests pass a fixed key. The broker does not start
-  without a key.
+  it on first start. The new key goes to `security -i` on stdin, never as an argument, so it is not in the process
+  list; the broker then reads it back and uses what the Keychain kept. The key source is a constructor argument so
+  tests pass a fixed key. The broker does not start without a key.
 - Each value: AES-256-GCM, a fresh 12-byte nonce, additional data `<team_id>\n<host>` so a ciphertext cannot be
   moved to another row.
+- A value is one line of printable ASCII, so it is always a legal header value.
 - A value is decrypted per call, used for one header, and not kept. No route, log line or error contains it.
 
 ### 9.3 Forward API (`127.0.0.1:7420`)
@@ -769,24 +772,40 @@ and never asks the app who a caller is.
 Order of checks; the first failure answers and is audited as `deny`:
 
 1. **Caller.** Exactly one caller header, matching `^[a-z][a-z0-9]{1,19}-[a-z][a-z0-9-]{0,29}$`. Else 403 `no_caller`.
-2. **Target.** `<host>` matches `^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$` (lower case, at
-   least one dot, no port, no user info, not an IP address). The raw path contains no `..` segment, no `//`, no
-   `%2f`, `%5c` or `%2e` in any case, and no backslash. Else 400 `bad_target`.
+2. **Target.** `<host>` matches `^([a-z0-9]([a-z0-9-]*[a-z0-9])?\.)+[a-z]([a-z0-9-]*[a-z0-9])?$` (lower case, at
+   least one dot, no port, no user info), is at most 253 characters, and does not end in `.localhost` or `.a12s`.
+   The last label starts with a letter, so no spelling of an IP address (`127.0.0.1`, `127.1`, `0x7f.0.0.1`) is a
+   host. The path is present and, with the query, printable ASCII. The raw path contains no `.` or `..` segment,
+   no `//`, no `%2f`, `%5c` or `%2e` in any case, no backslash and no `#`. The path is matched and forwarded
+   exactly as sent, never decoded. Else 400 `bad_target`; the audit row then holds neither host nor path.
 3. **Credential.** A `credentials` row for (caller's team, host). Else 403 `no_access`.
 4. **Grant.** A grant for (team, host) that is not revoked, has `expires_at` null or in the future, lists the method
    (`HEAD` counts as `GET`), and has a pattern matching the path. Else 403 `no_access`.
 5. **Forward.** Remove from the request: `Authorization`, `Cookie`, `Proxy-*`, `Host`, the caller header, and
-   hop-by-hop headers. Add the credential: `bearer` → `Authorization: Bearer <secret>`; `basic` →
-   `Authorization: Basic base64(<username>:<secret>)`; `header` → `<header_name>: <secret>`. Stream the request body
-   up and the response down without buffering (git packs are large). Do not follow redirects. Connect timeout 10 s;
-   no total limit.
+   hop-by-hop headers (`Connection` and every header it names, `Keep-Alive`, `TE`, `Trailer`, `Transfer-Encoding`,
+   `Upgrade`, and `Expect`, which Node has already answered). Add the credential: `bearer` →
+   `Authorization: Bearer <secret>`; `basic` → `Authorization: Basic base64(<username>:<secret>)`; `header` →
+   `<header_name>: <secret>`, replacing a header of that name sent by the agent. Stream the request body up and the
+   response down without buffering (git packs are large). Do not follow redirects. Connect timeout 10 s; no total
+   limit, so the listener has no request timeout either.
 6. **Answer.** Pass the upstream status, headers (minus hop-by-hop and `Set-Cookie`) and body through, and audit
-   `call` with the status. One exception: an upstream 401 becomes 502 `credential_rejected`, sets `rejected_at`,
-   and is audited, so git never prompts for a password.
+   `call` with the status. Exceptions:
+   - An upstream 401 becomes 502 `credential_rejected`, sets `rejected_at`, and is audited as one
+     `credential.rejected` row with status 401, so git never prompts for a password. Storing the credential again
+     clears `rejected_at`.
+   - An upstream that cannot be reached becomes 502 `upstream_failed`, audited as `call` with status 502 and the
+     error code as detail. If the connection fails after the response has started, the agent's connection is cut.
+   - An agent that goes away ends the upstream call.
+   - An error inside the broker (a credential that does not decrypt) becomes 500 `internal`. It is logged, not
+     audited, and nothing is forwarded.
 
-**Path patterns.** A pattern starts with `/`. `*` matches one whole segment. A final `/**` matches the path itself
-and anything under it. Everything else is literal. No other wildcards. `match.ts` is a pure function with table
-tests.
+Every forward request that gets past the broker's own errors leaves exactly one audit row.
+
+**Path patterns.** A pattern starts with `/`. `*` matches one whole, non-empty segment. A final `/**` matches the
+path itself and anything under it. Everything else is literal. No other wildcards: `*` inside a segment and `**` before
+the end are refused when the grant is made, as is anything a target path may not contain. A grant's methods come
+from `GET`, `POST`, `PUT`, `PATCH`, `DELETE`. `match.ts` holds these rules and the target rules as pure functions
+with table tests.
 
 **The 403 body** (same for a missing credential and a missing grant, so hosts cannot be probed):
 
@@ -835,12 +854,24 @@ POST   /grants/:id/warned
 DELETE /teams/:team                            removes its credentials, grants and requests; audit rows stay
 ```
 
-Every change writes an audit row with actor `owner` in the same transaction. No admin route returns a secret.
+Every change writes an audit row in the same transaction, with actor `owner`; `request.create` has actor `agent`
+and the agent's id. `POST /grants/:id/warned` is the one write without a row: it records that the app passed a
+warning on and changes no one's access. No admin route returns a secret.
+
+- Answers: `GET /teams/:team/access` returns every credential, grant and request of the team, newest first; the
+  app filters. `PUT` credential returns the credential view, `POST` grant the grant, `POST` request and both
+  decisions the request. The deletes and `warned` answer 204.
+- Refusals are `{ code, message, fix? }`: 400 `invalid` (a body, host, method, pattern, team slug or expiry that
+  breaks a rule; an `agentId` that is not of the team), 404 `not_found` (also for another team's grant or
+  request), 409 `already_decided`, 409 `no_credential`. A refused change writes nothing.
+- A grant may be created for a host that has no credential yet; it gives nothing until one is stored. Storing a
+  credential for a host that has one replaces it.
 
 ### 9.6 Expiry and the three-day warning
 
 - Expiry is enforced at match time (`expires_at > now`); no timer is needed for correctness.
-- `sweep.ts` runs each minute: it stamps `expired_at` on grants past their expiry and audits `grant.expire`.
+- `sweep.ts` runs each minute: it stamps `expired_at` on grants past their expiry that were not revoked and audits
+  `grant.expire` with actor `broker`.
 - The warning reaches the agent through the app: the app's scheduler tick calls `GET /attention`; for each expiring
   grant it posts a note from `system` to the team's lead (`Access to <host> <paths> expires on <date>. Use access to
   request an extension if the team still needs it.`), then calls `POST /grants/:id/warned`. The same answer feeds the
@@ -848,8 +879,11 @@ Every change writes an audit row with actor `owner` in the same transaction. No 
 
 ### 9.7 Default-deny invariants
 
-Each line is a test in `packages/broker/test`, run against the real broker code with an in-memory database and a
-local HTTPS stub as upstream.
+Each line is a test in `packages/broker/test` named `invariant <n>: …`, run against the real broker code with an
+in-memory database and a local HTTPS stub as upstream. The broker dials `<host>:443` over TLS exactly as in
+production; the tests give it an `https.Agent` that points the socket at the stub, which proves its name with a
+certificate made by `openssl` when the test starts. The same folder tests the git smart-HTTP shape, with a streamed
+advertisement, a streamed pack and the real `git` client.
 
 1. No caller header → 403; no upstream connection is made.
 2. Two caller headers, or one that is not `<team>-<agent>` shaped → 403.
@@ -863,8 +897,9 @@ local HTTPS stub as upstream.
 9. Revoked grant → 403 on the next call.
 10. Approve → the next call succeeds with no restart. Deny → still 403.
 11. Deleting a credential → 403, and its grants are revoked.
-12. Path tricks (`..`, `//`, `%2e%2e`, `%2f`, backslash) → 400, never forwarded.
-13. Host tricks (port, `user@host`, IP address, upper case, trailing dot, `localhost`, a `.a12s` name) → 400.
+12. Path tricks (`..`, `.`, `//`, `%2e%2e`, `%2f`, `%5c`, backslash, `#`) → 400, never forwarded.
+13. Host tricks (port, `user@host`, an IP address in any spelling, upper case, trailing dot, `localhost`, a
+    `.localhost` or `.a12s` name) → 400, and no credential can be stored for one.
 14. A client-sent `Authorization`, `Cookie` or caller header never reaches upstream; the stored credential does.
 15. The 403 body contains `code`, `message` and the `access` fix, and is identical for cases 3 and 4.
 16. Upstream redirects are returned, not followed.
@@ -873,8 +908,8 @@ local HTTPS stub as upstream.
 19. No admin response and no log line contains a stored secret (the test stores a marker value and searches all
     output).
 20. A ciphertext copied to another team's row fails to decrypt.
-21. `packages/broker/package.json` has no `dependencies`, and no broker file imports from another package except
-    `contract` types.
+21. `packages/broker/package.json` has no `dependencies`, and broker code imports only Node built-ins, its own
+    files and `contract`: types from any of its files, values from `names.ts` only.
 
 ## 10. Phases and work packages
 
