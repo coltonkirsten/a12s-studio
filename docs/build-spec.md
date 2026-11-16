@@ -74,9 +74,9 @@ Throwaway code. Each has one decision hanging on it.
 | M2 | The released external Service: exact Fleet syntax, the header name (assumed `A12s-Caller`), how an MCP port is declared, the tool prefix agents see (assumed `mcp__a12s-studio__post`), whether the `.a12s` port can be 80, whether a per-Service secret header exists, and whether a prefix token may create an agent computer whose `uses` names an external Service (assumed no). | The four constants in `packages/contract` (`CALLER_HEADER`, `STUDIO_URL`, `BROKER_URL`, tool prefix), and which token writes specs (section 6). **Measured:** the syntax in section 6; the header is `A12s-Caller`, stamped on plain HTTP only, with any copy the agent sent removed; the port agents call on `<name>.a12s` is the port the Controller dials on the host; only the owner token may declare an external Service. |
 | M3 | `git clone` and `git push` of a real repository from an agent container through a 30-line forwarder that adds the token. Then check the container's environment and disk for the token. | Confirms section 9's forward design (streaming bodies, headers). |
 | M4 | A `SessionStart` hook given through `harness.settings` prints text: does it reach the model at session start and after `/compact` (both the compact-before-sleep one and an automatic one)? | The notes hook (section 6). If not: the hook becomes a line in the core instructions telling the agent to read its notes first. |
-| M5 | `turn.finished.usage.modelUsage[*].costUSD` across: two Turns in one session, a sleep and wake, a compaction, a `fresh` session, a Turn with a sub-agent. | The cost delta rule (section 7.4). |
+| M5 | `turn.finished.usage.modelUsage[*].costUSD` across: two Turns in one session, a sleep and wake, a compaction, a `fresh` session, a Turn with a sub-agent. | The cost delta rule (section 7.4). **Measured:** each model's `costUSD` is its running total for the session, sub-agents and `/compact` Turns included; it starts again from zero only in a fresh session. So the rule works per model, per session. |
 | M6 | Does `tailscale serve` set `Tailscale-User-Login` and `X-Forwarded-For`, and strip client-sent `Tailscale-*` headers? | `ownerGate` as written. |
-| M7 | An agent asleep with a pending Message and no `wakeOnMessage`: does it stay asleep until `wake()`? Does `wake()` on a prefix token work and stay outside `maxWakesPerHour`? | The wake design (section 5.3). |
+| M7 | An agent asleep with a pending Message and no `wakeOnMessage`: does it stay asleep until `wake()`? Does `wake()` on a prefix token work and stay outside `maxWakesPerHour`? | The wake design (section 5.3). **Measured:** `POST …/power {"state":"awake"}` on a prefix token wakes it. |
 | M8 | How a Docker volume name maps to an agent computer's home drive (`GET /v1/drives`). | The backup script. |
 
 **Phase 0 exit:** inside an agent container the environment and disk show no GitHub token, a push works, and the
@@ -100,18 +100,23 @@ packages/
     src/names.ts        slug rules, id helpers, the two ports and the four M2 constants
   app/
     src/main.ts         wires everything; the only file that reads env and config
+    src/app.ts          createApp(deps): builds the app around an a12s port; main.ts and tests share it
     src/db.ts           open, migrate, transaction helper
     src/repo.ts         all SQL; forTeam(teamId) scoped accessors
+    src/errors.ts       StudioError: status, code, message, fix
     src/caller.ts       resolveCaller: header -> agent -> team
+    src/agent-server.ts the agent listener (7410)
     src/tools/          the six tools, one file each, plus mcp.ts
-    src/router.ts       post rules: kinds, replies, thread status
+    src/router.ts       post rules: kinds, replies, thread status, the implicit answer
     src/dispatcher.ts   the one queue: pause, budget, awake cap, delivery
-    src/a12s/           port.ts (interface), real.ts (SDK), fake.ts (in-memory), spec.ts (agentSpec)
+    src/teams.ts        create, hire, fire, delete, pause and resume
+    src/a12s/           port.ts (interface), real.ts (a12s HTTP API), fake.ts (in-memory), spec.ts (agentSpec)
     src/live.ts         a12s events -> presence, line, text, turns
     src/state.ts        derive StudioState; rev counter; SSE fan-out
     src/owner/          ownerGate, routes, static files
     src/broker-client.ts
     src/scheduler.ts    the one 30 s tick
+    scripts/a12s-smoke.ts   real.ts against a running Fleet; manual
     test/
   broker/
     src/main.ts  db.ts  vault.ts  match.ts  forward.ts  admin.ts  caller.ts  sweep.ts
@@ -232,12 +237,12 @@ CREATE TABLE turns (                                   -- one row per finished a
   team_id TEXT NOT NULL REFERENCES teams(id),
   agent_id TEXT NOT NULL REFERENCES agents(id),
   thread_id TEXT REFERENCES threads(id),               -- thread of the first Studio message it delivered
-  session TEXT NOT NULL,
+  session TEXT,                                        -- null: it ended before the harness started a session
   status TEXT NOT NULL,                                -- completed | failed | interrupted
   error TEXT,
   started_at INTEGER, finished_at INTEGER NOT NULL,
   tokens_in INTEGER, tokens_out INTEGER, tokens_cache_read INTEGER, tokens_cache_write INTEGER,
-  cost_total_usd REAL NOT NULL DEFAULT 0,              -- the session's running total as reported
+  model_costs TEXT NOT NULL DEFAULT '{}',              -- JSON: each model's running total for the session, as reported
   cost_usd REAL NOT NULL DEFAULT 0,                    -- this Turn's share
   acked_at INTEGER                                     -- a failed Turn's card was dismissed
 ) STRICT;
@@ -267,6 +272,7 @@ The app's agent listener (`7410`) is the external Service `studio`. It serves:
 - `POST /mcp`: an MCP server over streamable HTTP, stateless (`sessionIdGenerator: undefined`,
   `enableJsonResponse: true`): a new server and transport per request, with the caller bound in a closure.
 - `GET /files/<message id>/<name>`: an attachment, for a caller on the message's team.
+- `GET /healthz`: `{ ok: true }`. The one route that needs no caller; it reads nothing.
 
 `caller.ts` is the only reader of the caller header:
 
@@ -361,19 +367,19 @@ Rules when a message is committed (`router.ts`):
 - note to an agent: `queued`. It is **never sent to a12s by itself**, because a Message to an idle awake agent starts
   a Turn. It rides along: when the dispatcher sends an ask or reply to that agent, it appends that agent's queued
   notes to the same body and marks them `sent` with the same a12s Message id.
-- anything to `owner`, or a note with no receiver: `none`.
+- anything to `owner`, a note with no receiver, or a reply to an asker who has left the team: `none`.
 - A `post` returns only after its transaction has committed. The dispatcher runs after the commit, not inside it.
 
 **The dispatcher** (`dispatcher.ts`) is one function, `run()`, serialized (a run requested during a run sets a flag
 and runs once more). It is called after every committed message, every a12s phase change, every settings change,
 and every scheduler tick. It keeps no state of its own except the set of agents it has just woken, cleared when their
-phase event arrives.
+phase event arrives. Phases and pending counts come from each team's `status()` at the start of a run.
 
 ```
 if settings.paused: return
 awake = agents whose a12s phase is not Asleep, plus the just-woken set
-candidates = agents with a queued ask or reply, ordered by their best message:
-             from 'owner' first, then oldest created_at
+candidates = agents with a queued ask or reply, and asleep agents with pending a12s Messages,
+             ordered by their best queued message: from 'owner' first, then oldest created_at
 for each candidate:
   team paused                      -> skip
   team spend today >= its budget   -> skip
@@ -382,13 +388,16 @@ for each candidate:
     awake count >= awake_cap       -> skip
     free disk < min_free_disk_gb   -> skip
   send every queued ask and reply for it, oldest first, the notes riding on the first
-  if it was asleep: wake() it and add it to the just-woken set
+  if it was asleep and its inbox holds anything: wake() it and add it to the just-woken set
 ```
+
+The skips that show as `waiting` (paused, budget, cap, disk) are decided in one function, `blockedReason`.
 
 - Send, then wake: the agent wakes with its work already pending.
 - All run-time a12s calls use the team's prefix token client.
 - Each send passes `replaceKey: <studio message id>`, so a send repeated after a crash replaces the pending copy.
-- A send that fails leaves the message `queued`; the next run retries. `inbox_full` waits for the next tick.
+- A send that fails leaves the message `queued` and stops that agent's sends for the run, so order holds; the next
+  run retries. `inbox_full` waits for the next tick.
 - Skipped agents show presence `waiting` with the reason (cap, budget, paused, disk).
 
 **What the agent receives.** The a12s Message has `sender: "studio"` and `metadata: { thread, message, kind, from }`.
@@ -403,7 +412,8 @@ Draft the hero section and the three feature blurbs.
 To answer: post(kind="reply", ask="m_8d1f0c3e5a7b")
 ```
 
-A reply reads `reply m_… from dev to your ask m_…` and has no "To answer" line. A file adds
+A reply reads `reply m_… from dev to your ask m_…` and has no "To answer" line; neither has an ask from `system`,
+which takes no reply, and an ask with no thread has no `thread` line. A file adds
 `file: <STUDIO_URL>/files/<message id>/<name>`. Riding notes follow, at most 20, each cut at 500 characters:
 
 ```
@@ -428,13 +438,16 @@ agent's behalf.
 
 ### 5.6 Pause
 
-Pause is app-side: the flag (`settings.paused` or `teams.paused`) is written, then every awake agent in scope gets a
-plain `sleep()`, which ends its Turn. No a12s inbox hold and no held sleep are used. Messages already `sent` stay in
-the a12s inbox; nothing wakes the agent, so they wait.
+Pause is app-side: the flag (`settings.paused` or `teams.paused`) is written, a dispatcher run that was under way is
+left to finish (it may have read the old flag, and would wake an agent after its sleep), then every awake agent in
+scope gets a plain `sleep()`, which ends its Turn. No a12s inbox hold and no held sleep are used. Messages already
+`sent` stay in the a12s inbox; nothing wakes the agent, so they wait. Each agent that was `Busy` when it was put to
+sleep is queued one system ask (`from_id = 'system'`, no thread): `You were paused mid-turn. Continue where you
+stopped.` The pause holds it like any other message. Queuing it at pause time, when the app knows who was mid-Turn,
+needs no record of when the pause began.
 
-Resume clears the flag. For each agent in scope whose latest Turn ended `interrupted` during the pause, the app
-queues one system ask (`from_id = 'system'`, no thread): `You were paused mid-turn. Continue where you stopped.` An
-agent with `sent` but undelivered messages counts as a candidate. Then the dispatcher runs.
+Resume clears the flag and runs the dispatcher. An asleep agent with pending a12s Messages is a candidate, so the
+agents put to sleep with work in their inbox are woken, and the queued messages follow in order.
 
 ### 5.7 Awake cap, budget, scheduled wakes
 
@@ -457,22 +470,30 @@ One Fleet named `studio`. The app is its only writer after setup.
 **Tokens.** The owner token (from `controller.json`) is used for exactly three things: creating and removing prefix
 tokens, writing agent computer specs (a spec that `uses` a Service outside the team's prefix is refused for a prefix
 token), and the one Fleet-wide event stream. Everything else (send, wake, sleep, stop, inbox, files, terminal, Turn
-history) uses the team's prefix token, created at team creation as `tokens.create("<team>", { prefix: "<team>-" })`,
-through a client made with `Fleet.connect({ url, token })`.
+history) uses the team's prefix token, created at team creation with `POST /v1/tokens` and the prefix `<team>-`;
+`forTeam(token)` binds a team's calls to it.
 
 **The a12s port.** The app talks to a12s only through `a12s/port.ts`, an interface with the dozen calls it needs
 (`ensureServices`, `createToken`, `removeToken`, `putAgent` and `events` on the owner token; `forTeam(token)` returns
 the rest on a prefix token: `removeAgent`, `send`, `wake`, `sleep`, `stop`, `status`, `inbox`, `withdraw`,
-`clearInbox`, `turns`, `turnEvents`, `readFile`, `writeFile`, `openTerminal`). `real.ts` implements it with the SDK
-(and plain HTTP for routes the SDK lacks); `fake.ts` implements it in memory for tests.
+`clearInbox`, `turns`, `turnEvents`, `readFile`, `writeFile`, `openTerminal`). `real.ts` implements it on a12s's HTTP
+API and takes only the wire types from the SDK: the SDK has no files or terminal, and its event streams retry
+without end when a12s is down or an agent is asleep, where the app must show that. `fake.ts` implements it in memory
+for tests.
 
-**External Services**, ensured at every app start with `fleet.replace()` on the owner token:
+`turnEvents`, `readFile`, `writeFile` and `openTerminal` need the agent awake; a12s refuses them with `asleep`
+otherwise. The rest, `turns` included, work on a sleeping agent.
+
+**External Services**, ensured at every app start with `PUT /v1/services/{s}` on the owner token (an unchanged spec
+is a no-op):
 
 ```yaml
 services:
   studio:
     external: { host: host.docker.internal }
-    manifest: { ports: { mcp: { port: 7410, mcp: { path: /mcp } } } }
+    manifest:
+      ports: { mcp: { port: 7410, mcp: { path: /mcp } } }
+      health: { http: { port: 7410, path: /healthz } }   # a12s refuses agent calls while it fails
   broker:
     external: { host: host.docker.internal }
     manifest: { ports: { http: { port: 7420 } } }
@@ -481,7 +502,7 @@ services:
 A Service has one port number: agents call `http://studio.a12s:7410` and the Controller dials `7410` on the host. So
 `STUDIO_PORT` and `BROKER_PORT` in `contract/names.ts` set both the listeners and the agent-facing URLs.
 
-**Agent spec.** `a12s/spec.ts` exports one pure function, `agentSpec(team, agent, settings)`, that returns the whole
+**Agent spec.** `a12s/spec.ts` exports one pure function, `agentSpec(team, agent)`, that returns the whole
 spec. Fleet `defaults` are not used: the function is the single place a spec is decided. Hiring calls
 `putAgent(create-only)`; any edit to the brief, a role or an agent setting calls `putAgent` again with the fresh
 spec, which a12s applies at the agent's next idle moment.
@@ -558,7 +579,13 @@ Access
 
 **Removing.** Firing an agent: `removeAgent`, set `removed_at`, delete its wakes, mark its queued messages `none`.
 Deleting a team: purge it in the broker first (section 9.5), then remove its agents and its token, then set
-`deleted_at`. If any step fails the team stays, with the error shown.
+`deleted_at`. If any step fails the team stays, with the error shown; an agent computer already gone counts as
+removed, so the delete can be run again. A team's lead cannot be fired. Agent slugs `owner` and `system` are refused
+at hire.
+
+**Creating a team** does all a12s work first (the prefix token, then `putAgent` for each template agent, lead first)
+and then inserts the team and agent rows in one transaction. If an a12s step fails, the agent computers and the token
+made so far are removed and nothing is written, so the slug stays free.
 
 ## 7. Live state
 
@@ -602,7 +629,10 @@ Nothing is drawn optimistically. Older messages and audit pages are plain `GET`s
 
 ### 7.2 From a12s events to the UI
 
-`live.ts` holds one Fleet-wide `events()` stream on the owner token and an in-memory record per agent.
+`live.ts` holds one Fleet-wide `events()` feed on the owner token and an in-memory record per agent. A feed is one
+connection and never reconnects. While `ready()` has resolved and the feed is being read, `a12s` is `"up"`. When
+`ready()` rejects or reading throws (`unreachable`), `a12s` is `"down"` and `live.ts` opens a new feed one second
+later; every feed that becomes ready is followed by a resync.
 
 | a12s event | Effect |
 |---|---|
@@ -612,7 +642,7 @@ Nothing is drawn optimistically. Older messages and audit pages are plain `GET`s
 | `tool.started` (no `parent`) | Sets the line from the table below. Calls with a `parent` (a sub-agent's) are ignored for the line. |
 | `tool.finished` | Nothing for the line; the inspector's log shows it. |
 | `turn.finished` | Writes the `turns` row (section 7.4), applies section 5.5, clears the line and text, runs the dispatcher. |
-| `gap`, or reconnect | Resync: `status()` for phases; for each agent, recent Turns not yet in `turns`; for each `sent` message, its a12s state. |
+| `gap`, or a new feed | Resync: `status()` for phases; for each agent, recent Turns not yet in `turns`; for each `sent` message, its a12s state. |
 
 The same resync runs at app start, which is how state survives a restart.
 
@@ -629,7 +659,8 @@ The same resync runs at app start, which is how state survives a restart.
 | anything else | Using `<tool name>` |
 
 The inspector's Now tab replays the current or a past Turn's tool log from a12s through
-`GET /api/agents/:id/turns/:turn/events`; the app does not store tool events.
+`GET /api/agents/:id/turns/:turn/events`; the app does not store tool events. The route answers with what the Turn
+has journaled so far. For a sleeping agent it answers `asleep`, and the inspector offers Wake.
 
 ### 7.3 Needs You
 
@@ -647,9 +678,13 @@ Derived on every state build, never stored:
 
 ### 7.4 Cost of a Turn
 
-`cost_total_usd` = the sum of `usage.modelUsage[*].costUSD` on `turn.finished` (the session's running total, sub-agents
-included). `cost_usd` = that total minus the previous Turn's total for the same agent when both have the same
-`session` and the new total is not smaller; otherwise the new total itself. M5 confirms or corrects this rule; it
+a12s reports cost on `turn.finished` as `usage.modelUsage[<model>].costUSD`: what each model has cost so far in the
+Turn's session, sub-agents and `/compact` Turns included. The port passes these running totals on as `modelCostsUsd`,
+and the `turns` row keeps them as JSON in `model_costs`.
+
+`cost_usd` = the sum, over the models the Turn reports, of the model's total minus the same model's total in the
+agent's previous Turn. A model counts in full when the previous Turn has another `session`, does not list the model,
+or lists a larger total. A Turn that ended before the harness started has no session and costs nothing. The rule
 lives in one function with table tests.
 
 ### 7.5 Owner API
@@ -924,9 +959,9 @@ owner.
 | Package | Scope |
 |---|---|
 | P1-0 Skeleton (first, alone) | Workspaces, tooling, CI, `contract` (state, API, names), `a12s/port.ts` and `fake.ts`, `db.ts` with the full schema, `main.ts` wiring with stubs. |
-| P1-A Core | `repo.ts`, `caller.ts`, `router.ts`, the tools `post`, `read`, `update_thread`, `roster` and `mcp.ts`, `dispatcher.ts` (pause only; cap and budget arrive in P3). |
-| P1-B a12s | `real.ts`, `spec.ts` (instructions, power, uses), team creation and hire against a12s, `live.ts`, resync at start. |
-| P1-C Owner API | `ownerGate`, the team, agent, thread, message, settings and pause routes, `state.ts`, the SSE stream, static files. |
+| P1-A Core | `repo.ts`, `caller.ts`, `router.ts` (with the implicit-answer rule as `onTurnFinished`), the tools `post`, `read`, `update_thread`, `roster` and `mcp.ts`, the agent listener, `dispatcher.ts` (pause only; cap and budget arrive in P3), `spec.ts`, `teams.ts` (create, hire, fire, delete, pause), `createApp`, the two template folders. |
+| P1-B a12s | `real.ts`, and `main.ts` choosing it. |
+| P1-C Owner API | `ownerGate`, the team, agent, thread, message, settings and pause routes, `live.ts` with resync at start, `state.ts`, the SSE stream, static files. |
 | P1-D Web | Stream client, the Teams and Team screens, new-team and hire sheets, composer with @, presence dots, the live line and streaming text, folded agent talk, pause switches. Built against a recorded-state fixture server until P1-C lands. |
 
 Exit: the owner creates two teams in the UI and talks to both leads; a lead asks a second agent and the answer comes
@@ -950,7 +985,7 @@ default-deny tests pass; an agent clones and pushes a repository and its contain
 |---|---|
 | P3-A Limits | Awake cap and queue order, budget hold and the cost rule, free-disk check, the `schedule` tool and scheduled wakes, the notes hook, per-agent sleep and compaction settings, every limit editable in the UI (global settings, team budget, agent settings). |
 | P3-B Inspector | The agent inspector: Now with the tool log, Inbox with Remove and Clear, Role and notes, Files, Terminal, Settings. The `file` field of `post` and attachment download. |
-| P3-C Durability | Agent error, failed Turn and budget cards in Needs You; the implicit-answer rule; `scripts/backup.ts` (both databases with SQLite's backup, each home drive as a tar, to `~/a12s-studio-backups/<date>/`, 14 kept) with a nightly LaunchAgent; `scripts/restore.ts`; the documented command to export the vault key. |
+| P3-C Durability | Agent error, failed Turn and budget cards in Needs You; `scripts/backup.ts` (both databases with SQLite's backup, each home drive as a tar, to `~/a12s-studio-backups/<date>/`, 14 kept) with a nightly LaunchAgent; `scripts/restore.ts`; the documented command to export the vault key. |
 
 Exit: a team runs unattended inside its budget; a forced budget stop (budget set below today's spend) and a forced
 agent error both appear in Needs You; a restore from last night's backup onto an emptied data folder works.
@@ -989,6 +1024,8 @@ from the README alone.
     write → refused.
 - **Pure functions get table tests:** path patterns, the cost rule, the "doing now" line, state derivation, slug
   rules, the web `logic/` folder.
+- **`real.ts` against real a12s:** `node packages/app/scripts/a12s-smoke.ts <fleet>` runs every port call once against a
+  running Fleet (one haiku agent, removed at the end). Manual, never in CI.
 - **End-to-end against real a12s is manual, never in CI.** `npm run e2e` needs Docker, a12s and the Claude login,
   creates a Fleet named `studio-e2e` under a temp `STUDIO_HOME`, uses model `haiku` for every agent, runs each
   phase's exit script, and removes the Fleet. It is run before each phase is shown.

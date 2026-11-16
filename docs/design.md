@@ -252,7 +252,7 @@ The budget measures list-price spend, not the plan's real rate limit. It is a gu
 keeps none of its own. The app is the only writer to its database, so there are no database triggers and no polling
 from the browser.
 
-**Stack.** TypeScript everywhere. App: Node, SQLite, the a12s TypeScript SDK. UI: React and plain CSS, no component
+**Stack.** TypeScript everywhere. App: Node, SQLite, a12s over its HTTP API. UI: React and plain CSS, no component
 kit. Broker: its own package with no runtime dependencies.
 
 ## 11. Security model

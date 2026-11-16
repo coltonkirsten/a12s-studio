@@ -29,11 +29,13 @@ export class A12sError extends Error {
 }
 
 // A Service a12s does not run: the Controller dials host:port, and agents call the same port on <name>.a12s.
+// With healthPath a12s checks it and refuses agent calls while it fails; without it the Service is Ready at once.
 export type ExternalService = {
   name: string;
   host: string;
   port: number;
   mcpPath?: string;
+  healthPath?: string;
 };
 
 export type AgentSpec = {
@@ -60,9 +62,12 @@ export type AgentSpec = {
 
 export type Tokens = { input: number; output: number; cacheRead: number; cacheWrite: number };
 
+// What each model has cost so far in the Turn's session, sub-agents included: running totals, not one Turn's share.
+export type ModelCosts = Record<string, number>;
+
 export type A12sEvent =
   | { type: "agent_computer.phase"; agent: string; at: number; phase: Phase; error?: string }
-  | { type: "turn.started"; agent: string; at: number; turn: string; session: string; messageIds: string[] }
+  | { type: "turn.started"; agent: string; at: number; turn: string; messageIds: string[] }
   | { type: "text.delta"; agent: string; at: number; turn: string; text: string }
   | {
       type: "tool.started";
@@ -90,14 +95,17 @@ export type A12sEvent =
       agent: string;
       at: number;
       turn: string;
-      session: string;
+      session: string | null;
       status: TurnStatus;
       error?: string;
-      costTotalUsd: number;
+      modelCostsUsd: ModelCosts;
       tokens?: Tokens;
     }
   | { type: "gap" };
 
+// One connection to a12s. ready() resolves once no later event can be missed and rejects when a12s does not answer.
+// Iterating throws unreachable when the connection is lost, and ends quietly after close(). The feed never
+// reconnects: its holder opens a new one and resyncs, which is also how it knows whether a12s is up.
 export type EventFeed = AsyncIterable<A12sEvent> & {
   ready(): Promise<void>;
   close(): void;
@@ -121,14 +129,15 @@ export type InboxMessage = {
 export type TurnRecord = {
   id: string;
   agent: string;
-  session: string;
+  // null when the Turn ended before the harness started a session.
+  session: string | null;
   status: TurnStatus;
   error?: string;
   text: string;
   messageIds: string[];
   startedAt?: number;
   finishedAt: number;
-  costTotalUsd: number;
+  modelCostsUsd: ModelCosts;
   tokens?: Tokens;
 };
 
@@ -149,7 +158,9 @@ export type FileResponse =
 export type Terminal = { stream: Duplex; resize(rows: number, cols: number): Promise<void> };
 
 // Every call names one agent computer inside the token's prefix; a12s refuses anything else with out_of_prefix,
-// which is how one team's calls can never touch another team's agents.
+// which is how one team's calls can never touch another team's agents. turnEvents, readFile, writeFile and
+// openTerminal need the agent awake and are refused with asleep otherwise; the rest work on a sleeping agent.
+// turnEvents yields what the Turn has journaled so far, then ends, whether or not the Turn has finished.
 export type TeamA12s = {
   removeAgent(name: string): Promise<void>;
   send(name: string, message: Outgoing): Promise<{ id: string; state: InboxState }>;

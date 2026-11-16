@@ -81,12 +81,12 @@ const migrations: string[] = [
     team_id TEXT NOT NULL REFERENCES teams(id),
     agent_id TEXT NOT NULL REFERENCES agents(id),
     thread_id TEXT REFERENCES threads(id),
-    session TEXT NOT NULL,
+    session TEXT,
     status TEXT NOT NULL,
     error TEXT,
     started_at INTEGER, finished_at INTEGER NOT NULL,
     tokens_in INTEGER, tokens_out INTEGER, tokens_cache_read INTEGER, tokens_cache_write INTEGER,
-    cost_total_usd REAL NOT NULL DEFAULT 0,
+    model_costs TEXT NOT NULL DEFAULT '{}',
     cost_usd REAL NOT NULL DEFAULT 0,
     acked_at INTEGER
   ) STRICT;
