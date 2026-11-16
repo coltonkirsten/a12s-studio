@@ -1,0 +1,359 @@
+.app {
+  display: grid;
+  grid-template-columns: 236px minmax(0, 1fr);
+  height: 100%;
+}
+
+.main {
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+/* Sidebar */
+
+.sidebar {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  background: var(--sidebar);
+  backdrop-filter: saturate(180%) blur(24px);
+  -webkit-backdrop-filter: saturate(180%) blur(24px);
+  box-shadow: inset -1px 0 0 var(--hairline);
+}
+
+.sidebar-scroll {
+  flex: 1;
+  overflow-y: auto;
+  padding: 18px 10px;
+}
+
+.side-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  min-height: 30px;
+  padding: 5px 10px;
+  border-radius: 8px;
+  color: var(--text);
+}
+
+.side-row:hover {
+  background: var(--fill);
+}
+
+.side-row.selected {
+  background: var(--fill-2);
+}
+
+.side-row.quiet {
+  color: var(--text-2);
+}
+
+.side-name {
+  flex: 1;
+  min-width: 0;
+  font-weight: 500;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.side-row > .icon {
+  color: var(--text-2);
+}
+
+.count {
+  min-width: 20px;
+  padding: 1px 6px;
+  border-radius: 10px;
+  background: var(--accent);
+  color: white;
+  font-size: 11px;
+  font-weight: 600;
+  text-align: center;
+}
+
+.team-row {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 5px;
+  padding: 8px 10px 9px;
+  margin-bottom: 2px;
+}
+
+.team-top {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.team-top::before {
+  content: "";
+  width: 8px;
+  height: 8px;
+  border-radius: 3px;
+  background: var(--accent);
+  flex: none;
+}
+
+.paused-tag {
+  color: var(--text-2);
+  font-size: 11px;
+}
+
+.team-dots {
+  display: flex;
+  gap: 4px;
+  padding-left: 16px;
+}
+
+.usage {
+  display: block;
+  height: 3px;
+  margin-left: 16px;
+  border-radius: 2px;
+  background: var(--fill-2);
+  overflow: hidden;
+}
+
+.usage > span {
+  display: block;
+  height: 100%;
+  border-radius: 2px;
+  background: var(--accent);
+  opacity: 0.7;
+}
+
+.section-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 18px 10px 6px;
+  color: var(--text-2);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+
+.sidebar-foot {
+  padding: 10px 14px 14px;
+}
+
+.status-line {
+  color: var(--text-2);
+  font-size: 12px;
+  margin-bottom: 8px;
+}
+
+/* Pages: Needs You */
+
+.page {
+  flex: 1;
+  overflow-y: auto;
+  padding: 40px 48px 64px;
+  display: flex;
+  flex-direction: column;
+}
+
+.page > * {
+  width: 100%;
+  max-width: 720px;
+  margin-inline: auto;
+}
+
+.page-head h1 {
+  font-size: 26px;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  margin-bottom: 24px;
+}
+
+/* Team: list column and conversation column */
+
+.team {
+  display: grid;
+  grid-template-columns: 320px minmax(0, 1fr);
+  height: 100%;
+  min-height: 0;
+}
+
+.list-column {
+  min-height: 0;
+  overflow-y: auto;
+  padding: 22px 10px 24px;
+  background: var(--bg-list);
+  box-shadow: inset -1px 0 0 var(--hairline);
+}
+
+.team-head {
+  padding: 0 10px 4px;
+}
+
+.team-title {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.team-title h1 {
+  font-size: 22px;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+}
+
+.team-purpose {
+  margin: 4px 0 12px;
+  color: var(--text-2);
+  line-height: 1.45;
+}
+
+.conversation-column {
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.conversation {
+  --gutter: max(32px, calc((100% - 760px) / 2));
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.conversation-head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 20px var(--gutter) 14px;
+  flex-wrap: wrap;
+}
+
+.conversation-title {
+  flex: 1;
+  min-width: 0;
+}
+
+.conversation-title h2 {
+  font-size: 17px;
+  font-weight: 650;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.conversation-sub {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 3px;
+  color: var(--text-2);
+  font-size: 12px;
+}
+
+.messages {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 12px var(--gutter) 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+
+.messages.blank {
+  justify-content: center;
+  align-items: center;
+}
+
+.first-line {
+  color: var(--text-3);
+  font-size: 20px;
+  font-weight: 500;
+  letter-spacing: -0.01em;
+}
+
+.back {
+  display: none;
+  align-items: center;
+  gap: 2px;
+  color: var(--accent-text);
+  font-size: 15px;
+  margin: 0 0 8px -6px;
+}
+
+/* Phone: one column at a time, deepest first. */
+
+@media (max-width: 760px) {
+  .app {
+    display: block;
+    height: auto;
+    min-height: 100%;
+  }
+
+  .app[data-depth="1"] .sidebar,
+  .app[data-depth="2"] .sidebar,
+  .app[data-depth="2"] .list-column,
+  .app[data-depth="1"] .conversation-column {
+    display: none;
+  }
+
+  .app[data-depth="0"] .sidebar {
+    background: none;
+    backdrop-filter: none;
+    box-shadow: none;
+  }
+
+  .app[data-depth="0"] .sidebar-foot {
+    padding: 0 24px 8px;
+  }
+
+  .app[data-depth="0"] .page {
+    padding-top: 8px;
+  }
+
+  .team {
+    display: block;
+    height: 100dvh;
+  }
+
+  .list-column,
+  .conversation-column {
+    height: 100dvh;
+    box-shadow: none;
+  }
+
+  .back {
+    display: inline-flex;
+  }
+
+  .conversation {
+    --gutter: 18px;
+  }
+
+  .conversation-head {
+    padding-top: 14px;
+  }
+
+  .conversation-title h2 {
+    white-space: normal;
+  }
+
+  .conversation-head .back {
+    flex-basis: 100%;
+    margin-bottom: 0;
+  }
+
+  .page {
+    padding: 24px 18px 48px;
+  }
+
+  .sidebar-scroll {
+    padding-top: 28px;
+  }
+}
