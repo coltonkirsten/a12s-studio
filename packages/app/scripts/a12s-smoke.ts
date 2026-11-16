@@ -55,9 +55,13 @@ try {
   }
 
   log("turns", await smoke.turns(agent, 5));
-  const replayed = [];
-  for await (const event of smoke.turnEvents(agent, turn)) replayed.push(event.type);
-  log("turnEvents", replayed);
+  const replayed = await Array.fromAsync(smoke.turnEvents(agent, turn));
+  assert.equal(replayed.at(-1)?.type, "turn.finished");
+  log(
+    "turnEvents",
+    replayed.map((event) => event.type),
+  );
+  assert.deepEqual(await Array.fromAsync(smoke.turnEvents(agent, "t_none")), []);
   log("inbox", await smoke.inbox(agent));
   log("file", await smoke.readFile(agent, "/home/agent/notes.md"));
   await smoke.writeFile(agent, "/home/agent/out/hello.txt", new TextEncoder().encode("hello\n"));
@@ -78,12 +82,8 @@ try {
 
   await smoke.sleep(agent);
   await assert.rejects(smoke.readFile(agent, "/home/agent"), { code: "asleep" });
-  await assert.rejects(
-    (async () => {
-      for await (const _ of smoke.turnEvents(agent, turn));
-    })(),
-    { code: "asleep" },
-  );
+  await assert.rejects(Array.fromAsync(smoke.turnEvents(agent, turn)), { code: "asleep" });
+  log("turns while asleep", (await smoke.turns(agent, 5)).length);
   await smoke.wake(agent);
   console.log("sleep and wake ok");
 } finally {
