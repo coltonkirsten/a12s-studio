@@ -1,0 +1,11 @@
+{
+  "name": "@a12s-studio/contract",
+  "private": true,
+  "type": "module",
+  "exports": {
+    "./*": "./src/*.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc"
+  }
+}

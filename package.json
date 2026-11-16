@@ -1,0 +1,26 @@
+{
+  "name": "a12s-studio",
+  "private": true,
+  "type": "module",
+  "license": "MIT",
+  "engines": {
+    "node": ">=24"
+  },
+  "workspaces": [
+    "packages/contract",
+    "packages/app",
+    "packages/broker",
+    "packages/web"
+  ],
+  "scripts": {
+    "check": "biome check && npm run typecheck --workspaces && npm test",
+    "test": "node --test \"packages/*/test/**/*.test.ts\" \"packages/web/src/logic/**/*.test.ts\"",
+    "dev": "trap 'kill 0' EXIT; npm run dev -w @a12s-studio/app & npm run dev -w @a12s-studio/web & wait",
+    "build": "npm run build -w @a12s-studio/web"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "2.6.8",
+    "@types/node": "24.19.2",
+    "typescript": "7.0.2"
+  }
+}

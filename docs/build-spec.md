@@ -460,9 +460,10 @@ history) uses the team's prefix token, created at team creation as `tokens.creat
 through a client made with `Fleet.connect({ url, token })`.
 
 **The a12s port.** The app talks to a12s only through `a12s/port.ts`, an interface with the dozen calls it needs
-(`ensureServices`, `createToken`, `putAgent`, `removeAgent`, `send`, `wake`, `sleep`, `stop`, `status`, `inbox`,
-`withdraw`, `clearInbox`, `turns`, `readFile`, `writeFile`, `openTerminal`, `events`). `real.ts` implements it with
-the SDK (and plain HTTP for routes the SDK lacks); `fake.ts` implements it in memory for tests.
+(`ensureServices`, `createToken`, `removeToken`, `putAgent` and `events` on the owner token; `forTeam(token)` returns
+the rest on a prefix token: `removeAgent`, `send`, `wake`, `sleep`, `stop`, `status`, `inbox`, `withdraw`,
+`clearInbox`, `turns`, `turnEvents`, `readFile`, `writeFile`, `openTerminal`). `real.ts` implements it with the SDK
+(and plain HTTP for routes the SDK lacks); `fake.ts` implements it in memory for tests.
 
 **External Services**, ensured at every app start with `fleet.replace()` (syntax per M2):
 
