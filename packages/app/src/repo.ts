@@ -1,5 +1,5 @@
 import type { DatabaseSync, SQLInputValue } from "node:sqlite";
-import { type MessageId, newId, type ThreadId } from "@a12s-studio/contract/names";
+import { agentId, type MessageId, newId, type ThreadId } from "@a12s-studio/contract/names";
 import type { MessageKind, Settings, ThreadStatus } from "@a12s-studio/contract/state";
 import { tx } from "./db.ts";
 
@@ -133,7 +133,7 @@ export function createRepo(db: DatabaseSync) {
       },
       agent,
       agentBySlug(slug: string): Agent | undefined {
-        return agent(`${teamId}-${slug}`);
+        return agent(agentId(teamId, slug));
       },
       // Removed agents count: a12s keeps a removed agent computer's drive and inbox under its name.
       slugUsed(slug: string): boolean {

@@ -1,15 +1,15 @@
 import { z } from "zod";
-import { agentPost } from "../router.ts";
+import { agentPost, BODY_MAX, TITLE_MAX } from "../router.ts";
 import type { Tool } from "./mcp.ts";
 
 const input = {
   kind: z
     .enum(["ask", "reply", "note"])
     .describe("ask: wakes the receiver. reply: answers an ask. note: wakes nobody."),
-  body: z.string().min(1).max(32000),
+  body: z.string().min(1).max(BODY_MAX),
   to: z.string().optional().describe('ask and note: a teammate\'s name from roster, or "owner".'),
   thread: z.string().optional().describe("ask and note: the thread id."),
-  title: z.string().min(1).max(120).optional().describe("ask: starts a new thread you own, instead of thread."),
+  title: z.string().min(1).max(TITLE_MAX).optional().describe("ask: starts a new thread you own, instead of thread."),
   ask: z.string().optional().describe("reply: the id of the ask you answer."),
 };
 

@@ -330,3 +330,53 @@ test("an owner ask answered in plain output is kept as an implicit note; the ask
   assert.equal(web.threadMessages(other.thread, 10).length, 2, "a thread the agent posted in gets no implicit note");
   assert.equal(web.hasReply(posted.message), false);
 });
+
+test("a failed send holds the agent's later messages, so they arrive in order", async (t) => {
+  const s = await setup(t, { wrap: failingSends((n) => (n === 1 ? "before" : null)) });
+  const web = s.app.repo.forTeam("web");
+  const thread = String((await s.tool("web-lead", "post", { kind: "ask", to: "owner", title: "T", body: "b" })).thread);
+  await s.tool("web-lead", "post", { kind: "note", to: "dev", thread, body: "A note." });
+  for (const body of ["one", "two"]) ownerPost(web, thread, { body, to: "dev" });
+  await s.app.dispatcher.run();
+  assert.equal(pending(s.a12s, "web-dev").length, 0, "the second ask does not overtake the failed first");
+
+  await s.app.dispatcher.run();
+  const bodies = pending(s.a12s, "web-dev").map((m) => m.body);
+  assert.deepEqual(
+    bodies.map((b) => b.split("\n---\n")[1]),
+    ["one", "two"],
+  );
+  assert.match(bodies[0] ?? "", /A note\./, "the notes ride on the first message");
+  assert.doesNotMatch(bodies[1] ?? "", /A note\./, "and only on the first");
+});
+
+test("an agent paused with a message still in its inbox is woken on resume", async (t) => {
+  const s = await setup(t);
+  ownerThread(s.app.repo.forTeam("web"), { body: "Sent, not yet taken." });
+  await s.app.dispatcher.run();
+  await s.app.teams.pause("web");
+  assert.equal(s.a12s.agents.get("web-lead")?.phase, "Asleep");
+
+  await s.app.teams.resume("web");
+  assert.equal(pending(s.a12s, "web-lead").length, 1);
+  assert.notEqual(s.a12s.agents.get("web-lead")?.phase, "Asleep");
+  assert.equal(s.a12s.agents.get("web-dev")?.phase, "Asleep", "an agent with nothing waiting stays asleep");
+});
+
+test("a pause during a delivery run leaves nobody awake", async (t) => {
+  const s = await setup(t);
+  sleepAll(s.a12s);
+  ownerThread(s.app.repo.forTeam("web"), { body: "Posted just before the pause." });
+  const run = s.app.dispatcher.run();
+  await s.app.teams.pause("web");
+  await run;
+  assert.equal(s.a12s.agents.get("web-lead")?.phase, "Asleep");
+});
+
+test("a reply to an asker who has left the team is recorded, not queued", async (t) => {
+  const s = await setup(t);
+  const asked = await s.tool("web-dev", "post", { kind: "ask", to: "lead", title: "Review", body: "Look?" });
+  await s.app.teams.fire("web", "web-dev");
+  const replied = await s.tool("web-lead", "post", { kind: "reply", ask: asked.message, body: "Looks good." });
+  assert.equal(row(s, replied.message).delivery, "none");
+});

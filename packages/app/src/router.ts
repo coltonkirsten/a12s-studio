@@ -15,8 +15,8 @@ type FinishedTurn = {
   messageIds: string[];
 };
 
-const BODY_MAX = 32000;
-const TITLE_MAX = 120;
+export const BODY_MAX = 32000;
+export const TITLE_MAX = 120;
 
 const FIELDS: Record<MessageKind, { allowed: (keyof PostInput)[]; fix: string }> = {
   ask: { allowed: ["to", "thread", "title"], fix: "An ask takes to, and thread or title." },
@@ -43,8 +43,10 @@ function notFound(message: string, fix: string): never {
   throw new StudioError(404, "not_found", message, fix);
 }
 
+// Only a current agent has an inbox to deliver to: the owner, a note to the thread and a reply to an asker who has
+// left the team are just recorded.
 function insert(team: TeamRepo, m: NewMessage): MessageId {
-  const delivery = m.toId === null || m.toId === "owner" ? "none" : "queued";
+  const delivery = m.toId !== null && team.agent(m.toId) ? "queued" : "none";
   return team.insertMessage(m, delivery, Date.now());
 }
 

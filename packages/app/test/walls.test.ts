@@ -6,10 +6,14 @@ import { pending, type Studio, studio, type ToolAnswer } from "./studio.ts";
 let s: Studio;
 // Ids that exist on team notes; from team web they must behave exactly like ids that do not exist.
 let notes: { thread: string; ask: string; reply: string };
+// A thread of team web older than those: a paging cursor that leaked across teams would return it.
+let early: string;
 
 before(async () => {
   s = await studio();
   await s.twoTeams();
+  early = String((await s.tool("web-lead", "post", { kind: "ask", to: "dev", title: "Early", body: "First." })).thread);
+  await new Promise((resolve) => setTimeout(resolve, 5));
   const asked = await s.tool("notes-lead", "post", {
     kind: "ask",
     to: "researcher",
@@ -55,10 +59,35 @@ for (const [what, call, kind] of cases) {
 }
 
 test("read: another team's id as a paging cursor reads like a missing one", async () => {
-  await s.tool("web-lead", "post", { kind: "ask", to: "dev", title: "Hero", body: "Draft it." });
-  const theirs = await s.tool("web-lead", "read", { before: notes.thread, status: "all" });
-  const missing = await s.tool("web-lead", "read", { before: MISSING_THREAD, status: "all" });
-  assert.deepEqual(theirs, missing);
+  const board = (before: string) => s.tool("web-lead", "read", { before, status: "all" });
+  assert.deepEqual(await board(notes.thread), await board(MISSING_THREAD));
+  const thread = (before: string) => s.tool("web-lead", "read", { thread: early, before });
+  assert.deepEqual(await thread(notes.ask), await thread(MISSING_MESSAGE));
+});
+
+test("a scoped repo finds and changes nothing of another team's", () => {
+  const web = s.app.repo.forTeam("web");
+  const theirs = s.app.repo.forTeam("notes");
+  assert.equal(web.agent("notes-lead"), undefined);
+  assert.equal(web.thread(notes.thread), undefined);
+  assert.equal(web.message(notes.ask), undefined);
+  assert.deepEqual(web.threadMessages(notes.thread, 10), []);
+  assert.equal(web.hasReply(notes.ask), false);
+  assert.deepEqual(web.queuedFor("notes-lead"), []);
+
+  const thread = theirs.thread(notes.thread);
+  const message = theirs.message(notes.ask);
+  web.updateThread(notes.thread, { status: "done", title: "Taken", ownerAgentId: "web-lead" }, Date.now());
+  web.markSent([notes.ask as `m_${string}`], "m_forged");
+  web.removeAgent("notes-lead", Date.now());
+  assert.deepEqual(theirs.thread(notes.thread), thread);
+  assert.deepEqual(theirs.message(notes.ask), message);
+  assert.ok(theirs.agent("notes-lead"));
+});
+
+test("the owner cannot fire another team's agent through a team", async () => {
+  await assert.rejects(s.app.teams.fire("web", "notes-researcher"), { code: "not_found" });
+  assert.ok(s.a12s.agents.has("notes-researcher"));
 });
 
 test("post to another team's agent is refused and writes nothing", async () => {

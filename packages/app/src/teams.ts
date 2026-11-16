@@ -36,7 +36,13 @@ export function createTeams(deps: { repo: Repo; a12s: A12s; dispatcher: Dispatch
     return { team, scoped };
   }
 
-  function newAgent(team: Team, slug: string, role: string, model: string, scoped: TeamRepo): Agent {
+  function templateIds(): string[] {
+    return readdirSync(templatesDir, { withFileTypes: true })
+      .filter((e) => e.isDirectory())
+      .map((e) => e.name);
+  }
+
+  function newAgent(scoped: TeamRepo, teamId: string, slug: string, role: string, model: string): Agent {
     if (!AGENT_SLUG.test(slug) || RESERVED_AGENT_SLUGS.includes(slug)) {
       throw new StudioError(
         400,
@@ -46,12 +52,12 @@ export function createTeams(deps: { repo: Repo; a12s: A12s; dispatcher: Dispatch
       );
     }
     if (scoped.slugUsed(slug)) {
-      throw new StudioError(409, "slug_used", `${team.id} has had an agent named "${slug}".`, "Pick another name.");
+      throw new StudioError(409, "slug_used", `${teamId} has had an agent named "${slug}".`, "Pick another name.");
     }
     const settings = repo.settings();
     return {
-      id: agentId(team.id, slug),
-      teamId: team.id,
+      id: agentId(teamId, slug),
+      teamId,
       slug,
       role,
       model,
@@ -76,10 +82,10 @@ export function createTeams(deps: { repo: Repo; a12s: A12s; dispatcher: Dispatch
     const teams = teamId === null ? repo.teams() : [live(teamId).team];
     if (teamId === null) repo.updateSettings({ paused });
     else repo.forTeam(teamId).setPaused(paused);
-    if (!paused) {
-      await dispatcher.run();
-      return;
-    }
+    // On resume this delivers what was held. On pause it lets a run that read the old flag finish first, so
+    // nothing is woken after the sleeps below.
+    await dispatcher.run();
+    if (!paused) return;
     const failures: string[] = [];
     for (const team of teams) {
       const client = a12s.forTeam(team.a12sToken);
@@ -106,12 +112,10 @@ export function createTeams(deps: { repo: Repo; a12s: A12s; dispatcher: Dispatch
 
   return {
     templates(): Template[] {
-      return readdirSync(templatesDir, { withFileTypes: true })
-        .filter((e) => e.isDirectory())
-        .map((e) => {
-          const { roles: _, ...template } = readTemplate(e.name);
-          return template;
-        });
+      return templateIds().map((id) => {
+        const { roles: _, ...template } = readTemplate(id);
+        return template;
+      });
     },
 
     // All a12s work first and then one transaction, so a failure leaves no half-made team behind.
@@ -127,12 +131,14 @@ export function createTeams(deps: { repo: Repo; a12s: A12s; dispatcher: Dispatch
       if (repo.teamSlugUsed(input.slug)) {
         throw new StudioError(409, "slug_used", `There has been a team named "${input.slug}".`, "Pick another name.");
       }
-      const known = readdirSync(templatesDir);
+      const known = templateIds();
       if (!known.includes(input.template)) {
         throw new StudioError(404, "not_found", `No template "${input.template}".`, `Use one of: ${known.join(", ")}.`);
       }
       const { roles } = readTemplate(input.template);
       const settings = repo.settings();
+      const scoped = repo.forTeam(input.slug);
+      const agents = roles.map(({ slug, role }) => newAgent(scoped, input.slug, slug, role, settings.defaultModel));
       const token = await a12s.createToken(input.slug);
       const team: Team = {
         id: input.slug,
@@ -145,8 +151,6 @@ export function createTeams(deps: { repo: Repo; a12s: A12s; dispatcher: Dispatch
         a12sToken: token,
         createdAt: Date.now(),
       };
-      const scoped = repo.forTeam(team.id);
-      const agents = roles.map(({ slug, role }) => newAgent(team, slug, role, settings.defaultModel, scoped));
       const created: Agent[] = [];
       try {
         for (const agent of agents) {
@@ -167,7 +171,7 @@ export function createTeams(deps: { repo: Repo; a12s: A12s; dispatcher: Dispatch
 
     async hire(teamId: string, input: HireBody): Promise<Agent> {
       const { team, scoped } = live(teamId);
-      const agent = newAgent(team, input.slug, input.role, input.model, scoped);
+      const agent = newAgent(scoped, team.id, input.slug, input.role, input.model);
       await a12s.putAgent(agent.id, agentSpec(team, agent), "create");
       scoped.insertAgent(agent);
       return agent;

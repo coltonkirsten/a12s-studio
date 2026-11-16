@@ -1,13 +1,13 @@
 import { z } from "zod";
 import { StudioError } from "../errors.ts";
-import { nameOf } from "../router.ts";
+import { nameOf, TITLE_MAX } from "../router.ts";
 import type { Tool } from "./mcp.ts";
 
 const input = {
   thread: z.string(),
   status: z.enum(["open", "done"]).optional(),
   owner: z.string().optional().describe("A teammate's name from roster."),
-  title: z.string().min(1).max(120).optional(),
+  title: z.string().min(1).max(TITLE_MAX).optional(),
 };
 
 export const updateThread: Tool<typeof input> = {

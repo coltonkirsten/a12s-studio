@@ -365,7 +365,7 @@ Rules when a message is committed (`router.ts`):
 - note to an agent: `queued`. It is **never sent to a12s by itself**, because a Message to an idle awake agent starts
   a Turn. It rides along: when the dispatcher sends an ask or reply to that agent, it appends that agent's queued
   notes to the same body and marks them `sent` with the same a12s Message id.
-- anything to `owner`, or a note with no receiver: `none`.
+- anything to `owner`, a note with no receiver, or a reply to an asker who has left the team: `none`.
 - A `post` returns only after its transaction has committed. The dispatcher runs after the commit, not inside it.
 
 **The dispatcher** (`dispatcher.ts`) is one function, `run()`, serialized (a run requested during a run sets a flag
@@ -436,10 +436,11 @@ agent's behalf.
 
 ### 5.6 Pause
 
-Pause is app-side: the flag (`settings.paused` or `teams.paused`) is written, then every awake agent in scope gets a
-plain `sleep()`, which ends its Turn. No a12s inbox hold and no held sleep are used. Messages already `sent` stay in
-the a12s inbox; nothing wakes the agent, so they wait. Each agent that was `Busy` when it was put to sleep is queued
-one system ask (`from_id = 'system'`, no thread): `You were paused mid-turn. Continue where you stopped.` The pause
+Pause is app-side: the flag (`settings.paused` or `teams.paused`) is written, a dispatcher run that was under way is
+left to finish (it may have read the old flag, and would wake an agent after its sleep), then every awake agent in
+scope gets a plain `sleep()`, which ends its Turn. No a12s inbox hold and no held sleep are used. Messages already
+`sent` stay in the a12s inbox; nothing wakes the agent, so they wait. Each agent that was `Busy` when it was put to
+sleep is queued one system ask (`from_id = 'system'`, no thread): `You were paused mid-turn. Continue where you stopped.` The pause
 holds it like any other message. Queuing it at pause time, when the app knows who was mid-Turn, needs no record of
 when the pause began.
 

@@ -1,5 +1,5 @@
 import type { WaitingFor } from "@a12s-studio/contract/state";
-import type { A12s, Phase, TeamA12s } from "./a12s/port.ts";
+import type { A12s, AgentStatus, Phase, TeamA12s } from "./a12s/port.ts";
 import type { Message, Repo, Team, TeamRepo, Thread } from "./repo.ts";
 import { nameOf } from "./router.ts";
 
@@ -58,7 +58,7 @@ export function createDispatcher(repo: Repo, a12s: A12s): Dispatcher {
       const scoped = repo.forTeam(team.id);
       const queued = scoped.dispatchable();
       const client = a12s.forTeam(team.a12sToken);
-      let status: Awaited<ReturnType<TeamA12s["status"]>>;
+      let status: AgentStatus[];
       try {
         status = await client.status();
       } catch (error) {
