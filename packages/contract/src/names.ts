@@ -1,13 +1,19 @@
 // No hyphen in a team slug, so one team's prefix ("web-") can never cover another team's agent names.
-export const TEAM_SLUG = /^[a-z][a-z0-9]{1,19}$/;
-export const AGENT_SLUG = /^[a-z][a-z0-9-]{0,29}$/;
-export const AGENT_ID = /^[a-z][a-z0-9]{1,19}-[a-z][a-z0-9-]{0,29}$/;
+const TEAM = "[a-z][a-z0-9]{1,19}";
+const AGENT = "[a-z][a-z0-9-]{0,29}";
+export const TEAM_SLUG = new RegExp(`^${TEAM}$`);
+export const AGENT_SLUG = new RegExp(`^${AGENT}$`);
+export const AGENT_ID = new RegExp(`^${TEAM}-${AGENT}$`);
 export const RESERVED_TEAM_SLUGS: readonly string[] = ["studio", "broker", "owner", "system", "a12s"];
 
-// The four values below depend on how a12s exposes external Services (build spec, measurement M2).
+// a12s gives an external Service one port: agents call it on <name>.a12s and the Controller dials the same port
+// on the host, so each listener's port and its agent-facing URL come from one number.
+export const STUDIO_PORT = 7410;
+export const BROKER_PORT = 7420;
+export const STUDIO_URL = `http://studio.a12s:${STUDIO_PORT}`;
+export const BROKER_URL = `http://broker.a12s:${BROKER_PORT}`;
+// a12s stamps the calling agent computer's name in this header and removes any copy the agent sent.
 export const CALLER_HEADER = "a12s-caller";
-export const STUDIO_URL = "http://studio.a12s:7410";
-export const BROKER_URL = "http://broker.a12s:7420";
 export const TOOL_PREFIX = "mcp__a12s-studio__";
 
 export type IdPrefix = "th_" | "m_" | "w_" | "g_" | "rq_";

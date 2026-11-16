@@ -135,12 +135,15 @@ export function fakeA12s(): FakeA12s {
   }
 
   function forTeam(token: string): TeamA12s {
+    function team(): string {
+      const name = tokens.get(token);
+      if (name === undefined) throw new A12sError("forbidden", "Unknown token.");
+      return name;
+    }
+
     function own(name: string): string {
-      const team = tokens.get(token);
-      if (team === undefined) throw new A12sError("forbidden", "Unknown token.");
-      if (!name.startsWith(teamPrefix(team))) {
-        throw new A12sError("out_of_prefix", `${name} is outside the prefix ${teamPrefix(team)}.`);
-      }
+      const prefix = teamPrefix(team());
+      if (!name.startsWith(prefix)) throw new A12sError("out_of_prefix", `${name} is outside the prefix ${prefix}.`);
       return name;
     }
 
@@ -158,7 +161,7 @@ export function fakeA12s(): FakeA12s {
           id: nextId("m_"),
           state: "pending",
           sender: "studio",
-          via: `token:${tokens.get(token)}`,
+          via: `token:${team()}`,
           body: message.body,
           metadata: message.metadata,
           replaceKey: message.replaceKey,
@@ -177,10 +180,9 @@ export function fakeA12s(): FakeA12s {
         if (mustGet(own(name)).current) endActivity(name, "Ready");
       },
       async status() {
-        const team = tokens.get(token);
-        if (team === undefined) throw new A12sError("forbidden", "Unknown token.");
+        const prefix = teamPrefix(team());
         return [...agents]
-          .filter(([name]) => name.startsWith(teamPrefix(team)))
+          .filter(([name]) => name.startsWith(prefix))
           .map(([name, agent]) => ({
             name,
             phase: agent.phase,
@@ -189,7 +191,7 @@ export function fakeA12s(): FakeA12s {
           }));
       },
       async inbox(name) {
-        return { held: false, messages: mustGet(own(name)).inbox.map((m) => ({ ...m })) };
+        return mustGet(own(name)).inbox.map((m) => ({ ...m }));
       },
       async withdraw(name, messageId) {
         const message = mustGet(own(name)).inbox.find((m) => m.id === messageId);

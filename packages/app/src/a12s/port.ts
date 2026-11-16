@@ -28,9 +28,10 @@ export class A12sError extends Error {
   }
 }
 
+// A Service a12s does not run: the Controller dials host:port, and agents call the same port on <name>.a12s.
 export type ExternalService = {
   name: string;
-  url: string;
+  host: string;
   port: number;
   mcpPath?: string;
 };
@@ -117,8 +118,6 @@ export type InboxMessage = {
   createdAt: number;
 };
 
-export type Inbox = { held: boolean; messages: InboxMessage[] };
-
 export type TurnRecord = {
   id: string;
   agent: string;
@@ -158,7 +157,7 @@ export type TeamA12s = {
   sleep(name: string): Promise<void>;
   stop(name: string): Promise<void>;
   status(): Promise<AgentStatus[]>;
-  inbox(name: string): Promise<Inbox>;
+  inbox(name: string): Promise<InboxMessage[]>;
   withdraw(name: string, messageId: string): Promise<void>;
   clearInbox(name: string): Promise<void>;
   turns(name: string, limit: number): Promise<TurnRecord[]>;
