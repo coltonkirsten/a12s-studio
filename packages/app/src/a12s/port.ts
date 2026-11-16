@@ -29,11 +29,13 @@ export class A12sError extends Error {
 }
 
 // A Service a12s does not run: the Controller dials host:port, and agents call the same port on <name>.a12s.
+// With healthPath a12s checks it and refuses agent calls while it fails; without it the Service is Ready at once.
 export type ExternalService = {
   name: string;
   host: string;
   port: number;
   mcpPath?: string;
+  healthPath?: string;
 };
 
 export type AgentSpec = {

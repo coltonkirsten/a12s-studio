@@ -465,13 +465,16 @@ the rest on a prefix token: `removeAgent`, `send`, `wake`, `sleep`, `stop`, `sta
 `clearInbox`, `turns`, `turnEvents`, `readFile`, `writeFile`, `openTerminal`). `real.ts` implements it with the SDK
 (and plain HTTP for routes the SDK lacks); `fake.ts` implements it in memory for tests.
 
-**External Services**, ensured at every app start with `fleet.replace()` on the owner token:
+**External Services**, ensured at every app start with `PUT /v1/services/{s}` on the owner token (an unchanged spec
+is a no-op):
 
 ```yaml
 services:
   studio:
     external: { host: host.docker.internal }
-    manifest: { ports: { mcp: { port: 7410, mcp: { path: /mcp } } } }
+    manifest:
+      ports: { mcp: { port: 7410, mcp: { path: /mcp } } }
+      health: { http: { port: 7410, path: /healthz } }   # a12s refuses agent calls while it fails
   broker:
     external: { host: host.docker.internal }
     manifest: { ports: { http: { port: 7420 } } }
@@ -954,6 +957,8 @@ from the README alone.
     write → refused.
 - **Pure functions get table tests:** path patterns, the cost rule, the "doing now" line, state derivation, slug
   rules, the web `logic/` folder.
+- **`real.ts` against real a12s:** `node packages/app/scripts/a12s-smoke.ts <fleet>` runs every port call once against a
+  running Fleet (one haiku agent, removed at the end). Manual, never in CI.
 - **End-to-end against real a12s is manual, never in CI.** `npm run e2e` needs Docker, a12s and the Claude login,
   creates a Fleet named `studio-e2e` under a temp `STUDIO_HOME`, uses model `haiku` for every agent, runs each
   phase's exit script, and removes the Fleet. It is run before each phase is shown.
