@@ -99,12 +99,16 @@ packages/
     src/names.ts        slug rules, id helpers, the two ports and the four M2 constants
   app/
     src/main.ts         wires everything; the only file that reads env and config
+    src/app.ts          createApp(deps): builds the app around an a12s port; main.ts and tests share it
     src/db.ts           open, migrate, transaction helper
     src/repo.ts         all SQL; forTeam(teamId) scoped accessors
+    src/errors.ts       StudioError: status, code, message, fix
     src/caller.ts       resolveCaller: header -> agent -> team
+    src/agent-server.ts the agent listener (7410)
     src/tools/          the six tools, one file each, plus mcp.ts
-    src/router.ts       post rules: kinds, replies, thread status
+    src/router.ts       post rules: kinds, replies, thread status, the implicit answer
     src/dispatcher.ts   the one queue: pause, budget, awake cap, delivery
+    src/teams.ts        create, hire, fire, delete, pause and resume
     src/a12s/           port.ts (interface), real.ts (a12s HTTP API), fake.ts (in-memory), spec.ts (agentSpec)
     src/live.ts         a12s events -> presence, line, text, turns
     src/state.ts        derive StudioState; rev counter; SSE fan-out
@@ -267,6 +271,7 @@ The app's agent listener (`7410`) is the external Service `studio`. It serves:
 - `POST /mcp`: an MCP server over streamable HTTP, stateless (`sessionIdGenerator: undefined`,
   `enableJsonResponse: true`): a new server and transport per request, with the caller bound in a closure.
 - `GET /files/<message id>/<name>`: an attachment, for a caller on the message's team.
+- `GET /healthz`: `{ ok: true }`. The one route that needs no caller; it reads nothing.
 
 `caller.ts` is the only reader of the caller header:
 
@@ -361,19 +366,19 @@ Rules when a message is committed (`router.ts`):
 - note to an agent: `queued`. It is **never sent to a12s by itself**, because a Message to an idle awake agent starts
   a Turn. It rides along: when the dispatcher sends an ask or reply to that agent, it appends that agent's queued
   notes to the same body and marks them `sent` with the same a12s Message id.
-- anything to `owner`, or a note with no receiver: `none`.
+- anything to `owner`, a note with no receiver, or a reply to an asker who has left the team: `none`.
 - A `post` returns only after its transaction has committed. The dispatcher runs after the commit, not inside it.
 
 **The dispatcher** (`dispatcher.ts`) is one function, `run()`, serialized (a run requested during a run sets a flag
 and runs once more). It is called after every committed message, every a12s phase change, every settings change,
 and every scheduler tick. It keeps no state of its own except the set of agents it has just woken, cleared when their
-phase event arrives.
+phase event arrives. Phases and pending counts come from each team's `status()` at the start of a run.
 
 ```
 if settings.paused: return
 awake = agents whose a12s phase is not Asleep, plus the just-woken set
-candidates = agents with a queued ask or reply, ordered by their best message:
-             from 'owner' first, then oldest created_at
+candidates = agents with a queued ask or reply, and asleep agents with pending a12s Messages,
+             ordered by their best queued message: from 'owner' first, then oldest created_at
 for each candidate:
   team paused                      -> skip
   team spend today >= its budget   -> skip
@@ -382,13 +387,16 @@ for each candidate:
     awake count >= awake_cap       -> skip
     free disk < min_free_disk_gb   -> skip
   send every queued ask and reply for it, oldest first, the notes riding on the first
-  if it was asleep: wake() it and add it to the just-woken set
+  if it was asleep and its inbox holds anything: wake() it and add it to the just-woken set
 ```
+
+The skips that show as `waiting` (paused, budget, cap, disk) are decided in one function, `blockedReason`.
 
 - Send, then wake: the agent wakes with its work already pending.
 - All run-time a12s calls use the team's prefix token client.
 - Each send passes `replaceKey: <studio message id>`, so a send repeated after a crash replaces the pending copy.
-- A send that fails leaves the message `queued`; the next run retries. `inbox_full` waits for the next tick.
+- A send that fails leaves the message `queued` and stops that agent's sends for the run, so order holds; the next
+  run retries. `inbox_full` waits for the next tick.
 - Skipped agents show presence `waiting` with the reason (cap, budget, paused, disk).
 
 **What the agent receives.** The a12s Message has `sender: "studio"` and `metadata: { thread, message, kind, from }`.
@@ -403,7 +411,8 @@ Draft the hero section and the three feature blurbs.
 To answer: post(kind="reply", ask="m_8d1f0c3e5a7b")
 ```
 
-A reply reads `reply m_… from dev to your ask m_…` and has no "To answer" line. A file adds
+A reply reads `reply m_… from dev to your ask m_…` and has no "To answer" line; neither has an ask from `system`,
+which takes no reply, and an ask with no thread has no `thread` line. A file adds
 `file: <STUDIO_URL>/files/<message id>/<name>`. Riding notes follow, at most 20, each cut at 500 characters:
 
 ```
@@ -428,13 +437,16 @@ agent's behalf.
 
 ### 5.6 Pause
 
-Pause is app-side: the flag (`settings.paused` or `teams.paused`) is written, then every awake agent in scope gets a
-plain `sleep()`, which ends its Turn. No a12s inbox hold and no held sleep are used. Messages already `sent` stay in
-the a12s inbox; nothing wakes the agent, so they wait.
+Pause is app-side: the flag (`settings.paused` or `teams.paused`) is written, a dispatcher run that was under way is
+left to finish (it may have read the old flag, and would wake an agent after its sleep), then every awake agent in
+scope gets a plain `sleep()`, which ends its Turn. No a12s inbox hold and no held sleep are used. Messages already
+`sent` stay in the a12s inbox; nothing wakes the agent, so they wait. Each agent that was `Busy` when it was put to
+sleep is queued one system ask (`from_id = 'system'`, no thread): `You were paused mid-turn. Continue where you
+stopped.` The pause holds it like any other message. Queuing it at pause time, when the app knows who was mid-Turn,
+needs no record of when the pause began.
 
-Resume clears the flag. For each agent in scope whose latest Turn ended `interrupted` during the pause, the app
-queues one system ask (`from_id = 'system'`, no thread): `You were paused mid-turn. Continue where you stopped.` An
-agent with `sent` but undelivered messages counts as a candidate. Then the dispatcher runs.
+Resume clears the flag and runs the dispatcher. An asleep agent with pending a12s Messages is a candidate, so the
+agents put to sleep with work in their inbox are woken, and the queued messages follow in order.
 
 ### 5.7 Awake cap, budget, scheduled wakes
 
@@ -489,7 +501,7 @@ services:
 A Service has one port number: agents call `http://studio.a12s:7410` and the Controller dials `7410` on the host. So
 `STUDIO_PORT` and `BROKER_PORT` in `contract/names.ts` set both the listeners and the agent-facing URLs.
 
-**Agent spec.** `a12s/spec.ts` exports one pure function, `agentSpec(team, agent, settings)`, that returns the whole
+**Agent spec.** `a12s/spec.ts` exports one pure function, `agentSpec(team, agent)`, that returns the whole
 spec. Fleet `defaults` are not used: the function is the single place a spec is decided. Hiring calls
 `putAgent(create-only)`; any edit to the brief, a role or an agent setting calls `putAgent` again with the fresh
 spec, which a12s applies at the agent's next idle moment.
@@ -566,7 +578,13 @@ Access
 
 **Removing.** Firing an agent: `removeAgent`, set `removed_at`, delete its wakes, mark its queued messages `none`.
 Deleting a team: purge it in the broker first (section 9.5), then remove its agents and its token, then set
-`deleted_at`. If any step fails the team stays, with the error shown.
+`deleted_at`. If any step fails the team stays, with the error shown; an agent computer already gone counts as
+removed, so the delete can be run again. A team's lead cannot be fired. Agent slugs `owner` and `system` are refused
+at hire.
+
+**Creating a team** does all a12s work first (the prefix token, then `putAgent` for each template agent, lead first)
+and then inserts the team and agent rows in one transaction. If an a12s step fails, the agent computers and the token
+made so far are removed and nothing is written, so the slug stays free.
 
 ## 7. Live state
 
@@ -906,9 +924,9 @@ owner.
 | Package | Scope |
 |---|---|
 | P1-0 Skeleton (first, alone) | Workspaces, tooling, CI, `contract` (state, API, names), `a12s/port.ts` and `fake.ts`, `db.ts` with the full schema, `main.ts` wiring with stubs. |
-| P1-A Core | `repo.ts`, `caller.ts`, `router.ts`, the tools `post`, `read`, `update_thread`, `roster` and `mcp.ts`, `dispatcher.ts` (pause only; cap and budget arrive in P3). |
-| P1-B a12s | `real.ts`, `spec.ts` (instructions, power, uses), team creation and hire against a12s, `live.ts`, resync at start. |
-| P1-C Owner API | `ownerGate`, the team, agent, thread, message, settings and pause routes, `state.ts`, the SSE stream, static files. |
+| P1-A Core | `repo.ts`, `caller.ts`, `router.ts` (with the implicit-answer rule as `onTurnFinished`), the tools `post`, `read`, `update_thread`, `roster` and `mcp.ts`, the agent listener, `dispatcher.ts` (pause only; cap and budget arrive in P3), `spec.ts`, `teams.ts` (create, hire, fire, delete, pause), `createApp`, the two template folders. |
+| P1-B a12s | `real.ts`, and `main.ts` choosing it. |
+| P1-C Owner API | `ownerGate`, the team, agent, thread, message, settings and pause routes, `live.ts` with resync at start, `state.ts`, the SSE stream, static files. |
 | P1-D Web | Stream client, the Teams and Team screens, new-team and hire sheets, composer with @, presence dots, the live line and streaming text, folded agent talk, pause switches. Built against a recorded-state fixture server until P1-C lands. |
 
 Exit: the owner creates two teams in the UI and talks to both leads; a lead asks a second agent and the answer comes
@@ -932,7 +950,7 @@ default-deny tests pass; an agent clones and pushes a repository and its contain
 |---|---|
 | P3-A Limits | Awake cap and queue order, budget hold and the cost rule, free-disk check, the `schedule` tool and scheduled wakes, the notes hook, per-agent sleep and compaction settings, every limit editable in the UI (global settings, team budget, agent settings). |
 | P3-B Inspector | The agent inspector: Now with the tool log, Inbox with Remove and Clear, Role and notes, Files, Terminal, Settings. The `file` field of `post` and attachment download. |
-| P3-C Durability | Agent error, failed Turn and budget cards in Needs You; the implicit-answer rule; `scripts/backup.ts` (both databases with SQLite's backup, each home drive as a tar, to `~/a12s-studio-backups/<date>/`, 14 kept) with a nightly LaunchAgent; `scripts/restore.ts`; the documented command to export the vault key. |
+| P3-C Durability | Agent error, failed Turn and budget cards in Needs You; `scripts/backup.ts` (both databases with SQLite's backup, each home drive as a tar, to `~/a12s-studio-backups/<date>/`, 14 kept) with a nightly LaunchAgent; `scripts/restore.ts`; the documented command to export the vault key. |
 
 Exit: a team runs unattended inside its budget; a forced budget stop (budget set below today's spend) and a forced
 agent error both appear in Needs You; a restore from last night's backup onto an emptied data folder works.
