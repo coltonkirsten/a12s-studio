@@ -16,7 +16,7 @@ import type { Duplex } from "node:stream";
 import { text } from "node:stream/consumers";
 import type { TestContext } from "node:test";
 import type { AuditEntry, CreateGrantBody, Grant, PutCredentialBody } from "@a12s-studio/contract/broker-admin";
-import { CALLER_HEADER } from "@a12s-studio/contract/names";
+import { BROKER_URL, CALLER_HEADER } from "@a12s-studio/contract/names";
 import { listenAdmin } from "../src/admin.ts";
 import { openDb } from "../src/db.ts";
 import { forwardServer } from "../src/forward.ts";
@@ -25,6 +25,9 @@ import { createVault } from "../src/vault.ts";
 export const HOST = "api.example.com";
 // The value every test stores as a credential, and then looks for where it must not be.
 export const SECRET = "stored-credential-marker";
+// What a12s leaves on a request it passes on from the agent "web-dev".
+export const VIA_A12S = { host: new URL(BROKER_URL).host };
+export const FROM_AGENT = { ...VIA_A12S, [CALLER_HEADER]: "web-dev" };
 
 type Seen = { method: string; url: string; headers: IncomingHttpHeaders; body: string };
 type Handle = (req: IncomingMessage, res: ServerResponse, seen: Seen) => void;
@@ -129,7 +132,7 @@ export async function startBroker(t: TestContext) {
   async function call(path: string, { method = "GET", caller = "web-dev", headers = {}, body }: CallOptions = {}) {
     const last = auditAfter(0).at(-1)?.id ?? 0;
     const identity = caller === null ? {} : { [CALLER_HEADER]: caller };
-    const req = request({ host: "127.0.0.1", port, method, path, headers: { ...headers, ...identity } });
+    const req = request({ host: "127.0.0.1", port, method, path, headers: { ...VIA_A12S, ...headers, ...identity } });
     req.end(body);
     const [res] = (await once(req, "response")) as [IncomingMessage];
     const result: Reply = { status: res.statusCode ?? 0, headers: res.headers, body: await text(res), audit: [] };

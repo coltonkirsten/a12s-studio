@@ -3,8 +3,7 @@ import { once } from "node:events";
 import { type IncomingMessage, request } from "node:http";
 import { text } from "node:stream/consumers";
 import { test } from "node:test";
-import { CALLER_HEADER } from "@a12s-studio/contract/names";
-import { HOST, reply, startBroker } from "./harness.ts";
+import { FROM_AGENT, HOST, reply, startBroker } from "./harness.ts";
 
 const ITEMS = `/${HOST}/v1/items`;
 
@@ -96,7 +95,7 @@ test("an upstream that fails mid-body cuts the agent off instead of ending the r
     res.write("partial", () => res.destroy());
   };
 
-  const req = request({ port: broker.port, path: ITEMS, headers: { [CALLER_HEADER]: "web-dev" } }).end();
+  const req = request({ port: broker.port, path: ITEMS, headers: FROM_AGENT }).end();
   const [res] = (await once(req, "response")) as [IncomingMessage];
   await assert.rejects(text(res), { code: "ECONNRESET" });
 });
@@ -112,7 +111,7 @@ test("an agent that goes away stops the upstream call", { timeout: 10_000 }, asy
     req.once("data", arrived.resolve);
   };
 
-  const req = request({ port: broker.port, method: "POST", path: ITEMS, headers: { [CALLER_HEADER]: "web-dev" } });
+  const req = request({ port: broker.port, method: "POST", path: ITEMS, headers: FROM_AGENT });
   req.on("error", () => {});
   req.write("the first part of an upload");
   await arrived.promise;

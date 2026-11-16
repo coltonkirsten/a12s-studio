@@ -42,8 +42,11 @@ wall on a one-user Mac.
   state must also carry `Content-Type: application/json` and, when an `Origin` header is present, an `Origin` whose
   host equals `Host`. This stops other web pages in the owner's browser from driving the API.
 - **Honest limit:** the two agent-facing ports trust the caller header from anything that can reach host loopback,
-  which is any process running as the owner. That is inside the trust boundary stated in the design. Measurement M2
-  checks whether a12s can also send a per-Service secret; if it can, both listeners require it.
+  which is any process running as the owner and any container that can dial `host.docker.internal`. That is inside
+  the trust boundary stated in the design. Measurement M2 checks whether a12s can also send a per-Service secret; if
+  it can, both listeners require it. A web page in the owner's browser is outside that boundary and can reach
+  loopback through a DNS name of its own, so the broker also requires the `Host` that a12s passes on
+  (`broker.a12s:7420`), which such a page cannot send.
 
 **Data folder** `~/.a12s-studio/` (0700), never in the repo:
 
@@ -806,18 +809,23 @@ and never asks the app who a caller is.
 
 Order of checks; the first failure answers and is audited as `deny`:
 
-1. **Caller.** Exactly one caller header, matching `^[a-z][a-z0-9]{1,19}-[a-z][a-z0-9-]{0,29}$`. Else 403 `no_caller`.
+1. **Caller.** `Host` is the host of `BROKER_URL`, which a12s passes on unchanged, and there is exactly one caller
+   header, matching `^[a-z][a-z0-9]{1,19}-[a-z][a-z0-9-]{0,29}$`. Else 403 `no_caller`.
 2. **Target.** `<host>` matches `^([a-z0-9]([a-z0-9-]*[a-z0-9])?\.)+[a-z]([a-z0-9-]*[a-z0-9])?$` (lower case, at
    least one dot, no port, no user info), is at most 253 characters, and does not end in `.localhost` or `.a12s`.
    The last label starts with a letter, so no spelling of an IP address (`127.0.0.1`, `127.1`, `0x7f.0.0.1`) is a
-   host. The path is present and, with the query, printable ASCII. The raw path contains no `.` or `..` segment,
-   no `//`, no `%2f`, `%5c` or `%2e` in any case, no backslash and no `#`. The path is matched and forwarded
-   exactly as sent, never decoded. Else 400 `bad_target`; the audit row then holds neither host nor path.
+   host. The path is present and, with the query, printable ASCII. The raw path contains no `.` or `..` segment
+   (bare or followed by `;`, which some hosts drop before reading it), no `//`, no backslash, no `#`, no `%2f`,
+   `%5c`, `%2e`, `%25`, `%00`, `%c0` or `%c1` in any case, and no `%` that is not followed by two hex digits. The
+   path is matched and forwarded exactly as sent, never decoded. Else 400 `bad_target`; the audit row then holds neither host nor path.
 3. **Credential.** A `credentials` row for (caller's team, host). Else 403 `no_access`.
 4. **Grant.** A grant for (team, host) that is not revoked, has `expires_at` null or in the future, lists the method
-   (`HEAD` counts as `GET`), and has a pattern matching the path. Else 403 `no_access`.
-5. **Forward.** Remove from the request: `Authorization`, `Cookie`, `Proxy-*`, `Host`, the caller header, and
-   hop-by-hop headers (`Connection` and every header it names, `Keep-Alive`, `TE`, `Trailer`, `Transfer-Encoding`,
+   (`HEAD` counts as `GET`), and has a pattern matching the path. Else 403 `no_access`. The grant is checked once,
+   when the call arrives: a call already under way when its grant is revoked or runs out is not cut off.
+5. **Forward.** Remove from the request: `Authorization`, `Cookie`, `Proxy-*`, `Host`, the caller header, the
+   headers by which some hosts let a request replace its method or path (`X-HTTP-Method-Override`,
+   `X-HTTP-Method`, `X-Method-Override`, `X-Original-URL`, `X-Rewrite-URL`), any of these spelt with `_` for `-`,
+   and hop-by-hop headers (`Connection` and every header it names, `Keep-Alive`, `TE`, `Trailer`, `Transfer-Encoding`,
    `Upgrade`, and `Expect`, which Node has already answered). Add the credential: `bearer` →
    `Authorization: Bearer <secret>`; `basic` → `Authorization: Basic base64(<username>:<secret>)`; `header` →
    `<header_name>: <secret>`, replacing a header of that name sent by the agent. Stream the request body up and the
@@ -932,10 +940,12 @@ advertisement, a streamed pack and the real `git` client.
 9. Revoked grant → 403 on the next call.
 10. Approve → the next call succeeds with no restart. Deny → still 403.
 11. Deleting a credential → 403, and its grants are revoked.
-12. Path tricks (`..`, `.`, `//`, `%2e%2e`, `%2f`, `%5c`, backslash, `#`) → 400, never forwarded.
+12. Path tricks (`..`, `.`, `..;`, `//`, `%2e%2e`, `%2f`, `%5c`, `%25`, `%00`, an overlong or malformed escape,
+    backslash, `#`) → 400, never forwarded.
 13. Host tricks (port, `user@host`, an IP address in any spelling, upper case, trailing dot, `localhost`, a
     `.localhost` or `.a12s` name) → 400, and no credential can be stored for one.
-14. A client-sent `Authorization`, `Cookie` or caller header never reaches upstream; the stored credential does.
+14. A client-sent `Authorization`, `Cookie`, caller header or method or path override never reaches upstream; the
+    stored credential does.
 15. The 403 body contains `code`, `message` and the `access` fix, and is identical for cases 3 and 4.
 16. Upstream redirects are returned, not followed.
 17. Upstream 401 → 502 `credential_rejected`; `rejected_at` set.
@@ -945,6 +955,11 @@ advertisement, a streamed pack and the real `git` client.
 20. A ciphertext copied to another team's row fails to decrypt.
 21. `packages/broker/package.json` has no `dependencies`, and broker code imports only Node built-ins, its own
     files and `contract`: types from any of its files, values from `names.ts` only.
+22. A request whose `Host` is not the broker's a12s name (a loopback address, another name) → 403 `no_caller`,
+    whatever caller header it carries.
+
+A grant limits the method, host and path of a request, not its body: a host that lets a field in a POST body choose
+another method is not narrowed by leaving that method out of a grant.
 
 ## 10. Phases and work packages
 

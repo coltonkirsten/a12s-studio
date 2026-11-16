@@ -198,6 +198,9 @@ test("invariant 12: path tricks are refused as bad targets and never forwarded",
     ...["/v1/../admin", "/v1/..", "/..", "/v1/./items", "/v1/.", "//v1/items", "/v1//items"],
     ...["/v1/%2e%2e/admin", "/v1/%2E%2E/admin", "/v1/.%2e/admin", "/v1%2fitems", "/v1%2Fitems", "/v1%5citems"],
     ...["/v1\\items", "/v1\\..\\admin", "/v1/items#x"],
+    ...["/v1/..;/admin", "/v1/..;x=1/admin", "/v1/.;/items", "/v1/..;"],
+    ...["/v1/%252e%252e/admin", "/v1%252fitems", "/v1/items%00.png", "/v1/%c0%ae%c0%ae/admin", "/v1%C0%AFitems"],
+    ...["/v1/%u002e%u002e/admin", "/v1/items%", "/v1/items%2", "/v1/%zz"],
   ];
   for (const path of tricks) {
     refused(await broker.call(`/${HOST}${path}`), 400, "bad_target");
@@ -226,7 +229,7 @@ test("invariant 13: host tricks are refused as bad targets", async (t) => {
   untouched(broker);
 });
 
-test("invariant 14: client-sent credentials and identity never reach upstream; the stored credential does", async (t) => {
+test("invariant 14: client-sent credentials, identity and overrides never reach upstream; the stored credential does", async (t) => {
   const broker = await startBroker(t);
   const basicHost = "git.example.com";
   const headerHost = "keys.example.com";
@@ -235,6 +238,8 @@ test("invariant 14: client-sent credentials and identity never reach upstream; t
   await broker.credential("web", headerHost, { scheme: "header", headerName: "X-Api-Key" });
   for (const host of [HOST, basicHost, headerHost]) await broker.grant("web", { host });
 
+  const overrides = ["x-http-method-override", "x-http-method", "x-method-override", "x-original-url", "x-rewrite-url"];
+  const underscored = ["x_http_method_override", "a12s_caller"];
   const headers = {
     authorization: "Bearer from-the-agent",
     cookie: "session=from-the-agent",
@@ -242,6 +247,7 @@ test("invariant 14: client-sent credentials and identity never reach upstream; t
     "X-Api-Key": "from-the-agent",
     connection: "x-private",
     "x-private": "from-the-agent",
+    ...Object.fromEntries([...overrides, ...underscored].map((name) => [name, "from-the-agent"])),
     "x-kept": "kept",
   };
   for (const host of [HOST, basicHost, headerHost]) forwarded(await broker.call(`/${host}/v1/items`, { headers }));
@@ -255,7 +261,7 @@ test("invariant 14: client-sent credentials and identity never reach upstream; t
   for (const [i, sent] of [bearer, basic, header].entries()) {
     assert.equal(sent?.host, [HOST, basicHost, headerHost][i]);
     assert.equal(sent?.["x-kept"], "kept");
-    for (const name of ["cookie", "proxy-authorization", "a12s-caller", "x-private"]) {
+    for (const name of ["cookie", "proxy-authorization", "a12s-caller", "x-private", ...overrides, ...underscored]) {
       assert.equal(sent?.[name], undefined, name);
     }
   }
@@ -475,4 +481,16 @@ test("invariant 20: a ciphertext copied to another team's row fails to decrypt",
   assert.equal(errors.mock.callCount(), 1);
   assert.equal(broker.upstream.seen.length, 1);
   assert.equal(broker.upstream.seen[0]?.headers.authorization, "Bearer the-ops-team-value");
+});
+
+test("invariant 22: a request that did not arrive under the broker's a12s name is refused", async (t) => {
+  const broker = await startBroker(t);
+  await broker.credential("web");
+  await broker.grant("web");
+
+  const hosts = [`127.0.0.1:${broker.port}`, `localhost:${broker.port}`, "rebound.example.com:7420", "broker.a12s"];
+  for (const host of hosts) {
+    refused(await broker.call(ITEMS, { headers: { host } }), 403, "no_caller");
+  }
+  untouched(broker);
 });

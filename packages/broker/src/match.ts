@@ -8,8 +8,9 @@ const HOST = /^([a-z0-9]([a-z0-9-]*[a-z0-9])?\.)+[a-z]([a-z0-9-]*[a-z0-9])?$/;
 // Names that resolve to this machine or to a12s Services.
 const LOCAL = /\.(localhost|a12s)$/;
 const PRINTABLE = /^[!-~]*$/;
-// Spellings that the matcher and the host could read as different paths.
-const AMBIGUOUS = /\/\.{1,2}(\/|$)|\/\/|[\\?#]|%2f|%5c|%2e/i;
+// Spellings that the matcher and the host could read as different paths: dot segments (some hosts drop a ";…"
+// suffix before reading one), empty segments, and escapes for "/", "\", ".", "%" and NUL, overlong or malformed.
+const AMBIGUOUS = /\/\.{1,2}([/;]|$)|\/\/|[\\?#]|%(2f|5c|2e|25|00|c[01])|%(?![0-9a-f]{2})/i;
 
 export function isHost(host: string): boolean {
   return host.length <= MAX_HOST && HOST.test(host) && !LOCAL.test(host);

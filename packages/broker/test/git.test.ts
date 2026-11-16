@@ -6,7 +6,7 @@ import { buffer } from "node:stream/consumers";
 import { test } from "node:test";
 import { promisify } from "node:util";
 import { CALLER_HEADER } from "@a12s-studio/contract/names";
-import { type Broker, SECRET, startBroker } from "./harness.ts";
+import { type Broker, FROM_AGENT, SECRET, startBroker, VIA_A12S } from "./harness.ts";
 
 const GIT_HOST = "git.example.com";
 const REFS = "/owner/repo.git/info/refs";
@@ -42,7 +42,7 @@ test("git smart HTTP: the ref advertisement streams down chunk by chunk", { time
   };
 
   const path = `/${GIT_HOST}${REFS}?service=git-upload-pack`;
-  const req = request({ port: broker.port, path, headers: { [CALLER_HEADER]: "web-dev" } }).end();
+  const req = request({ port: broker.port, path, headers: FROM_AGENT }).end();
   const [res] = (await once(req, "response")) as [IncomingMessage];
   const chunks: string[] = [];
   for await (const chunk of res.setEncoding("utf8")) {
@@ -75,7 +75,7 @@ test("git smart HTTP: a pack request streams up and the binary pack streams back
     res.writeHead(200, { "content-type": "application/x-git-upload-pack-result" }).end(pack);
   };
 
-  const headers = { [CALLER_HEADER]: "web-dev", "content-type": "application/x-git-upload-pack-request" };
+  const headers = { ...FROM_AGENT, "content-type": "application/x-git-upload-pack-request" };
   const req = request({ port: broker.port, method: "POST", path: `/${GIT_HOST}${UPLOAD_PACK}`, headers });
   req.write(pkt(`want ${HEAD}\n`));
   // The client holds the rest back until upstream has the first part: a broker that buffered would hang here.
@@ -116,6 +116,8 @@ test("git smart HTTP: the git client reads refs through the broker, and is refus
       [
         "-c",
         `http.extraHeader=${CALLER_HEADER}: web-dev`,
+        "-c",
+        `http.extraHeader=Host: ${VIA_A12S.host}`,
         "ls-remote",
         `http://127.0.0.1:${broker.port}/${GIT_HOST}/${repo}`,
       ],

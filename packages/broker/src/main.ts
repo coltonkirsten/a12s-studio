@@ -33,5 +33,5 @@ const deps = { db: openDb(join(folder, "vault.db")), vault: createVault(vaultKey
 // The port goes first: if another broker holds it, this one stops before it touches that broker's socket.
 await once(forwardServer({ ...deps, upstream: globalAgent }).listen(BROKER_PORT, "127.0.0.1"), "listening");
 await listenAdmin(deps, join(folder, "admin.sock"));
-setInterval(() => sweep(deps.db, Date.now()), SWEEP_EVERY_MS);
+setInterval(() => sweep(deps.db, deps.now()), SWEEP_EVERY_MS);
 console.log(`a12s Studio broker: forwarding on 127.0.0.1:${BROKER_PORT}, admin on ${join(folder, "admin.sock")}`);

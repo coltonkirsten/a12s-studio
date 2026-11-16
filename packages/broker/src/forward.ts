@@ -28,7 +28,9 @@ type Refusal = { code: string; message: string; fix: string };
 const CONNECT_TIMEOUT_MS = 10_000;
 // Headers that belong to one connection, not to the message. Expect is here because Node has already answered it.
 const HOP_BY_HOP = ["connection", "keep-alive", "te", "trailer", "transfer-encoding", "upgrade", "expect"];
-const NEVER_UPSTREAM = ["authorization", "cookie", "host", CALLER_HEADER];
+// Some hosts let these replace the method or path of the request, which are what the grant was matched on.
+const OVERRIDES = ["x-http-method-override", "x-http-method", "x-method-override", "x-original-url", "x-rewrite-url"];
+const NEVER_UPSTREAM = ["authorization", "cookie", "host", CALLER_HEADER, ...OVERRIDES];
 const NEVER_DOWNSTREAM = ["set-cookie"];
 
 const NO_CALLER: Refusal = {
@@ -44,8 +46,12 @@ const BAD_TARGET: Refusal = {
 
 function passable(headers: IncomingHttpHeaders, never: string[]): OutgoingHttpHeaders {
   const named = (headers.connection ?? "").split(",").map((name) => name.trim().toLowerCase());
+  // CGI-style hosts read "_" in a header name as "-".
   const dropped = (name: string) =>
-    name.startsWith("proxy-") || HOP_BY_HOP.includes(name) || named.includes(name) || never.includes(name);
+    name.startsWith("proxy-") ||
+    HOP_BY_HOP.includes(name) ||
+    named.includes(name) ||
+    never.includes(name.replaceAll("_", "-"));
   return Object.fromEntries(Object.entries(headers).filter(([name]) => !dropped(name)));
 }
 
