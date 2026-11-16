@@ -10,6 +10,7 @@ import {
   type ExternalService,
   type FileEntry,
   type InboxMessage,
+  type ModelCosts,
   type Phase,
   type TeamA12s,
   type TurnRecord,
@@ -28,7 +29,7 @@ export type FakeAgent = {
   current: { turn: string; startedAt: number; messageIds: string[]; text: string } | null;
 };
 
-export type TurnResult = { status?: TurnStatus; error?: string; costTotalUsd?: number };
+export type TurnResult = { status?: TurnStatus; error?: string; modelCostsUsd?: ModelCosts };
 
 export type FakeA12s = A12s & {
   services: ExternalService[];
@@ -81,7 +82,7 @@ export function fakeA12s(): FakeA12s {
     const at = Date.now();
     agent.current = { turn, startedAt: at, messageIds, text: "" };
     setPhase(name, "Busy");
-    emit({ type: "turn.started", agent: name, at, turn, session: agent.session, messageIds });
+    emit({ type: "turn.started", agent: name, at, turn, messageIds });
     return turn;
   }
 
@@ -91,7 +92,7 @@ export function fakeA12s(): FakeA12s {
     if (!current) throw new Error(`fake a12s: ${name} has no Turn running`);
     const at = Date.now();
     const status = result.status ?? "completed";
-    const costTotalUsd = result.costTotalUsd ?? 0;
+    const modelCostsUsd = result.modelCostsUsd ?? {};
     const error = result.error === undefined ? {} : { error: result.error };
     agent.current = null;
     agent.turns.unshift({
@@ -104,7 +105,7 @@ export function fakeA12s(): FakeA12s {
       messageIds: current.messageIds,
       startedAt: current.startedAt,
       finishedAt: at,
-      costTotalUsd,
+      modelCostsUsd,
     });
     emit({
       type: "turn.finished",
@@ -114,7 +115,7 @@ export function fakeA12s(): FakeA12s {
       session: agent.session,
       status,
       ...error,
-      costTotalUsd,
+      modelCostsUsd,
     });
   }
 
@@ -208,7 +209,7 @@ export function fakeA12s(): FakeA12s {
         return mustGet(own(name)).turns.slice(0, limit);
       },
       async *turnEvents(name, turn) {
-        for (const event of mustGet(own(name)).journal) {
+        for (const event of awake(own(name)).journal) {
           if ("turn" in event && event.turn === turn) yield event;
         }
       },

@@ -74,9 +74,9 @@ Throwaway code. Each has one decision hanging on it.
 | M2 | The released external Service: exact Fleet syntax, the header name (assumed `A12s-Caller`), how an MCP port is declared, the tool prefix agents see (assumed `mcp__a12s-studio__post`), whether the `.a12s` port can be 80, whether a per-Service secret header exists, and whether a prefix token may create an agent computer whose `uses` names an external Service (assumed no). | The four constants in `packages/contract` (`CALLER_HEADER`, `STUDIO_URL`, `BROKER_URL`, tool prefix), and which token writes specs (section 6). **Measured:** the syntax in section 6; the header is `A12s-Caller`, stamped on plain HTTP only, with any copy the agent sent removed; the port agents call on `<name>.a12s` is the port the Controller dials on the host; only the owner token may declare an external Service. |
 | M3 | `git clone` and `git push` of a real repository from an agent container through a 30-line forwarder that adds the token. Then check the container's environment and disk for the token. | Confirms section 9's forward design (streaming bodies, headers). |
 | M4 | A `SessionStart` hook given through `harness.settings` prints text: does it reach the model at session start and after `/compact` (both the compact-before-sleep one and an automatic one)? | The notes hook (section 6). If not: the hook becomes a line in the core instructions telling the agent to read its notes first. |
-| M5 | `turn.finished.usage.modelUsage[*].costUSD` across: two Turns in one session, a sleep and wake, a compaction, a `fresh` session, a Turn with a sub-agent. | The cost delta rule (section 7.4). |
+| M5 | `turn.finished.usage.modelUsage[*].costUSD` across: two Turns in one session, a sleep and wake, a compaction, a `fresh` session, a Turn with a sub-agent. | The cost delta rule (section 7.4). **Measured:** each model's `costUSD` is its running total for the session, sub-agents and `/compact` Turns included; it starts again from zero only in a fresh session. So the rule works per model, per session. |
 | M6 | Does `tailscale serve` set `Tailscale-User-Login` and `X-Forwarded-For`, and strip client-sent `Tailscale-*` headers? | `ownerGate` as written. |
-| M7 | An agent asleep with a pending Message and no `wakeOnMessage`: does it stay asleep until `wake()`? Does `wake()` on a prefix token work and stay outside `maxWakesPerHour`? | The wake design (section 5.3). |
+| M7 | An agent asleep with a pending Message and no `wakeOnMessage`: does it stay asleep until `wake()`? Does `wake()` on a prefix token work and stay outside `maxWakesPerHour`? | The wake design (section 5.3). **Measured:** `POST …/power {"state":"awake"}` on a prefix token wakes it. |
 | M8 | How a Docker volume name maps to an agent computer's home drive (`GET /v1/drives`). | The backup script. |
 
 **Phase 0 exit:** inside an agent container the environment and disk show no GitHub token, a push works, and the
@@ -109,12 +109,13 @@ packages/
     src/router.ts       post rules: kinds, replies, thread status, the implicit answer
     src/dispatcher.ts   the one queue: pause, budget, awake cap, delivery
     src/teams.ts        create, hire, fire, delete, pause and resume
-    src/a12s/           port.ts (interface), real.ts (SDK), fake.ts (in-memory), spec.ts (agentSpec)
+    src/a12s/           port.ts (interface), real.ts (a12s HTTP API), fake.ts (in-memory), spec.ts (agentSpec)
     src/live.ts         a12s events -> presence, line, text, turns
     src/state.ts        derive StudioState; rev counter; SSE fan-out
     src/owner/          ownerGate, routes, static files
     src/broker-client.ts
     src/scheduler.ts    the one 30 s tick
+    scripts/a12s-smoke.ts   real.ts against a running Fleet; manual
     test/
   broker/
     src/main.ts  db.ts  vault.ts  match.ts  forward.ts  admin.ts  caller.ts  sweep.ts
@@ -235,12 +236,12 @@ CREATE TABLE turns (                                   -- one row per finished a
   team_id TEXT NOT NULL REFERENCES teams(id),
   agent_id TEXT NOT NULL REFERENCES agents(id),
   thread_id TEXT REFERENCES threads(id),               -- thread of the first Studio message it delivered
-  session TEXT NOT NULL,
+  session TEXT,                                        -- null: it ended before the harness started a session
   status TEXT NOT NULL,                                -- completed | failed | interrupted
   error TEXT,
   started_at INTEGER, finished_at INTEGER NOT NULL,
   tokens_in INTEGER, tokens_out INTEGER, tokens_cache_read INTEGER, tokens_cache_write INTEGER,
-  cost_total_usd REAL NOT NULL DEFAULT 0,              -- the session's running total as reported
+  model_costs TEXT NOT NULL DEFAULT '{}',              -- JSON: each model's running total for the session, as reported
   cost_usd REAL NOT NULL DEFAULT 0,                    -- this Turn's share
   acked_at INTEGER                                     -- a failed Turn's card was dismissed
 ) STRICT;
@@ -468,22 +469,30 @@ One Fleet named `studio`. The app is its only writer after setup.
 **Tokens.** The owner token (from `controller.json`) is used for exactly three things: creating and removing prefix
 tokens, writing agent computer specs (a spec that `uses` a Service outside the team's prefix is refused for a prefix
 token), and the one Fleet-wide event stream. Everything else (send, wake, sleep, stop, inbox, files, terminal, Turn
-history) uses the team's prefix token, created at team creation as `tokens.create("<team>", { prefix: "<team>-" })`,
-through a client made with `Fleet.connect({ url, token })`.
+history) uses the team's prefix token, created at team creation with `POST /v1/tokens` and the prefix `<team>-`;
+`forTeam(token)` binds a team's calls to it.
 
 **The a12s port.** The app talks to a12s only through `a12s/port.ts`, an interface with the dozen calls it needs
 (`ensureServices`, `createToken`, `removeToken`, `putAgent` and `events` on the owner token; `forTeam(token)` returns
 the rest on a prefix token: `removeAgent`, `send`, `wake`, `sleep`, `stop`, `status`, `inbox`, `withdraw`,
-`clearInbox`, `turns`, `turnEvents`, `readFile`, `writeFile`, `openTerminal`). `real.ts` implements it with the SDK
-(and plain HTTP for routes the SDK lacks); `fake.ts` implements it in memory for tests.
+`clearInbox`, `turns`, `turnEvents`, `readFile`, `writeFile`, `openTerminal`). `real.ts` implements it on a12s's HTTP
+API and takes only the wire types from the SDK: the SDK has no files or terminal, and its event streams retry
+without end when a12s is down or an agent is asleep, where the app must show that. `fake.ts` implements it in memory
+for tests.
 
-**External Services**, ensured at every app start with `fleet.replace()` on the owner token:
+`turnEvents`, `readFile`, `writeFile` and `openTerminal` need the agent awake; a12s refuses them with `asleep`
+otherwise. The rest, `turns` included, work on a sleeping agent.
+
+**External Services**, ensured at every app start with `PUT /v1/services/{s}` on the owner token (an unchanged spec
+is a no-op):
 
 ```yaml
 services:
   studio:
     external: { host: host.docker.internal }
-    manifest: { ports: { mcp: { port: 7410, mcp: { path: /mcp } } } }
+    manifest:
+      ports: { mcp: { port: 7410, mcp: { path: /mcp } } }
+      health: { http: { port: 7410, path: /healthz } }   # a12s refuses agent calls while it fails
   broker:
     external: { host: host.docker.internal }
     manifest: { ports: { http: { port: 7420 } } }
@@ -619,7 +628,10 @@ Nothing is drawn optimistically. Older messages and audit pages are plain `GET`s
 
 ### 7.2 From a12s events to the UI
 
-`live.ts` holds one Fleet-wide `events()` stream on the owner token and an in-memory record per agent.
+`live.ts` holds one Fleet-wide `events()` feed on the owner token and an in-memory record per agent. A feed is one
+connection and never reconnects. While `ready()` has resolved and the feed is being read, `a12s` is `"up"`. When
+`ready()` rejects or reading throws (`unreachable`), `a12s` is `"down"` and `live.ts` opens a new feed one second
+later; every feed that becomes ready is followed by a resync.
 
 | a12s event | Effect |
 |---|---|
@@ -629,7 +641,7 @@ Nothing is drawn optimistically. Older messages and audit pages are plain `GET`s
 | `tool.started` (no `parent`) | Sets the line from the table below. Calls with a `parent` (a sub-agent's) are ignored for the line. |
 | `tool.finished` | Nothing for the line; the inspector's log shows it. |
 | `turn.finished` | Writes the `turns` row (section 7.4), applies section 5.5, clears the line and text, runs the dispatcher. |
-| `gap`, or reconnect | Resync: `status()` for phases; for each agent, recent Turns not yet in `turns`; for each `sent` message, its a12s state. |
+| `gap`, or a new feed | Resync: `status()` for phases; for each agent, recent Turns not yet in `turns`; for each `sent` message, its a12s state. |
 
 The same resync runs at app start, which is how state survives a restart.
 
@@ -646,7 +658,8 @@ The same resync runs at app start, which is how state survives a restart.
 | anything else | Using `<tool name>` |
 
 The inspector's Now tab replays the current or a past Turn's tool log from a12s through
-`GET /api/agents/:id/turns/:turn/events`; the app does not store tool events.
+`GET /api/agents/:id/turns/:turn/events`; the app does not store tool events. The route answers with what the Turn
+has journaled so far. For a sleeping agent it answers `asleep`, and the inspector offers Wake.
 
 ### 7.3 Needs You
 
@@ -664,9 +677,13 @@ Derived on every state build, never stored:
 
 ### 7.4 Cost of a Turn
 
-`cost_total_usd` = the sum of `usage.modelUsage[*].costUSD` on `turn.finished` (the session's running total, sub-agents
-included). `cost_usd` = that total minus the previous Turn's total for the same agent when both have the same
-`session` and the new total is not smaller; otherwise the new total itself. M5 confirms or corrects this rule; it
+a12s reports cost on `turn.finished` as `usage.modelUsage[<model>].costUSD`: what each model has cost so far in the
+Turn's session, sub-agents and `/compact` Turns included. The port passes these running totals on as `modelCostsUsd`,
+and the `turns` row keeps them as JSON in `model_costs`.
+
+`cost_usd` = the sum, over the models the Turn reports, of the model's total minus the same model's total in the
+agent's previous Turn. A model counts in full when the previous Turn has another `session`, does not list the model,
+or lists a larger total. A Turn that ended before the harness started has no session and costs nothing. The rule
 lives in one function with table tests.
 
 ### 7.5 Owner API
@@ -972,6 +989,8 @@ from the README alone.
     write → refused.
 - **Pure functions get table tests:** path patterns, the cost rule, the "doing now" line, state derivation, slug
   rules, the web `logic/` folder.
+- **`real.ts` against real a12s:** `node packages/app/scripts/a12s-smoke.ts <fleet>` runs every port call once against a
+  running Fleet (one haiku agent, removed at the end). Manual, never in CI.
 - **End-to-end against real a12s is manual, never in CI.** `npm run e2e` needs Docker, a12s and the Claude login,
   creates a Fleet named `studio-e2e` under a temp `STUDIO_HOME`, uses model `haiku` for every agent, runs each
   phase's exit script, and removes the Fleet. It is run before each phase is shown.

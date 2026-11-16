@@ -32,7 +32,7 @@ test("the event feed delivers scripted Turns in order", async () => {
   await feed.ready();
   const turn = a12s.startTurn("web-lead");
   a12s.emit({ type: "text.delta", agent: "web-lead", at: 0, turn, text: "done" });
-  a12s.finishTurn("web-lead", { costTotalUsd: 0.5 });
+  a12s.finishTurn("web-lead", { modelCostsUsd: { sonnet: 0.5 } });
   feed.close();
 
   const seen: A12sEvent[] = [];
@@ -44,5 +44,18 @@ test("the event feed delivers scripted Turns in order", async () => {
   assert.deepEqual(seen[1]?.type === "turn.started" && seen[1].messageIds, [sent.id]);
   const [record] = await web.turns("web-lead", 1);
   assert.equal(record?.text, "done");
-  assert.equal(record?.costTotalUsd, 0.5);
+  assert.deepEqual(record?.modelCostsUsd, { sonnet: 0.5 });
+});
+
+test("a sleeping agent keeps its Turn history but refuses its Turn events and files", async () => {
+  const a12s = fakeA12s();
+  await a12s.putAgent("web-lead", spec, "create");
+  const web = a12s.forTeam(await a12s.createToken("web"));
+  const turn = a12s.startTurn("web-lead");
+  a12s.finishTurn("web-lead");
+  await web.sleep("web-lead");
+
+  assert.equal((await web.turns("web-lead", 5)).length, 1);
+  await assert.rejects(web.readFile("web-lead", "/home/agent"), { code: "asleep" });
+  await assert.rejects(Array.fromAsync(web.turnEvents("web-lead", turn)), { code: "asleep" });
 });
