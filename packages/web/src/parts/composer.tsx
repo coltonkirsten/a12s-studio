@@ -13,6 +13,7 @@ type Props = {
   placeholder: string;
   /** The open question for you in this thread, which a message answers unless you set it aside. */
   question: MessageView | null;
+  /** `to` is the slug of the agent addressed with @, as the owner API takes it. */
   send: (body: string, to: string | undefined, ask: MessageView | null) => Promise<WriteResult>;
   sent?: (result: WriteResult) => void;
 };
@@ -60,7 +61,7 @@ export function Composer({ team, placeholder, question, send, sent }: Props) {
     const body = text.trim();
     if (!body || action.pending) return;
     action.run(
-      () => send(body, to?.id, ask),
+      () => send(body, to?.slug, ask),
       (result) => {
         setText("");
         setCaret(0);
@@ -74,9 +75,10 @@ export function Composer({ team, placeholder, question, send, sent }: Props) {
       {menu && (
         <ul className="mention-menu">
           {choices.map((agent, i) => (
-            <li key={agent.id} className={i === pick % choices.length ? "active" : undefined}>
+            <li key={agent.id}>
               <button
                 type="button"
+                className={i === pick % choices.length ? "mention-choice active" : "mention-choice"}
                 onMouseDown={(event) => {
                   event.preventDefault();
                   choose(agent.slug);

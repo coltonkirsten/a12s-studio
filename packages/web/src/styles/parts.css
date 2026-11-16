@@ -64,9 +64,9 @@
   position: relative;
   width: 30px;
   height: 18px;
-  border-radius: 9px;
+  border-radius: var(--radius-bubble);
   background: var(--fill-2);
-  transition: background 160ms var(--ease);
+  transition: background var(--move);
   flex: none;
 }
 
@@ -77,9 +77,9 @@
   width: 14px;
   height: 14px;
   border-radius: 50%;
-  background: white;
+  background: var(--on-accent);
   box-shadow: 0 1px 2px rgb(0 0 0 / 0.25);
-  transition: transform 160ms var(--ease);
+  transition: transform var(--move);
 }
 
 .switch[aria-checked="true"] .switch-track {
@@ -102,7 +102,7 @@
   gap: 10px;
   width: 100%;
   padding: 6px 10px;
-  border-radius: 8px;
+  border-radius: var(--radius-m);
 }
 
 .agent-row:hover {
@@ -126,16 +126,13 @@
 .lead-tag {
   margin-left: 6px;
   color: var(--text-3);
-  font-size: 11px;
+  font-size: var(--size-caption);
   font-weight: 400;
 }
 
 .agent-doing {
   color: var(--text-2);
-  font-size: 12px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  font-size: var(--size-small);
 }
 
 .doing-working {
@@ -148,7 +145,7 @@
 
 .agent-more {
   padding: 2px 10px 10px 28px;
-  animation: drop 160ms var(--ease);
+  animation: drop var(--move);
 }
 
 .agent-role {
@@ -158,7 +155,7 @@
 
 .agent-model {
   color: var(--text-3);
-  font-size: 12px;
+  font-size: var(--size-small);
   margin: 2px 0 8px;
 }
 
@@ -189,7 +186,7 @@
   align-items: flex-start;
   gap: 3px;
   padding: 10px 12px 11px;
-  border-radius: 10px;
+  border-radius: var(--radius-l);
   margin-bottom: 2px;
 }
 
@@ -198,7 +195,7 @@
 }
 
 .thread-row.selected {
-  background: var(--accent-soft);
+  background: var(--fill-2);
 }
 
 .thread-top {
@@ -210,16 +207,11 @@
 
 .thread-title {
   flex: 1;
-  min-width: 0;
   font-weight: 600;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
 .thread-top time {
-  color: var(--text-2);
-  font-size: 12px;
+  font-size: var(--size-small);
   flex: none;
 }
 
@@ -235,8 +227,8 @@
 .chip {
   display: inline-block;
   padding: 1px 7px;
-  border-radius: 6px;
-  font-size: 11px;
+  border-radius: var(--radius-s);
+  font-size: var(--size-caption);
   font-weight: 500;
   color: var(--text-3);
   background: var(--fill);
@@ -255,12 +247,12 @@
 
 .msg {
   max-width: 680px;
-  font-size: 14px;
+  font-size: var(--size-reading);
   line-height: 1.5;
 }
 
-.msg .body,
-.msg .bubble {
+.body,
+.bubble {
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
@@ -270,13 +262,11 @@
   align-items: center;
   gap: 8px;
   margin-bottom: 2px;
-  font-size: 13px;
+  font-size: var(--size-body);
 }
 
-.msg header time,
-.msg.mine time {
-  color: var(--text-3);
-  font-size: 11px;
+.msg time {
+  font-size: var(--size-caption);
 }
 
 .msg.mine {
@@ -290,7 +280,7 @@
 
 .bubble {
   padding: 8px 13px;
-  border-radius: 16px;
+  border-radius: var(--radius-bubble);
   background: var(--accent-soft);
 }
 
@@ -300,7 +290,7 @@
 
 .msg.asks-you {
   padding: 12px 14px;
-  border-radius: 12px;
+  border-radius: var(--radius-l);
   background: var(--accent-soft);
 }
 
@@ -312,7 +302,7 @@
 .msg.system {
   align-self: center;
   color: var(--text-2);
-  font-size: 12px;
+  font-size: var(--size-small);
 }
 
 .msg.live .doing {
@@ -346,7 +336,7 @@
   gap: 4px;
   margin-top: 6px;
   color: var(--text-2);
-  font-size: 12px;
+  font-size: var(--size-small);
 }
 
 .talk-line {
@@ -355,9 +345,9 @@
   gap: 6px;
   padding: 3px 8px 3px 4px;
   margin-left: -4px;
-  border-radius: 6px;
+  border-radius: var(--radius-s);
   color: var(--text-2);
-  font-size: 12.5px;
+  font-size: var(--size-small);
 }
 
 .talk-line:hover {
@@ -366,7 +356,7 @@
 }
 
 .talk-line .icon {
-  transition: transform 160ms var(--ease);
+  transition: transform var(--move);
 }
 
 .talk.open .talk-line .icon {
@@ -380,11 +370,11 @@
   margin: 8px 0 0 14px;
   padding-left: 12px;
   box-shadow: inset 2px 0 0 var(--fill-2);
-  animation: drop 160ms var(--ease);
+  animation: drop var(--move);
 }
 
 .talk-message {
-  font-size: 13px;
+  font-size: var(--size-body);
   color: var(--text-2);
   max-width: 640px;
 }
@@ -392,20 +382,12 @@
 .talk-message header {
   display: flex;
   gap: 6px;
-  font-size: 12px;
+  font-size: var(--size-small);
 }
 
 .talk-message header b {
   color: var(--text);
   font-weight: 600;
-}
-
-.talk-message time {
-  color: var(--text-3);
-}
-
-.talk-message .body {
-  white-space: pre-wrap;
 }
 
 /* Composer */
@@ -421,7 +403,7 @@
   gap: 4px;
   padding: 0 4px 6px;
   color: var(--text-2);
-  font-size: 12px;
+  font-size: var(--size-small);
 }
 
 .composer-field {
@@ -429,9 +411,9 @@
   align-items: flex-end;
   gap: 8px;
   padding: 6px 6px 6px 14px;
-  border-radius: 18px;
+  border-radius: var(--radius-bubble);
   background: var(--fill);
-  transition: background 120ms;
+  transition: background var(--quick);
 }
 
 .composer-field:focus-within {
@@ -447,7 +429,7 @@
   resize: none;
   field-sizing: content;
   background: none;
-  font-size: 14px;
+  font-size: var(--size-reading);
   line-height: 1.45;
 }
 
@@ -462,13 +444,10 @@
   height: 28px;
   border-radius: 50%;
   background: var(--accent);
-  color: white;
+  color: var(--on-accent);
   flex: none;
-  transition: opacity 120ms;
-}
-
-.send .icon {
-  stroke-width: 2.2;
+  transition: opacity var(--quick);
+  --stroke: 2.2;
 }
 
 .send:disabled {
@@ -483,28 +462,19 @@
   margin: 0;
   padding: 5px;
   list-style: none;
-  border-radius: 12px;
+  border-radius: var(--radius-l);
   background: var(--raised);
   box-shadow: var(--shadow);
-  animation: drop 120ms var(--ease);
+  animation: drop var(--move);
 }
 
-.mention-menu button {
+.mention-choice {
   display: flex;
   align-items: center;
   gap: 8px;
   width: 100%;
   padding: 6px 8px;
-  border-radius: 7px;
-}
-
-.mention-menu .active button {
-  background: var(--accent);
-  color: white;
-}
-
-.mention-menu .active .mention-role {
-  color: rgb(255 255 255 / 0.8);
+  border-radius: var(--radius-s);
 }
 
 .mention-name {
@@ -513,12 +483,18 @@
 
 .mention-role {
   flex: 1;
-  min-width: 0;
   color: var(--text-2);
-  font-size: 12px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  font-size: var(--size-small);
+}
+
+.mention-choice.active {
+  background: var(--accent);
+  color: var(--on-accent);
+}
+
+.mention-choice.active .mention-role {
+  color: inherit;
+  opacity: 0.8;
 }
 
 /* Menu */
@@ -536,22 +512,22 @@
   z-index: 11;
   min-width: 180px;
   padding: 5px;
-  border-radius: 10px;
+  border-radius: var(--radius-l);
   background: var(--raised);
   box-shadow: var(--shadow);
-  animation: drop 120ms var(--ease);
+  animation: drop var(--move);
 }
 
 .menu-items button {
   display: block;
   width: 100%;
   padding: 6px 10px;
-  border-radius: 6px;
+  border-radius: var(--radius-s);
 }
 
 .menu-items button:hover {
   background: var(--accent);
-  color: white;
+  color: var(--on-accent);
 }
 
 .menu-items .danger {
@@ -562,17 +538,16 @@
 
 .cards {
   list-style: none;
-  margin: 0;
+  margin-block: 0;
   padding: 0;
   display: flex;
   flex-direction: column;
   gap: 14px;
-  max-width: 680px;
 }
 
 .card {
   padding: 16px 18px;
-  border-radius: 14px;
+  border-radius: var(--radius-l);
   background: var(--fill);
 }
 
@@ -580,7 +555,7 @@
   display: flex;
   align-items: center;
   gap: 8px;
-  font-size: 12px;
+  font-size: var(--size-small);
   color: var(--text-2);
 }
 
@@ -596,7 +571,7 @@
   content: "";
   width: 7px;
   height: 7px;
-  border-radius: 2px;
+  border-radius: var(--radius-xs);
   background: var(--accent);
 }
 
@@ -607,12 +582,11 @@
 
 .card-head time {
   margin-left: auto;
-  color: var(--text-3);
 }
 
 .card-what {
   margin-top: 6px;
-  font-size: 14px;
+  font-size: var(--size-reading);
   line-height: 1.5;
 }
 
@@ -620,7 +594,7 @@
   margin: 6px 0 0;
   padding: 0;
   list-style: none;
-  font: 12px var(--mono);
+  font: var(--size-small) var(--mono);
   color: var(--text-2);
 }
 
@@ -643,10 +617,12 @@
   margin-top: 12px;
   padding: 8px 12px;
   border: 0;
-  border-radius: 10px;
+  border-radius: var(--radius-l);
   background: var(--bg);
-  resize: vertical;
-  font-size: 14px;
+  resize: none;
+  field-sizing: content;
+  min-height: 3lh;
+  font-size: var(--size-reading);
   outline: 0;
 }
 
@@ -662,7 +638,7 @@
   height: 28px;
   padding: 0 8px;
   border: 0;
-  border-radius: 7px;
+  border-radius: var(--radius-s);
   background: var(--bg);
 }
 
@@ -692,15 +668,15 @@
   max-height: 80vh;
   overflow-y: auto;
   padding: 22px 24px 20px;
-  border-radius: 14px;
+  border-radius: var(--radius-l);
   background: var(--raised);
   box-shadow: var(--shadow);
   animation: rise 220ms var(--ease);
 }
 
 .sheet h2 {
-  font-size: 17px;
-  font-weight: 650;
+  font-size: var(--size-title);
+  font-weight: 600;
   margin-bottom: 16px;
 }
 
@@ -738,7 +714,7 @@
   display: block;
   margin-bottom: 5px;
   color: var(--text-2);
-  font-size: 12px;
+  font-size: var(--size-small);
   font-weight: 500;
 }
 
@@ -748,11 +724,16 @@
   width: 100%;
   padding: 7px 10px;
   border: 0;
-  border-radius: 8px;
+  border-radius: var(--radius-m);
   background: var(--fill);
   outline: 0;
-  resize: vertical;
+  resize: none;
+  field-sizing: content;
   line-height: 1.45;
+}
+
+.field textarea {
+  min-height: 4lh;
 }
 
 .field input:focus,
@@ -762,14 +743,14 @@
 
 .field .mono {
   font-family: var(--mono);
-  font-size: 12px;
+  font-size: var(--size-small);
 }
 
 .field-hint,
 .field-problem {
   display: block;
   margin-top: 4px;
-  font-size: 12px;
+  font-size: var(--size-small);
   color: var(--text-3);
 }
 
@@ -787,7 +768,7 @@
   width: 22px;
   height: 22px;
   border-radius: 50%;
-  transition: transform 120ms var(--ease);
+  transition: transform var(--quick);
 }
 
 .swatch[aria-pressed="true"] {
@@ -811,13 +792,13 @@
   flex-direction: column;
   gap: 2px;
   padding: 10px 12px;
-  border-radius: 10px;
+  border-radius: var(--radius-l);
   background: var(--fill);
 }
 
 .template span {
   color: var(--text-2);
-  font-size: 12px;
+  font-size: var(--size-small);
 }
 
 .template[aria-pressed="true"] {
@@ -828,13 +809,13 @@
 .segmented {
   display: inline-flex;
   padding: 2px;
-  border-radius: 8px;
+  border-radius: var(--radius-m);
   background: var(--fill);
 }
 
 .segmented button {
   padding: 4px 16px;
-  border-radius: 6px;
+  border-radius: var(--radius-s);
   color: var(--text-2);
 }
 

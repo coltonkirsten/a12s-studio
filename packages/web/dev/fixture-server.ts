@@ -259,14 +259,15 @@ function write(b: Record<string, unknown>, path: string, method: string): string
   if (method === "PATCH" && kind === "threads") Object.assign(threads.find((t) => t.id === id) ?? {}, b);
   if (method === "POST" && kind === "threads" && sub === "messages") {
     const t = threads.find((x) => x.id === id);
-    const m = msg(b.ask ? "reply" : "ask", "owner", String(b.to ?? t?.ownerId), String(b.body), 0);
+    const to = b.to === undefined ? t?.ownerId : `${t?.teamId}-${b.to}`;
+    const m = msg(b.ask ? "reply" : "ask", "owner", String(to), String(b.body), 0);
     t?.messages.push({ ...m, at: Date.now(), ask: (b.ask as MessageId | undefined) ?? null });
     const answered = needsYou.findIndex((i) => i.kind === "question" && i.message.id === b.ask);
     if (answered >= 0) needsYou.splice(answered, 1);
   }
   if (method === "POST" && kind === "teams" && sub === "threads") {
     const newId: ThreadId = `th_fixture${++seq}`;
-    const first = { ...msg("ask", "owner", String(b.to ?? `${id}-lead`), String(b.body), 0), at: Date.now() };
+    const first = { ...msg("ask", "owner", `${id}-${b.to ?? "lead"}`, String(b.body), 0), at: Date.now() };
     threads.push(thread(newId, String(id), String(b.body).slice(0, 48), "open", [first]));
     return newId;
   }

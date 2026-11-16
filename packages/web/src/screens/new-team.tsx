@@ -3,7 +3,7 @@ import { RESERVED_TEAM_SLUGS, TEAM_SLUG } from "@a12s-studio/contract/names";
 import type { StudioState } from "@a12s-studio/contract/state";
 import { useEffect, useState } from "react";
 import { api, useAction } from "../api.ts";
-import { teamSlug } from "../logic/names.ts";
+import { teamSlug, title } from "../logic/names.ts";
 import { href } from "../logic/route.ts";
 import { Problem } from "../parts/problem.tsx";
 import { Sheet } from "../parts/sheet.tsx";
@@ -19,11 +19,6 @@ const ACCENTS = [
   "#30b0c7",
   "#8e8e93",
 ] as const;
-
-function templateName(id: string): string {
-  const words = id.replaceAll("-", " ");
-  return words.charAt(0).toUpperCase() + words.slice(1);
-}
 
 export function NewTeamSheet({ state, onClose }: { state: StudioState; onClose: () => void }) {
   const [name, setName] = useState("");
@@ -123,7 +118,7 @@ export function NewTeamSheet({ state, onClose }: { state: StudioState; onClose: 
                 if (!purpose.trim()) setPurpose(t.purpose);
               }}
             >
-              <b>{templateName(t.id)}</b>
+              <b>{title(t.id)}</b>
               <span>{t.agents.join(", ")}</span>
             </button>
           ))}

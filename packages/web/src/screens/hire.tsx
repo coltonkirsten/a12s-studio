@@ -2,7 +2,7 @@ import { AGENT_SLUG } from "@a12s-studio/contract/names";
 import type { Settings, TeamView } from "@a12s-studio/contract/state";
 import { useState } from "react";
 import { api, useAction } from "../api.ts";
-import { agentSlug } from "../logic/names.ts";
+import { agentSlug, title } from "../logic/names.ts";
 import { Problem } from "../parts/problem.tsx";
 import { Sheet } from "../parts/sheet.tsx";
 
@@ -47,7 +47,7 @@ export function HireSheet({ team, settings, onClose }: { team: TeamView; setting
         <fieldset className="segmented" aria-label="Model">
           {MODELS.map((m) => (
             <button key={m} type="button" aria-pressed={m === model} onClick={() => setModel(m)}>
-              {m.charAt(0).toUpperCase() + m.slice(1)}
+              {title(m)}
             </button>
           ))}
         </fieldset>

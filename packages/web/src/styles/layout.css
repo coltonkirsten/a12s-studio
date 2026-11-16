@@ -36,7 +36,7 @@
   width: 100%;
   min-height: 30px;
   padding: 5px 10px;
-  border-radius: 8px;
+  border-radius: var(--radius-m);
   color: var(--text);
 }
 
@@ -54,11 +54,7 @@
 
 .side-name {
   flex: 1;
-  min-width: 0;
   font-weight: 500;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
 .side-row > .icon {
@@ -68,10 +64,10 @@
 .count {
   min-width: 20px;
   padding: 1px 6px;
-  border-radius: 10px;
+  border-radius: var(--radius-l);
   background: var(--accent);
-  color: white;
-  font-size: 11px;
+  color: var(--on-accent);
+  font-size: var(--size-caption);
   font-weight: 600;
   text-align: center;
 }
@@ -94,14 +90,14 @@
   content: "";
   width: 8px;
   height: 8px;
-  border-radius: 3px;
+  border-radius: var(--radius-xs);
   background: var(--accent);
   flex: none;
 }
 
 .paused-tag {
   color: var(--text-2);
-  font-size: 11px;
+  font-size: var(--size-caption);
 }
 
 .team-dots {
@@ -114,7 +110,7 @@
   display: block;
   height: 3px;
   margin-left: 16px;
-  border-radius: 2px;
+  border-radius: var(--radius-xs);
   background: var(--fill-2);
   overflow: hidden;
 }
@@ -122,7 +118,7 @@
 .usage > span {
   display: block;
   height: 100%;
-  border-radius: 2px;
+  border-radius: var(--radius-xs);
   background: var(--accent);
   opacity: 0.7;
 }
@@ -133,7 +129,7 @@
   justify-content: space-between;
   padding: 18px 10px 6px;
   color: var(--text-2);
-  font-size: 11px;
+  font-size: var(--size-caption);
   font-weight: 600;
   letter-spacing: 0.02em;
 }
@@ -144,7 +140,7 @@
 
 .status-line {
   color: var(--text-2);
-  font-size: 12px;
+  font-size: var(--size-small);
   margin-bottom: 8px;
 }
 
@@ -160,12 +156,12 @@
 
 .page > * {
   width: 100%;
-  max-width: 720px;
+  max-width: 680px;
   margin-inline: auto;
 }
 
 .page-head h1 {
-  font-size: 26px;
+  font-size: var(--size-large);
   font-weight: 700;
   letter-spacing: -0.01em;
   margin-bottom: 24px;
@@ -184,7 +180,6 @@
   min-height: 0;
   overflow-y: auto;
   padding: 22px 10px 24px;
-  background: var(--bg-list);
   box-shadow: inset -1px 0 0 var(--hairline);
 }
 
@@ -200,7 +195,7 @@
 }
 
 .team-title h1 {
-  font-size: 22px;
+  font-size: var(--size-large);
   font-weight: 700;
   letter-spacing: -0.01em;
 }
@@ -240,11 +235,8 @@
 }
 
 .conversation-title h2 {
-  font-size: 17px;
-  font-weight: 650;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  font-size: var(--size-title);
+  font-weight: 600;
 }
 
 .conversation-sub {
@@ -253,7 +245,7 @@
   gap: 8px;
   margin-top: 3px;
   color: var(--text-2);
-  font-size: 12px;
+  font-size: var(--size-small);
 }
 
 .messages {
@@ -273,7 +265,7 @@
 
 .first-line {
   color: var(--text-3);
-  font-size: 20px;
+  font-size: var(--size-large);
   font-weight: 500;
   letter-spacing: -0.01em;
 }
@@ -283,7 +275,7 @@
   align-items: center;
   gap: 2px;
   color: var(--accent-text);
-  font-size: 15px;
+  font-size: var(--size-title);
   margin: 0 0 8px -6px;
 }
 
@@ -294,27 +286,6 @@
     display: block;
     height: auto;
     min-height: 100%;
-  }
-
-  .app[data-depth="1"] .sidebar,
-  .app[data-depth="2"] .sidebar,
-  .app[data-depth="2"] .list-column,
-  .app[data-depth="1"] .conversation-column {
-    display: none;
-  }
-
-  .app[data-depth="0"] .sidebar {
-    background: none;
-    backdrop-filter: none;
-    box-shadow: none;
-  }
-
-  .app[data-depth="0"] .sidebar-foot {
-    padding: 0 24px 8px;
-  }
-
-  .app[data-depth="0"] .page {
-    padding-top: 8px;
   }
 
   .team {
@@ -355,5 +326,26 @@
 
   .sidebar-scroll {
     padding-top: 28px;
+  }
+
+  .app[data-depth="1"] .sidebar,
+  .app[data-depth="2"] .sidebar,
+  .app[data-depth="2"] .list-column,
+  .app[data-depth="1"] .conversation-column {
+    display: none;
+  }
+
+  .app[data-depth="0"] .sidebar {
+    background: none;
+    backdrop-filter: none;
+    box-shadow: none;
+  }
+
+  .app[data-depth="0"] .sidebar-foot {
+    padding: 0 24px 8px;
+  }
+
+  .app[data-depth="0"] .page {
+    padding-top: 8px;
   }
 }

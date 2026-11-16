@@ -95,7 +95,7 @@ export function TeamScreen({ state, team, route, onHire }: Props) {
                   <time>{shortTime(t.updatedAt, now)}</time>
                 </span>
                 <span className="thread-preview">{t.preview}</span>
-                <StatusChip status={t.status} />
+                {t.status !== "open" && <StatusChip status={t.status} />}
               </a>
             </li>
           ))}
