@@ -1,0 +1,8 @@
+{
+  "name": "@a12s-studio/broker",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "typecheck": "tsc"
+  }
+}

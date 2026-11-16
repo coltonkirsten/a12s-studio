@@ -16,7 +16,7 @@ ask how it would be built from scratch for the shape wanted now, and whether it 
 | a12s owner API is on host loopback; port and owner token are in `~/.a12s/studio/controller.json` | Reads the file, connects to 127.0.0.1. | Needs the file mounted and a route back to host loopback. |
 | Vault key in the macOS Keychain | The broker calls `/usr/bin/security` itself; the key is only ever in the broker's memory. | A container cannot read the Keychain. A launcher would have to pass the key in the environment, where `docker inspect` shows it. |
 | UI on loopback behind `tailscale serve`, with an identity header check | Requests arrive from 127.0.0.1; the check is simple. | Requests arrive from a Docker bridge address; "is this loopback" stops being checkable. |
-| Agents reach app and broker through the Controller's proxy | External Service URL `http://host.docker.internal:<port>`. | Would need a network shared with the Controller, which a12s owns. |
+| Agents reach app and broker through the Controller's proxy | External Service with `external: { host: host.docker.internal }`; the Controller dials the Service's port there. | Would need a network shared with the Controller, which a12s owns. |
 | Parts to build and keep | Two plist files. | Two images, a compose file, volume mounts, image rebuilds on every change. |
 
 The broker is still a separate process with its own SQLite file and its own package; containers add nothing to that
@@ -70,8 +70,8 @@ Throwaway code. Each has one decision hanging on it.
 
 | # | Measure | Decides |
 |---|---|---|
-| M1 | From the Controller's proxy, does `http://host.docker.internal:<port>` reach a host process bound to `127.0.0.1`? | If no: `agentBindHost` becomes the address Docker's host gateway maps to. Never `0.0.0.0`. |
-| M2 | The released external Service: exact Fleet syntax, the header name (assumed `A12s-Caller`), how an MCP port is declared, the tool prefix agents see (assumed `mcp__a12s-studio__post`), whether the `.a12s` port can be 80, whether a per-Service secret header exists, and whether a prefix token may create an agent computer whose `uses` names an external Service (assumed no). | The four constants in `packages/contract` (`CALLER_HEADER`, `STUDIO_URL`, `BROKER_URL`, tool prefix), and which token writes specs (section 6). |
+| M1 | From the Controller's proxy, does `http://host.docker.internal:<port>` reach a host process bound to `127.0.0.1`? | If no: `agentBindHost` becomes the address Docker's host gateway maps to. Never `0.0.0.0`. **Measured: yes** on Docker Desktop, so both agent listeners bind `127.0.0.1`. |
+| M2 | The released external Service: exact Fleet syntax, the header name (assumed `A12s-Caller`), how an MCP port is declared, the tool prefix agents see (assumed `mcp__a12s-studio__post`), whether the `.a12s` port can be 80, whether a per-Service secret header exists, and whether a prefix token may create an agent computer whose `uses` names an external Service (assumed no). | The four constants in `packages/contract` (`CALLER_HEADER`, `STUDIO_URL`, `BROKER_URL`, tool prefix), and which token writes specs (section 6). **Measured:** the syntax in section 6; the header is `A12s-Caller`, stamped on plain HTTP only, with any copy the agent sent removed; the port agents call on `<name>.a12s` is the port the Controller dials on the host; only the owner token may declare an external Service. |
 | M3 | `git clone` and `git push` of a real repository from an agent container through a 30-line forwarder that adds the token. Then check the container's environment and disk for the token. | Confirms section 9's forward design (streaming bodies, headers). |
 | M4 | A `SessionStart` hook given through `harness.settings` prints text: does it reach the model at session start and after `/compact` (both the compact-before-sleep one and an automatic one)? | The notes hook (section 6). If not: the hook becomes a line in the core instructions telling the agent to read its notes first. |
 | M5 | `turn.finished.usage.modelUsage[*].costUSD` across: two Turns in one session, a sleep and wake, a compaction, a `fresh` session, a Turn with a sub-agent. | The cost delta rule (section 7.4). |
@@ -96,7 +96,7 @@ packages/
     src/state.ts        StudioState and its parts (app <-> web)
     src/api.ts          owner API request/response types (app <-> web)
     src/broker-admin.ts admin API types (app <-> broker)
-    src/names.ts        slug rules, id helpers, the four M2 constants
+    src/names.ts        slug rules, id helpers, the two ports and the four M2 constants
   app/
     src/main.ts         wires everything; the only file that reads env and config
     src/db.ts           open, migrate, transaction helper
@@ -460,19 +460,25 @@ history) uses the team's prefix token, created at team creation as `tokens.creat
 through a client made with `Fleet.connect({ url, token })`.
 
 **The a12s port.** The app talks to a12s only through `a12s/port.ts`, an interface with the dozen calls it needs
-(`ensureServices`, `createToken`, `putAgent`, `removeAgent`, `send`, `wake`, `sleep`, `stop`, `status`, `inbox`,
-`withdraw`, `clearInbox`, `turns`, `readFile`, `writeFile`, `openTerminal`, `events`). `real.ts` implements it with
-the SDK (and plain HTTP for routes the SDK lacks); `fake.ts` implements it in memory for tests.
+(`ensureServices`, `createToken`, `removeToken`, `putAgent` and `events` on the owner token; `forTeam(token)` returns
+the rest on a prefix token: `removeAgent`, `send`, `wake`, `sleep`, `stop`, `status`, `inbox`, `withdraw`,
+`clearInbox`, `turns`, `turnEvents`, `readFile`, `writeFile`, `openTerminal`). `real.ts` implements it with the SDK
+(and plain HTTP for routes the SDK lacks); `fake.ts` implements it in memory for tests.
 
-**External Services**, ensured at every app start with `fleet.replace()` (syntax per M2):
+**External Services**, ensured at every app start with `fleet.replace()` on the owner token:
 
 ```yaml
 services:
-  studio: { external: { url: "http://host.docker.internal:7410" },
-            ports: { mcp: { port: 7410, protocol: http, mcp: { path: /mcp } } } }
-  broker: { external: { url: "http://host.docker.internal:7420" },
-            ports: { http: { port: 7420, protocol: http } } }
+  studio:
+    external: { host: host.docker.internal }
+    manifest: { ports: { mcp: { port: 7410, mcp: { path: /mcp } } } }
+  broker:
+    external: { host: host.docker.internal }
+    manifest: { ports: { http: { port: 7420 } } }
 ```
+
+A Service has one port number: agents call `http://studio.a12s:7410` and the Controller dials `7410` on the host. So
+`STUDIO_PORT` and `BROKER_PORT` in `contract/names.ts` set both the listeners and the agent-facing URLs.
 
 **Agent spec.** `a12s/spec.ts` exports one pure function, `agentSpec(team, agent, settings)`, that returns the whole
 spec. Fleet `defaults` are not used: the function is the single place a spec is decided. Hiring calls
