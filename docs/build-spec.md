@@ -440,9 +440,9 @@ Pause is app-side: the flag (`settings.paused` or `teams.paused`) is written, a 
 left to finish (it may have read the old flag, and would wake an agent after its sleep), then every awake agent in
 scope gets a plain `sleep()`, which ends its Turn. No a12s inbox hold and no held sleep are used. Messages already
 `sent` stay in the a12s inbox; nothing wakes the agent, so they wait. Each agent that was `Busy` when it was put to
-sleep is queued one system ask (`from_id = 'system'`, no thread): `You were paused mid-turn. Continue where you stopped.` The pause
-holds it like any other message. Queuing it at pause time, when the app knows who was mid-Turn, needs no record of
-when the pause began.
+sleep is queued one system ask (`from_id = 'system'`, no thread): `You were paused mid-turn. Continue where you
+stopped.` The pause holds it like any other message. Queuing it at pause time, when the app knows who was mid-Turn,
+needs no record of when the pause began.
 
 Resume clears the flag and runs the dispatcher. An asleep agent with pending a12s Messages is a candidate, so the
 agents put to sleep with work in their inbox are woken, and the queued messages follow in order.
