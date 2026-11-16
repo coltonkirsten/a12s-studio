@@ -1,0 +1,251 @@
+:root {
+  color-scheme: light dark;
+  --font: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", system-ui, sans-serif;
+  --mono: ui-monospace, "SF Mono", Menlo, monospace;
+
+  --bg: #ffffff;
+  --sidebar: rgb(236 236 240 / 0.78);
+  --raised: #ffffff;
+  --text: #1d1d1f;
+  --text-2: #6e6e73;
+  --text-3: #a1a1a6;
+  --fill: rgb(0 0 0 / 0.045);
+  --fill-2: rgb(0 0 0 / 0.08);
+  --hairline: rgb(0 0 0 / 0.07);
+  --shadow: 0 1px 2px rgb(0 0 0 / 0.06), 0 8px 28px rgb(0 0 0 / 0.1);
+  --red: #ff3b30;
+  --amber: #ff9f0a;
+  --green: #34c759;
+  --accent: #007aff;
+  --on-accent: #ffffff;
+
+  --size-caption: 11px;
+  --size-small: 12px;
+  --size-body: 13px;
+  --size-reading: 14px;
+  --size-title: 17px;
+  --size-large: 22px;
+
+  --radius-xs: 2px;
+  --radius-s: 6px;
+  --radius-m: 8px;
+  --radius-l: 12px;
+  --radius-bubble: 18px;
+
+  --ease: cubic-bezier(0.2, 0.8, 0.2, 1);
+  --quick: 120ms;
+  --move: 160ms var(--ease);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #1c1c1e;
+    --sidebar: rgb(44 44 48 / 0.72);
+    --raised: #2c2c2e;
+    --text: #f5f5f7;
+    --text-2: #98989d;
+    --text-3: #636366;
+    --fill: rgb(255 255 255 / 0.06);
+    --fill-2: rgb(255 255 255 / 0.11);
+    --hairline: rgb(255 255 255 / 0.07);
+    --shadow: 0 1px 2px rgb(0 0 0 / 0.3), 0 12px 36px rgb(0 0 0 / 0.45);
+    --red: #ff453a;
+    --amber: #ffd60a;
+    --green: #30d158;
+  }
+}
+
+/* Recomputed wherever a team sets its own accent, since a custom property is resolved where it is declared. */
+:root,
+[style*="--accent"] {
+  --accent-soft: color-mix(in srgb, var(--accent) 12%, transparent);
+  --accent-text: color-mix(in srgb, var(--accent) 82%, black);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root,
+  [style*="--accent"] {
+    --accent-soft: color-mix(in srgb, var(--accent) 16%, transparent);
+    --accent-text: color-mix(in srgb, var(--accent) 70%, white);
+  }
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  font: var(--size-body) / 1.4 var(--font);
+  color: var(--text);
+  background: var(--bg);
+  -webkit-font-smoothing: antialiased;
+  -webkit-tap-highlight-color: transparent;
+}
+
+h1,
+h2,
+p {
+  margin: 0;
+}
+
+a {
+  color: inherit;
+  text-decoration: none;
+}
+
+button,
+input,
+textarea {
+  font: inherit;
+  color: inherit;
+}
+
+button {
+  background: none;
+  border: 0;
+  padding: 0;
+  cursor: default;
+  text-align: inherit;
+}
+
+:focus-visible {
+  outline: 3px solid color-mix(in srgb, var(--accent) 45%, transparent);
+  outline-offset: 1px;
+  border-radius: var(--radius-s);
+}
+
+time {
+  color: var(--text-3);
+}
+
+/* One line, cut with an ellipsis. */
+.side-name,
+.conversation-title h2,
+.agent-doing,
+.thread-title,
+.mention-role {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.icon {
+  fill: none;
+  stroke: currentColor;
+  stroke-width: var(--stroke, 1.6);
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  flex: none;
+}
+
+/* In progress: the write has been sent and its state has not arrived yet. */
+.pending {
+  pointer-events: none;
+  animation: breathe 1.4s ease-in-out infinite alternate;
+}
+
+@keyframes breathe {
+  from {
+    opacity: 0.85;
+  }
+  to {
+    opacity: 0.4;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .pending {
+    animation: none;
+    opacity: 0.55;
+  }
+}
+
+.button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 28px;
+  padding: 0 12px;
+  border-radius: var(--radius-s);
+  background: var(--fill);
+  font-weight: 500;
+  white-space: nowrap;
+  transition: background var(--quick);
+}
+
+.button:hover {
+  background: var(--fill-2);
+}
+
+.button.primary {
+  background: var(--accent);
+  color: var(--on-accent);
+}
+
+.button.primary:hover {
+  background: color-mix(in srgb, var(--accent) 88%, black);
+}
+
+.button.quiet {
+  background: none;
+  color: var(--text-2);
+}
+
+.button.quiet:hover {
+  background: var(--fill);
+  color: var(--text);
+}
+
+.button.danger {
+  color: var(--red);
+}
+
+.button.danger-fill {
+  background: var(--red);
+  color: var(--on-accent);
+}
+
+.button:disabled {
+  opacity: 0.4;
+}
+
+.icon-button {
+  display: inline-grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  border-radius: var(--radius-s);
+  color: var(--text-2);
+}
+
+.icon-button:hover {
+  background: var(--fill);
+  color: var(--text);
+}
+
+.problem {
+  color: var(--red);
+  font-size: var(--size-small);
+  margin-top: 6px;
+}
+
+.empty {
+  margin: auto;
+  color: var(--text-3);
+  font-size: var(--size-title);
+}
+
+fieldset {
+  border: 0;
+  margin: 0;
+  padding: 0;
+  min-width: 0;
+}

@@ -5,9 +5,11 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build",
-    "typecheck": "tsc"
+    "typecheck": "tsc",
+    "fixture": "node dev/fixture-server.ts"
   },
   "dependencies": {
+    "@a12s-studio/contract": "*",
     "react": "19.3.1",
     "react-dom": "19.3.1"
   },
