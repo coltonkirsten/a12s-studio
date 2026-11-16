@@ -45,8 +45,9 @@ wall on a one-user Mac.
   which is any process running as the owner and any container that can dial `host.docker.internal`. That is inside
   the trust boundary stated in the design. Measurement M2 checks whether a12s can also send a per-Service secret; if
   it can, both listeners require it. A web page in the owner's browser is outside that boundary and can reach
-  loopback through a DNS name of its own, so the broker also requires the `Host` that a12s passes on
-  (`broker.a12s:7420`), which such a page cannot send.
+  loopback through a DNS name of its own, so both listeners also require the `Host` that a12s passes on
+  (`STUDIO_HOST` = `studio.a12s:7410`, `BROKER_HOST` = `broker.a12s:7420` in `contract/names.ts`), which such a
+  page cannot send.
 
 **Data folder** `~/.a12s-studio/` (0700), never in the repo:
 
@@ -61,11 +62,15 @@ fleet/fleet.yaml       written once by setup; names the Fleet, nothing else
 
 `STUDIO_HOME` overrides the folder (tests use a temp dir). Ports are constants in code, not settings.
 
-**Install** (`scripts/setup.sh`, idempotent): checks Docker, a12s and Node 24+; writes `fleet/fleet.yaml`
-(`metadata.name: studio`, no agent computers) and runs `a12s up` once to start the Controller; prompts for
-`a12s creds set anthropic`; writes `config.json`; installs two LaunchAgents (`launchd/*.plist` templates,
-`KeepAlive`, logs to `~/Library/Logs/a12s-studio/`); runs `tailscale serve --bg 7400`. After setup nothing runs
-`a12s up` again: it would remove every agent computer the app created. The live Fleet is the truth.
+**Install** (`scripts/setup.sh [--owner-login <login>]`, idempotent): checks Docker, a12s 0.11.0+ and Node 24+;
+when the Fleet `studio` has never been started, writes `fleet/fleet.yaml` (`metadata.name: studio`, no agent
+computers) and runs `a12s up` once to start the Controller; prints the `a12s creds set anthropic` command when the
+Controller has no `anthropic` credential; writes `config.json` (asking for the owner's Tailscale login unless given);
+builds the web app; installs the LaunchAgents `com.a12s-studio.app` and `com.a12s-studio.broker` from the
+`launchd/*.plist` templates (`KeepAlive`, logs to `~/Library/Logs/a12s-studio/`); and prints
+`tailscale serve --bg 7400` for the owner to run, since exposing the UI on the tailnet is the owner's call. After
+setup nothing runs `a12s up` again: it would remove every agent computer the app created. The live Fleet is the
+truth. `npm start` runs the broker and the app in the foreground instead.
 
 ## 2. Phase 0 measurements
 
@@ -284,8 +289,8 @@ type Caller = { agentId: string; teamId: string };
 function resolveCaller(headers): Caller   // throws Refused(403)
 ```
 
-It refuses when the header is missing, appears more than once, or is not the id of an agent with `removed_at IS NULL`
-whose team has `deleted_at IS NULL`. `teamId` comes from the agents row. Every agent-listener request goes through it
+It refuses when the `Host` is not exactly `STUDIO_HOST`, or the header is missing, appears more than once, or is not
+the id of an agent with `removed_at IS NULL` whose team has `deleted_at IS NULL`. `teamId` comes from the agents row. Every agent-listener request goes through it
 before anything else runs. Tool inputs never carry a team, and a "from" is never accepted.
 
 ### 5.2 The six tools
@@ -620,7 +625,7 @@ type AgentView = { id, slug, roleLine, model,
                    waitingFor?: "cap" | "budget" | "paused" | "disk",
                    line: string | null,                              // what it is doing now
                    turn: { id, threadId, startedAt, text } | null,   // text: last 4000 chars so far
-                   queued: number, error?: string };
+                   queued: number, error?: string };                 // queued: messages it has not received yet
 type ThreadSummary = { id, title, ownerId, status: "open" | "needs_you" | "done", updatedAt, preview, asksForYou };
 type ThreadView = { id, teamId, title, ownerId, status, messages: MessageView[], hasMore };  // newest 200
 ```
@@ -639,7 +644,7 @@ later; every feed that becomes ready is followed by a resync.
 
 | a12s event | Effect |
 |---|---|
-| `agent_computer.phase` | Presence: `Asleep` → asleep; `Busy` → working; `Error` → error (with its message); any other → awake. An agent with queued work the dispatcher skipped shows waiting. Runs the dispatcher. |
+| `agent_computer.phase` | Presence: `Asleep` → asleep; `Busy` → working; `Error` → error (with its message); any other → awake. An agent with a queued ask or reply that `blockedReason` holds shows waiting. Recorded for any agent computer name, because a new agent reports its phases before its row is committed. Runs the dispatcher. |
 | `turn.started` | Marks each Studio message whose `a12s_message_id` is in `inbox.messages` as `delivered`. Sets the Turn's thread to that of the first one. Line: "Thinking". Clears text. |
 | `text.delta` | Appends to the Turn's text and emits `live`. If no tool is running, line: "Writing". |
 | `tool.started` (no `parent`) | Sets the line from the table below. Calls with a `parent` (a sub-agent's) are ignored for the line. |
@@ -657,7 +662,7 @@ The same resync runs at app start, which is how state survives a restart.
 | `Grep`, `Glob` | Searching |
 | `WebFetch`, `WebSearch` | Browsing `<host or query>` |
 | `Agent`, `Task` | Working with a sub-agent |
-| studio `post` | Writing to `<receiver>` |
+| studio `post` | Writing to `<receiver>` (a reply: Writing a reply) |
 | other studio tools | Checking the board / the roster / access / its schedule |
 | anything else | Using `<tool name>` |
 

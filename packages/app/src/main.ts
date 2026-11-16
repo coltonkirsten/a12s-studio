@@ -1,9 +1,11 @@
 import { mkdirSync, readFileSync } from "node:fs";
+import type { Server } from "node:http";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { STUDIO_PORT } from "@a12s-studio/contract/names";
-import { fakeA12s } from "./a12s/fake.ts";
+import { BROKER_PORT, OWNER_PORT, STUDIO_PORT } from "@a12s-studio/contract/names";
+import type { ExternalService } from "./a12s/port.ts";
+import { type Controller, readController, realA12s } from "./a12s/real.ts";
 import { createApp } from "./app.ts";
 import { openDb } from "./db.ts";
 
@@ -32,15 +34,70 @@ function loadConfig(file: string): Config {
 
 const home = process.env.STUDIO_HOME ?? join(homedir(), ".a12s-studio");
 const config = loadConfig(join(home, "config.json"));
+let controller: Controller;
+try {
+  controller = readController(config.fleet);
+} catch (error) {
+  fail(error instanceof Error ? error.message : String(error), "Run scripts/setup.sh, which starts the Fleet once.");
+}
 mkdirSync(join(home, "app"), { recursive: true, mode: 0o700 });
 const dbFile = join(home, "app", "studio.db");
+const db = openDb(dbFile);
+const a12s = realA12s(controller);
 const app = createApp({
-  db: openDb(dbFile),
-  a12s: fakeA12s(),
+  db,
+  a12s,
   templatesDir: fileURLToPath(new URL("../../../teams", import.meta.url)),
+  webDir: fileURLToPath(new URL("../../web/dist", import.meta.url)),
+  ownerLogin: config.ownerLogin,
 });
-app.agentServer.listen(STUDIO_PORT, "127.0.0.1", () => {
-  console.log(`a12s Studio: Fleet ${config.fleet}, database ${dbFile}, agent API on 127.0.0.1:${STUDIO_PORT}`);
-  // Delivers whatever was committed but not yet sent when the app last stopped.
-  void app.dispatcher.run();
-});
+
+const listen = (server: Server, port: number) =>
+  new Promise<void>((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(port, "127.0.0.1", resolve);
+  });
+try {
+  await listen(app.agentServer, STUDIO_PORT);
+  await listen(app.ownerServer, OWNER_PORT);
+} catch (error) {
+  fail(String(error), "Another copy of Studio may be running; stop it first.");
+}
+console.log(`a12s Studio: Fleet ${config.fleet}, database ${dbFile}`);
+console.log(`a12s Studio: owner UI on http://127.0.0.1:${OWNER_PORT}, agent API on 127.0.0.1:${STUDIO_PORT}`);
+
+// Agents reach both listeners through these Services. a12s may still be starting (Docker after a reboot), so this
+// retries until it answers; the UI is up meanwhile and shows a12s as down.
+const services: ExternalService[] = [
+  { name: "studio", host: "host.docker.internal", port: STUDIO_PORT, mcpPath: "/mcp", healthPath: "/healthz" },
+  { name: "broker", host: "host.docker.internal", port: BROKER_PORT },
+];
+void (async () => {
+  for (;;) {
+    try {
+      return await a12s.ensureServices(services);
+    } catch (error) {
+      console.error("a12s Studio: cannot set the studio and broker Services yet:", String(error));
+      await new Promise((resolve) => setTimeout(resolve, 5000));
+    }
+  }
+})();
+
+// Its first resync stores what happened while the app was stopped and runs the dispatcher, which delivers whatever
+// was committed but not yet sent.
+app.live.start();
+
+let stopping = false;
+async function shutdown(signal: string): Promise<void> {
+  if (stopping) return;
+  stopping = true;
+  console.log(`a12s Studio: ${signal}, stopping.`);
+  app.stream.close();
+  await app.live.stop();
+  for (const server of [app.ownerServer, app.agentServer]) server.closeAllConnections();
+  await Promise.all([app.ownerServer, app.agentServer].map((s) => new Promise((r) => s.close(r))));
+  db.close();
+  process.exit(0);
+}
+process.on("SIGTERM", () => void shutdown("SIGTERM"));
+process.on("SIGINT", () => void shutdown("SIGINT"));

@@ -28,7 +28,8 @@ async function call(method: string, path: string, body?: unknown): Promise<unkno
   try {
     res = await fetch(`/api${path}`, {
       method,
-      headers: body === undefined ? undefined : { "content-type": "application/json" },
+      // The owner API takes a change only as JSON, which a page on another site cannot send without asking.
+      headers: method === "GET" ? undefined : { "content-type": "application/json" },
       body: body === undefined ? undefined : JSON.stringify(body),
     });
   } catch {

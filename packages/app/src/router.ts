@@ -1,5 +1,5 @@
 import type { MessageId, ThreadId } from "@a12s-studio/contract/names";
-import type { BoardStatus, MessageKind } from "@a12s-studio/contract/state";
+import type { BoardStatus, MessageKind, ThreadStatus } from "@a12s-studio/contract/state";
 import type { TurnStatus } from "./a12s/port.ts";
 import type { Caller } from "./caller.ts";
 import { StudioError } from "./errors.ts";
@@ -188,6 +188,32 @@ export function ownerThread(team: TeamRepo, input: { title?: string; body: strin
       body: input.body,
     });
     return { message, thread };
+  });
+}
+
+// Any agent on the team, or the owner, may change a thread's status, owner (an agent slug) or title.
+export function changeThread(
+  team: TeamRepo,
+  id: string,
+  patch: { status?: ThreadStatus; owner?: string; title?: string },
+): Thread {
+  if (patch.status === undefined && patch.owner === undefined && patch.title === undefined) {
+    refuse("nothing_to_change", "A thread change needs status, owner or title.", "Give at least one.");
+  }
+  return team.tx(() => {
+    const existing = mustThread(team, id);
+    const owner =
+      patch.owner === undefined
+        ? undefined
+        : (team.agentBySlug(patch.owner) ??
+          notFound(`No agent named "${patch.owner}" on this team.`, "Use roster to see who is on the team."));
+    team.updateThread(id, { status: patch.status, title: patch.title, ownerAgentId: owner?.id }, Date.now());
+    return {
+      ...existing,
+      ...(patch.status ? { status: patch.status } : {}),
+      ...(patch.title ? { title: patch.title } : {}),
+      ...(owner ? { ownerAgentId: owner.id } : {}),
+    };
   });
 }
 

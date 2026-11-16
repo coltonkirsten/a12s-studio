@@ -1,15 +1,7 @@
-import type { Presence } from "@a12s-studio/contract/state";
-import type { Phase } from "../a12s/port.ts";
 import { StudioError } from "../errors.ts";
+import { presenceOf } from "../live.ts";
 import { nameOf } from "../router.ts";
 import type { Tool } from "./mcp.ts";
-
-function presence(phase: Phase | undefined): Presence {
-  if (phase === "Asleep") return "asleep";
-  if (phase === "Busy") return "working";
-  if (phase === "Error" || phase === undefined) return "error";
-  return "awake";
-}
 
 export const roster: Tool<Record<string, never>> = {
   name: "roster",
@@ -26,7 +18,7 @@ export const roster: Tool<Record<string, never>> = {
       agents: team.agents().map((a) => ({
         name: a.slug,
         role: a.role.split("\n")[0] ?? "",
-        presence: presence(phases.get(a.id)),
+        presence: presenceOf(phases.get(a.id)),
       })),
       owner: "owner",
     };

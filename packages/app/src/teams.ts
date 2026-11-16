@@ -1,6 +1,6 @@
 import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import type { CreateTeamBody, HireBody, Template } from "@a12s-studio/contract/api";
+import type { CreateTeamBody, HireBody, PatchTeamBody, Template } from "@a12s-studio/contract/api";
 import { AGENT_SLUG, agentId, RESERVED_TEAM_SLUGS, TEAM_SLUG } from "@a12s-studio/contract/names";
 import { type A12s, A12sError } from "./a12s/port.ts";
 import { agentSpec } from "./a12s/spec.ts";
@@ -197,6 +197,25 @@ export function createTeams(deps: { repo: Repo; a12s: A12s; dispatcher: Dispatch
       for (const agent of scoped.agents()) await removeComputer(team, agent.id);
       await a12s.removeToken(team.id);
       scoped.markDeleted(Date.now());
+    },
+
+    // A new brief or role reaches the agent computer as a fresh spec, which a12s applies at its next idle moment.
+    async patchTeam(teamId: string, patch: Pick<PatchTeamBody, "name" | "purpose" | "accent" | "dailyBudgetUsd">) {
+      const { team, scoped } = live(teamId);
+      const next = { ...team, ...patch };
+      if (next.name !== team.name || next.purpose !== team.purpose) {
+        for (const agent of scoped.agents()) await a12s.putAgent(agent.id, agentSpec(next, agent), "replace");
+      }
+      scoped.updateTeam(patch);
+      await dispatcher.run();
+    },
+
+    async patchAgent(teamId: string, id: string, patch: { role?: string; model?: string }): Promise<void> {
+      const { team, scoped } = live(teamId);
+      const agent = scoped.agent(id);
+      if (!agent) throw new StudioError(404, "not_found", `No agent ${id} on ${teamId}.`);
+      await a12s.putAgent(id, agentSpec(team, { ...agent, ...patch }), "replace");
+      scoped.updateAgent(id, patch);
     },
 
     pause: (teamId: string | null) => setPaused(teamId, true),
