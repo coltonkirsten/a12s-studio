@@ -135,8 +135,13 @@ export async function p3(studio: Studio): Promise<void> {
     await studio.until(`${dev} asleep`, (s) => agent(s, dev)?.presence === "asleep", ANSWER_MS);
     // Too little memory for the agent computer to start.
     await studio.api("PATCH", `/agents/${dev}`, { memory: "8Mi" });
-    await studio.api("POST", `/agents/${dev}/power`, { state: "awake" });
-    await studio.until("the agent error card", errorCard, ANSWER_MS);
+    // a12s answers the wake with the failure (the computer is killed while a12s sets it up); the phase it then
+    // reports is what Studio shows.
+    const refused = await studio.api("POST", `/agents/${dev}/power`, { state: "awake" }).then(
+      () => "",
+      (error: unknown) => ` (the wake answered: ${error instanceof Error ? error.message : String(error)})`,
+    );
+    await studio.until(`the agent error card${refused}`, errorCard, ANSWER_MS);
     await studio.api("PATCH", `/agents/${dev}`, { memory: null });
     await studio.api("POST", `/agents/${dev}/power`, { state: "awake" });
     await studio.until(
