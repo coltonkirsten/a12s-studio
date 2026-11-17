@@ -6,7 +6,7 @@ import { type CSSProperties, type ReactNode, useState } from "react";
 import { api, inOrder, useAccess, useAction } from "../api.ts";
 import { expiresAt, expiryText, type Lifetime, lifetimeLabel } from "../logic/grants.ts";
 import { displayName } from "../logic/names.ts";
-import { href, settingsHref } from "../logic/route.ts";
+import { href, inspectHref, settingsHref } from "../logic/route.ts";
 import { shortTime } from "../logic/time.ts";
 import { CredentialForm } from "../parts/access/credentials.tsx";
 import { GrantLines } from "../parts/access/grants.tsx";
@@ -90,10 +90,18 @@ function Card({ item, team }: { item: NeedsYouItem; team: TeamView }) {
         null,
         <Actions>
           <ActionButton label="Wake" write={() => api.power(item.agentId, "awake")} />
+          <InspectLink agent={item.agentId} />
         </Actions>,
       );
     case "failed_turn":
-      return frame(displayName(item.agentId), `A Turn failed${item.error ? `: ${item.error}` : "."}`, item.at, null);
+      return frame(
+        displayName(item.agentId),
+        `A Turn failed${item.error ? `: ${item.error}` : "."}`,
+        item.at,
+        <Actions>
+          <InspectLink agent={item.agentId} />
+        </Actions>,
+      );
     case "budget":
       return frame(
         "Budget",
@@ -116,6 +124,14 @@ function Card({ item, team }: { item: NeedsYouItem; team: TeamView }) {
         <ExtendGrant item={item} />,
       );
   }
+}
+
+function InspectLink({ agent }: { agent: string }) {
+  return (
+    <a className="button quiet" href={inspectHref(agent)}>
+      Open inspector
+    </a>
+  );
 }
 
 function Actions({ children }: { children: ReactNode }) {

@@ -6,5 +6,6 @@ import { defineConfig } from "vite";
 const OWNER = `http://127.0.0.1:${process.env.FIXTURE_PORT ?? OWNER_PORT}`;
 
 export default defineConfig({
-  server: { proxy: { "/api": { target: OWNER, changeOrigin: true, headers: { origin: OWNER } } } },
+  // ws: the terminal is a WebSocket under /api.
+  server: { proxy: { "/api": { target: OWNER, changeOrigin: true, ws: true, headers: { origin: OWNER } } } },
 });

@@ -335,7 +335,7 @@ export function ownerRoutes(deps: OwnerDeps): Route[] {
           messages: scoped.inbox(id).map((m) => ({
             ...messageView(m),
             thread: m.threadId,
-            delivery: m.delivery === "queued" ? "queued" : "sent",
+            sentAs: m.a12sMessageId,
           })),
         };
       },

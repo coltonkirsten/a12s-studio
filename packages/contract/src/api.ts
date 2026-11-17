@@ -69,8 +69,10 @@ export type ToolCall = {
 };
 export type TurnEventsResponse = { calls: ToolCall[] };
 
-// A message the agent has not received yet: queued in Studio, or sent to its a12s inbox and not yet taken by a Turn.
-export type InboxItem = MessageView & { thread: ThreadId | null; delivery: "queued" | "sent" };
+// A message the agent has not received yet: queued in Studio (sentAs null), or in its a12s inbox as the a12s Message
+// sentAs and not yet taken by a Turn. Messages sent as one a12s Message (an ask and the notes riding on it) are
+// removed together.
+export type InboxItem = MessageView & { thread: ThreadId | null; sentAs: string | null };
 export type InboxResponse = { messages: InboxItem[] };
 
 export type FileEntry = { name: string; kind: "file" | "dir" | "link" | "other"; size: number; modTime: number };
@@ -87,7 +89,3 @@ export type FileView =
     };
 
 export type PutFileBody = { content: string; encoding: "utf-8" | "base64" };
-
-// The terminal WebSocket: binary frames carry the terminal's bytes both ways; a text frame from the browser is a
-// resize. A terminal a12s would not open closes with 1011 and a12s's error code (such as "asleep") as the reason.
-export type TerminalResize = { rows: number; cols: number };

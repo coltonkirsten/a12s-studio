@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { Rev } from "./api.ts";
 import { parseRoute } from "./logic/route.ts";
 import { HireSheet } from "./screens/hire.tsx";
+import { Inspector } from "./screens/inspector/inspector.tsx";
 import { NeedsYou } from "./screens/needs-you.tsx";
 import { NewTeamSheet } from "./screens/new-team.tsx";
 import { Sidebar } from "./screens/sidebar.tsx";
@@ -23,7 +24,8 @@ export function App() {
   if (!state) return <div className="app" />;
 
   const team = state.teams.find((t) => t.id === route.team) ?? null;
-  const shown = { team: team?.id ?? null, thread: team ? route.thread : null, settings: route.settings };
+  const shown = { ...route, team: team?.id ?? null, thread: team ? route.thread : null };
+  const inspected = team?.agents.find((a) => a.id === route.inspect) ?? null;
   const close = () => setSheet(null);
   return (
     <Rev.Provider value={state.rev}>
@@ -39,6 +41,7 @@ export function App() {
           )}
         </main>
       </div>
+      {team && inspected && <Inspector key={inspected.id} team={team} agent={inspected} route={shown} />}
       {sheet === "team" && <NewTeamSheet state={state} onClose={close} />}
       {sheet === "hire" && team && <HireSheet team={team} settings={state.settings} onClose={close} />}
     </Rev.Provider>

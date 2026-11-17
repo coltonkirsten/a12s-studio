@@ -162,7 +162,7 @@ launchd/
 | HTTP servers | `node:http` with a small route table per listener. | About thirty routes; a framework is not needed. |
 | Validation | `zod` in the app (tool inputs, owner API bodies). Hand-written guards in the broker. | The MCP SDK already brings zod. |
 | App dependencies | `@coltonkirsten/a12s`, `@modelcontextprotocol/sdk`, `zod`, `ws` (terminal bridge, P3). | |
-| Web dependencies | `react`, `react-dom`, `vite`, `@xterm/xterm` (P3), `markdown-to-jsx` (message bodies, section 7.6: one package with no dependencies of its own, and it builds React elements, so the web never sets an HTML string). Plain CSS files with custom properties. No router library (the URL is `/#/<team>/<thread>`, parsed by hand), no state library (the state is the server's), no component kit. | |
+| Web dependencies | `react`, `react-dom`, `vite`, `@xterm/xterm` (P3), `markdown-to-jsx` (message bodies, section 7.6: one package with no dependencies of its own, and it builds React elements, so the web never sets an HTML string). Plain CSS files with custom properties. No router library (the URL is `/#/<team>/<thread>`, with `?inspect=<agent>` while an inspector is open, parsed by hand), no state library (the state is the server's), no component kit. | |
 | Scripts | `npm run check` = biome + tsc + tests. `npm run dev` = app, broker and Vite (Vite proxies `/api` to 7400). `npm run build` = Vite build; the app serves `packages/web/dist`. `npm run e2e` = `node packages/e2e/src/run.ts`. | |
 | CI | One job: `npm ci`, `npm run check`, a secret scan. Nothing that needs Docker, a12s or a Claude login. | |
 
@@ -862,14 +862,14 @@ like an unknown one. `PATCH /agents/:agent` puts the agent's spec again with the
 after a12s has taken it; `null` for `cpu` or `memory` is a12s's default. `GET …/turns` answers a12s's last 20 Turns,
 each with its text; `GET …/turns/:turn/events` answers its tool calls, each with its "doing now" line and its input
 and output cut at 4000 characters. `GET …/inbox` answers the agent's messages that are `queued` or `sent`, oldest
-first. Removing one marks it `none`; a `sent` one is first withdrawn from a12s, and the notes that rode on it leave
+first, each with the a12s Message it was sent as (`sentAs`, null while queued). Removing one marks it `none`; a `sent` one is first withdrawn from a12s, and the notes that rode on it leave
 with it. Clearing marks every `queued` one `none`, clears the a12s inbox, and marks `none` the `sent` ones a12s
 reports withdrawn; a Message a Turn has already taken is not withdrawn and stays `sent`. Files are read and written
 through a12s at a path `homePath` accepts. An a12s refusal keeps its meaning: `not_found` is a 404, `asleep` and
 `busy` a 409 (the inspector offers Wake on `asleep`); any other a12s error is a 502.
 
-The terminal's WebSocket carries the terminal's bytes in binary frames both ways; a text frame from the browser is a
-resize, `{ rows, cols }`. The upgrade passes `ownerGate` and the agent lookup before a12s is asked for a terminal. A
+The terminal's WebSocket carries the terminal's bytes both ways, at the size the URL names (24 by 80 otherwise; the
+web uses that fixed size). The upgrade passes `ownerGate` and the agent lookup before a12s is asked for a terminal. A
 terminal a12s will not open closes the socket with code 1011 and a12s's error code as the reason.
 
 An attachment is always downloaded, never shown: both listeners answer it as `application/octet-stream` with

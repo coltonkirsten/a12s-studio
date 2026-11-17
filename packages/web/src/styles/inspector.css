@@ -1,0 +1,366 @@
+/* The agent inspector: one agent in depth, sliding in from the right over the page it was opened from. */
+
+.inspector {
+  position: fixed;
+  inset: 0 0 0 auto;
+  z-index: 15;
+  display: flex;
+  flex-direction: column;
+  width: min(640px, 100vw);
+  background: var(--raised);
+  box-shadow: var(--shadow);
+  animation: slide-in 220ms var(--ease);
+}
+
+@keyframes slide-in {
+  from {
+    opacity: 0;
+    transform: translateX(32px);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .inspector {
+    animation: none;
+  }
+}
+
+.inspector-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 18px 20px 12px;
+}
+
+.inspector-title {
+  flex: 1;
+  min-width: 0;
+}
+
+.inspector-title h2 {
+  font-size: var(--size-title);
+  font-weight: 600;
+}
+
+.inspector-title p {
+  display: block;
+  font-size: var(--size-small);
+}
+
+.inspector-tabs {
+  display: flex;
+  gap: 2px;
+  padding: 0 16px 12px;
+  overflow-x: auto;
+}
+
+.inspector-tabs button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 10px;
+  border-radius: var(--radius-s);
+  color: var(--text-2);
+  font-weight: 500;
+  white-space: nowrap;
+  transition: background var(--quick);
+}
+
+.inspector-tabs button:hover {
+  background: var(--fill);
+  color: var(--text);
+}
+
+.inspector-tabs [aria-selected="true"],
+.inspector-tabs [aria-selected="true"]:hover {
+  background: var(--accent-soft);
+  color: var(--accent-text);
+}
+
+.tab-count {
+  font-size: var(--size-caption);
+  font-variant-numeric: tabular-nums;
+}
+
+.inspector-body {
+  flex: 1;
+  overflow-y: auto;
+  padding: 6px 20px 40px;
+}
+
+.inspector-section {
+  margin-bottom: 28px;
+}
+
+.inspector-section h3 {
+  margin: 0 0 8px;
+  color: var(--text-2);
+  font-size: var(--size-small);
+  font-weight: 600;
+}
+
+.inspector-quiet {
+  margin-top: 6px;
+  color: var(--text-3);
+  font-size: var(--size-small);
+}
+
+.inspector-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin: 10px 0;
+}
+
+.inspector-bar .inspector-quiet {
+  margin: 0;
+}
+
+.inspector-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.inspector-asleep {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 16px;
+  border-radius: var(--radius-l);
+  background: var(--fill);
+  color: var(--text-2);
+}
+
+/* Text kept as written: a Turn's words, a file, a tool call's input and output. */
+.turn-text {
+  margin-top: 10px;
+  max-height: 18lh;
+  overflow-y: auto;
+  color: var(--text-2);
+  line-height: 1.5;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.call-io pre,
+.file-text {
+  margin: 0;
+  padding: 8px 10px;
+  border-radius: var(--radius-m);
+  background: var(--fill);
+  font: var(--size-small) / 1.45 var(--mono);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+/* Now */
+
+.now-line {
+  margin-bottom: 8px;
+  font-weight: 500;
+}
+
+.now-line time {
+  margin-left: 4px;
+  font-weight: 400;
+}
+
+.tool-log,
+.turns,
+.inbox,
+.entries {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.call-row,
+.turn-row,
+.entry {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  width: 100%;
+  padding: 5px 8px;
+  border-radius: var(--radius-s);
+  transition: background var(--quick);
+}
+
+.call-row:hover,
+.turn-row:hover,
+.entry:hover {
+  background: var(--fill);
+}
+
+.call-line,
+.turn-first,
+.entry-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.call-state,
+.entry-size {
+  flex: none;
+  color: var(--text-3);
+  font-size: var(--size-small);
+}
+
+.call.sub .call-row {
+  padding-left: 26px;
+}
+
+.call.failed .call-state {
+  color: var(--red);
+}
+
+.call-io {
+  display: grid;
+  gap: 6px;
+  margin: 2px 0 10px 8px;
+}
+
+.call-io pre {
+  max-height: 16lh;
+  overflow-y: auto;
+}
+
+.turn-row {
+  padding-block: 7px;
+}
+
+.turn-status {
+  flex: none;
+  width: 52px;
+  color: var(--text-2);
+  font-size: var(--size-small);
+  font-weight: 500;
+}
+
+.turn-failed {
+  color: var(--red);
+}
+
+.turn-more {
+  padding: 0 0 12px 8px;
+}
+
+/* Inbox */
+
+.inbox-group {
+  margin-bottom: 10px;
+  padding: 12px 14px;
+  border-radius: var(--radius-l);
+  background: var(--fill);
+}
+
+.inbox-message + .inbox-message {
+  margin-top: 12px;
+}
+
+.inbox-message header {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  color: var(--text-2);
+  font-size: var(--size-small);
+}
+
+.inbox-message header b {
+  color: var(--text);
+  font-weight: 600;
+}
+
+.inbox-message header time {
+  margin-left: auto;
+}
+
+.inbox-body {
+  display: -webkit-box;
+  margin-top: 4px;
+  overflow: hidden;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 6;
+}
+
+.inbox-group footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-top: 8px;
+  color: var(--text-3);
+  font-size: var(--size-small);
+}
+
+/* Files, Role and notes */
+
+.crumbs {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  margin-bottom: 10px;
+}
+
+.crumbs button {
+  padding: 2px 4px;
+  border-radius: var(--radius-s);
+  color: var(--accent-text);
+}
+
+.crumbs button + button::before {
+  content: "/";
+  margin-right: 8px;
+  color: var(--text-3);
+}
+
+.crumbs button:disabled {
+  color: var(--text);
+  font-weight: 600;
+}
+
+.entry-dir {
+  font-weight: 500;
+}
+
+.editor textarea {
+  max-height: 60vh;
+  overflow-y: auto;
+}
+
+.editor .field {
+  margin-bottom: 8px;
+}
+
+/* Terminal */
+
+/* xterm names its own element .terminal, so the box has another name. */
+.terminal-box {
+  padding: 10px 12px;
+  overflow-x: auto;
+  border-radius: var(--radius-l);
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--mono);
+}
+
+/* xterm's stylesheet paints the viewport black; the box's colour shows through instead. */
+.terminal-box .xterm .xterm-viewport {
+  background-color: transparent;
+}
+
+/* Settings */
+
+.field-pair {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+}

@@ -10,7 +10,7 @@ import type {
 import { OWNER_PORT } from "@a12s-studio/contract/names";
 import WebSocket from "ws";
 import type { FakeA12s } from "../src/a12s/fake.ts";
-import { type A12s, A12sError, type Terminal } from "../src/a12s/port.ts";
+import { type A12s, A12sError } from "../src/a12s/port.ts";
 import { pending, studio, until } from "./studio.ts";
 
 type S = Awaited<ReturnType<typeof studio>>;
@@ -62,8 +62,8 @@ test("an id of another team's in an agent's URL behaves as a missing one", async
   // Still queued for the agent it was written to.
   const inbox = (await s.owner("GET", "/api/agents/notes-lead/inbox")).body as InboxResponse;
   assert.deepEqual(
-    inbox.messages.map((m) => [m.id, m.delivery]),
-    [[theirMessage, "queued"]],
+    inbox.messages.map((m) => [m.id, m.sentAs]),
+    [[theirMessage, null]],
   );
 
   s.a12s.setPhase("notes-lead", "Ready");
@@ -130,10 +130,10 @@ test("Inbox: removing a queued message marks it none, and it is never sent", asy
 
   const inbox = (await s.owner("GET", "/api/agents/web-dev/inbox")).body as InboxResponse;
   assert.deepEqual(
-    inbox.messages.map((m) => [m.body, m.delivery, m.thread, m.from]),
+    inbox.messages.map((m) => [m.body, m.sentAs, m.thread, m.from]),
     [
-      ["Hero copy.", "queued", thread, "owner"],
-      ["And the footer.", "queued", thread, "owner"],
+      ["Hero copy.", null, thread, "owner"],
+      ["And the footer.", null, thread, "owner"],
     ],
   );
   const first = inbox.messages[0]?.id;
@@ -165,16 +165,13 @@ test("Inbox: removing a sent message withdraws it from a12s, with the notes ridi
   await until(() => pending(s.a12s, "web-dev").length === 2);
 
   const inbox = (await s.owner("GET", "/api/agents/web-dev/inbox")).body as InboxResponse;
+  const [one, fyi, two] = inbox.messages;
   assert.deepEqual(
-    inbox.messages.map((m) => [m.body, m.delivery]),
-    [
-      ["One.", "sent"],
-      ["FYI.", "sent"],
-      ["Two.", "sent"],
-    ],
+    inbox.messages.map((m) => m.body),
+    ["One.", "FYI.", "Two."],
   );
-  const two = inbox.messages[2]?.id;
-  assert.equal((await s.owner("DELETE", `/api/agents/web-dev/inbox/${two}`)).status, 200);
+  assert.ok(one?.sentAs && fyi?.sentAs === two?.sentAs && one.sentAs !== two?.sentAs, "the note rides on Two.");
+  assert.equal((await s.owner("DELETE", `/api/agents/web-dev/inbox/${fyi?.id}`)).status, 200);
   const left = (await s.owner("GET", "/api/agents/web-dev/inbox")).body as InboxResponse;
   assert.deepEqual(
     left.messages.map((m) => m.body),
@@ -199,8 +196,8 @@ test("Inbox: a message a Turn has already taken cannot be removed", async (t) =>
   assert.equal(res.status, 409);
   const after = ((await s.owner("GET", "/api/agents/web-dev/inbox")).body as InboxResponse).messages;
   assert.deepEqual(
-    after.map((m) => [m.id, m.delivery]),
-    [[message?.id, "sent"]],
+    after.map((m) => m.id),
+    [message?.id],
   );
 });
 
@@ -304,18 +301,18 @@ test("Settings: a spec a12s refuses changes nothing in the row", async (t) => {
   assert.notEqual(now.model, "opus");
 });
 
-// Each terminal a12s opened, and each resize asked of it.
-function recordTerminals(opened: string[], resized: [number, number][]) {
+// Each terminal a12s opened, with its size.
+function recordTerminals(opened: string[]) {
   return (fake: FakeA12s): A12s => ({
     ...fake,
     forTeam(token) {
       const team = fake.forTeam(token);
       return {
         ...team,
-        async openTerminal(name, size): Promise<Terminal> {
+        async openTerminal(name, size) {
           const terminal = await team.openTerminal(name, size);
           opened.push(`${name} ${size.rows}x${size.cols}`);
-          return { stream: terminal.stream, resize: async (rows, cols) => void resized.push([rows, cols]) };
+          return terminal;
         },
       };
     },
@@ -341,7 +338,7 @@ function connect(s: S, path: string, headers: Record<string, string> = {}) {
 
 test("terminal: ownerGate, the Origin rule and the agent's team are checked before a12s is asked", async (t) => {
   const opened: string[] = [];
-  const s = await setup(t, { wrap: recordTerminals(opened, []) });
+  const s = await setup(t, { wrap: recordTerminals(opened) });
   const cases: [string, string, Record<string, string>, number][] = [
     ["another site's page", "/api/agents/web-dev/terminal", { origin: "https://evil.example" }, 403],
     ["an opaque origin", "/api/agents/web-dev/terminal", { origin: "null" }, 403],
@@ -361,10 +358,9 @@ test("terminal: ownerGate, the Origin rule and the agent's team are checked befo
   assert.equal((await s.owner("GET", "/api/agents/web-dev/terminal")).status, 426);
 });
 
-test("terminal: bytes both ways, a resize, and a close that ends the a12s terminal", async (t) => {
+test("terminal: bytes both ways at the size asked for, and a close that ends the a12s terminal", async (t) => {
   const opened: string[] = [];
-  const resized: [number, number][] = [];
-  const s = await setup(t, { wrap: recordTerminals(opened, resized) });
+  const s = await setup(t, { wrap: recordTerminals(opened) });
   const term = connect(s, "/api/agents/web-dev/terminal?rows=30&cols=100");
   await term.opened;
   await until(() => opened.length === 1);
@@ -373,13 +369,15 @@ test("terminal: bytes both ways, a resize, and a close that ends the a12s termin
   const echoed = new Promise<Buffer>((resolve) => term.socket.once("message", (data) => resolve(data as Buffer)));
   term.socket.send(Buffer.from("ls -la\r"));
   assert.equal((await echoed).toString(), "ls -la\r");
-  term.socket.send(JSON.stringify({ rows: 40, cols: 120 }));
-  await until(() => resized.length === 1);
-  assert.deepEqual(resized, [[40, 120]]);
-  term.socket.send(JSON.stringify({ rows: "many" }));
   term.socket.close();
   assert.equal((await term.closed).code, 1005);
-  assert.deepEqual(resized, [[40, 120]]);
+
+  const odd = connect(s, "/api/agents/web-dev/terminal?rows=0&cols=many");
+  await odd.opened;
+  await until(() => opened.length === 2);
+  assert.equal(opened[1], "web-dev 24x80");
+  odd.socket.close();
+  await odd.closed;
 });
 
 test("terminal: an asleep agent's terminal closes with asleep, for the inspector's Wake", async (t) => {
