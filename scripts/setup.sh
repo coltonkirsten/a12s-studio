@@ -81,6 +81,13 @@ for template in "$repo"/launchd/*.plist; do
   sed -e "s|{{node}}|$node|g" -e "s|{{repo}}|$repo|g" -e "s|{{home}}|$home|g" -e "s|{{logs}}|$logs|g" \
     -e "s|{{path}}|$job_path|g" "$template" >"$agents/$label.plist"
   launchctl bootout "gui/$(id -u)/$label" 2>/dev/null || true
+  # bootout returns before the job is gone, and bootstrapping it while it is still there fails.
+  tries=0
+  while launchctl print "gui/$(id -u)/$label" >/dev/null 2>&1; do
+    tries=$((tries + 1))
+    [ "$tries" -le 50 ] || die "$label did not stop; run this again."
+    sleep 0.2
+  done
   launchctl bootstrap "gui/$(id -u)" "$agents/$label.plist"
   echo "Installed $label (log: $logs/$name.log)."
 done
