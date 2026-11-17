@@ -156,8 +156,11 @@ test("the owner's access routes relay the broker's answers and refusals", async 
   const { broker, s } = await withBroker(t);
   const github = { scheme: "basic", username: "x-access-token", secret: SECRET };
   assert.equal((await s.owner("PUT", "/api/teams/web/credentials/git.example.com", github)).status, 200);
+  const before = s.app.stream.rev();
   const grant = await s.owner("POST", "/api/teams/web/grants", { host: HOST, methods: ["GET"], paths: ["/v1/**"] });
   const grantId = (grant.body as { id: string }).id;
+  // No card changes with this grant, yet the rev moves: a page showing the team's access reads it again.
+  assert.ok((grant.body as { rev: number }).rev > before);
 
   const access = (await s.owner("GET", "/api/teams/web/access")).body as AccessView;
   assert.deepEqual(

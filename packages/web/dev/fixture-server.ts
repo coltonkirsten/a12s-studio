@@ -1,8 +1,17 @@
-// Development only: stands in for the app on 127.0.0.1:7400 with a recorded state, so the UI can be built and
-// looked at before the real owner API exists. Vite never bundles this folder.
+// Development only: stands in for the app's owner API with a recorded state, so every state of the UI can be
+// looked at without Docker, a12s or a login. Vite never bundles this folder.
 import { createServer, type ServerResponse } from "node:http";
-import type { Template } from "@a12s-studio/contract/api";
-import { type MessageId, type ThreadId, teamSlug } from "@a12s-studio/contract/names";
+import type { ErrorBody, Template } from "@a12s-studio/contract/api";
+import type {
+  AccessRequest,
+  AccessView,
+  ApproveBody,
+  AuditEntry,
+  CreateGrantBody,
+  Grant,
+  PutCredentialBody,
+} from "@a12s-studio/contract/broker-admin";
+import { type MessageId, OWNER_PORT, type RequestId, type ThreadId, teamSlug } from "@a12s-studio/contract/names";
 import type {
   AgentView,
   MessageView,
@@ -13,8 +22,12 @@ import type {
 } from "@a12s-studio/contract/state";
 
 const MIN = 60_000;
+const DAY = 24 * 60 * MIN;
 const now = Date.now();
 let rev = 1;
+const AUDIT_PAGE = 50;
+// Beside a running Studio, which holds the owner port, FIXTURE_PORT moves the fixture and Vite's proxy to another.
+const port = Number(process.env.FIXTURE_PORT ?? OWNER_PORT);
 let seq = 0;
 
 function agent(
@@ -152,26 +165,153 @@ const teams: Omit<TeamView, "threads">[] = [
   },
 ];
 
-const needsYou: NeedsYouItem[] = [
+const questions: NeedsYouItem[] = [
   { kind: "question", teamId: "website", threadId: "th_fixturecopy", message: question },
-  {
-    kind: "access_request",
-    teamId: "notes",
-    hostHasCredential: true,
-    request: {
-      id: "rq_fixture1",
-      agentId: "notes-researcher",
-      host: "api.github.com",
-      methods: ["GET"],
-      paths: ["/repos/example/*/releases"],
-      reason: "To compare how often each generator ships a release.",
-      days: 7,
-      status: "pending",
-      createdAt: now - 40 * MIN,
-      decidedAt: null,
-    },
-  },
 ];
+
+type TeamAccess = AccessView & { audit: AuditEntry[] };
+
+function grant(id: string, host: string, methods: string[], paths: string[], expiresAt: number | null): Grant {
+  return {
+    id: `g_${id}`,
+    host,
+    methods,
+    paths,
+    expiresAt,
+    requestId: null,
+    createdAt: now - DAY * 20,
+    warnedAt: null,
+    revokedAt: null,
+    expiredAt: null,
+  };
+}
+
+function request(
+  id: string,
+  agentId: string,
+  host: string,
+  methods: string[],
+  paths: string[],
+  reason: string,
+): AccessRequest {
+  return {
+    id: `rq_${id}`,
+    agentId,
+    host,
+    methods,
+    paths,
+    reason,
+    days: 7,
+    status: "pending",
+    createdAt: now - 40 * MIN,
+    decidedAt: null,
+  };
+}
+
+// Agents' calls, so the audit log has older pages to read.
+function calls(agentId: string, count: number): AuditEntry[] {
+  return Array.from({ length: count }, (_, i) => ({
+    id: 1000 - i * 2,
+    at: now - (i + 1) * 37 * MIN,
+    agentId,
+    actor: "agent",
+    action: i % 9 === 4 ? "deny" : "call",
+    host: "github.com",
+    method: i % 3 ? "GET" : "POST",
+    path: i % 3 ? "/example/site.git/info/refs" : "/example/site.git/git-upload-pack",
+    status: i % 9 === 4 ? 403 : 200,
+    grantId: null,
+    detail: null,
+  }));
+}
+
+const access: Record<string, TeamAccess> = {
+  website: {
+    credentials: [
+      {
+        host: "github.com",
+        scheme: "basic",
+        username: "x-access-token",
+        headerName: null,
+        createdAt: now - DAY * 20,
+        updatedAt: now - DAY * 20,
+        rejectedAt: null,
+      },
+      {
+        host: "api.github.com",
+        scheme: "bearer",
+        username: null,
+        headerName: null,
+        createdAt: now - DAY * 20,
+        updatedAt: now - DAY * 20,
+        rejectedAt: now - 25 * MIN,
+      },
+    ],
+    grants: [
+      grant("fixturewrite", "github.com", ["GET", "POST"], ["/example/site.git/**", "/example/site/**"], null),
+      grant("fixtureapi", "api.github.com", ["GET"], ["/repos/example/site/**"], now + DAY * 2),
+    ],
+    requests: [
+      request(
+        "fixture1",
+        "website-dev",
+        "api.github.com",
+        ["POST"],
+        ["/repos/example/site/pulls"],
+        "To open a pull request for the menu fix.",
+      ),
+    ],
+    audit: calls("website-dev", 60),
+  },
+  notes: {
+    credentials: [],
+    grants: [],
+    requests: [
+      request(
+        "fixture2",
+        "notes-researcher",
+        "api.example.com",
+        ["GET"],
+        ["/v1/releases/*"],
+        "To compare how often each generator ships a release.",
+      ),
+    ],
+    audit: [],
+  },
+};
+
+function teamAccess(team: string): TeamAccess {
+  access[team] ??= { credentials: [], grants: [], requests: [], audit: [] };
+  return access[team];
+}
+
+/** The broker's three cards, derived the way the app derives them from its attention answer. */
+function needsYou(): NeedsYouItem[] {
+  const items = [...questions];
+  for (const [teamId, a] of Object.entries(access)) {
+    const stored = (host: string) => a.credentials.some((c) => c.host === host);
+    for (const r of a.requests.filter((x) => x.status === "pending")) {
+      items.push({ kind: "access_request", teamId, request: r, hostHasCredential: stored(r.host) });
+    }
+    for (const c of a.credentials.filter((x) => x.rejectedAt !== null)) {
+      items.push({ kind: "credential_rejected", teamId, host: c.host, at: c.rejectedAt ?? now });
+    }
+    for (const g of a.grants) {
+      if (g.revokedAt !== null || g.expiresAt === null) continue;
+      const left = g.expiresAt - Date.now();
+      if (left <= 0 || left > 3 * DAY) continue;
+      items.push({
+        kind: "grant_expiring",
+        teamId,
+        grantId: g.id,
+        host: g.host,
+        paths: g.paths,
+        expiresAt: g.expiresAt,
+      });
+    }
+  }
+  return items;
+}
 
 const settings: StudioState["settings"] = {
   awakeCap: 4,
@@ -195,7 +335,7 @@ function stateFor(open: string | null): StudioState {
     a12s: "up",
     broker: "up",
     settings,
-    needsYou,
+    needsYou: needsYou(),
     open: threads.find((t) => t.id === open) ?? null,
     teams: teams.map((team) => ({
       ...team,
@@ -203,7 +343,7 @@ function stateFor(open: string | null): StudioState {
         .filter((t) => t.teamId === team.id)
         .map((t) => {
           const last = t.messages.at(-1);
-          const asks = needsYou.filter((i) => i.kind === "question" && i.threadId === t.id).length;
+          const asks = questions.filter((i) => i.kind === "question" && i.threadId === t.id).length;
           return {
             id: t.id,
             title: t.title,
@@ -253,8 +393,109 @@ async function body(req: AsyncIterable<Buffer>): Promise<Record<string, unknown>
   return raw ? JSON.parse(raw) : {};
 }
 
+class Refusal extends Error {
+  readonly body: ErrorBody;
+  constructor(body: ErrorBody) {
+    super(body.message);
+    this.body = body;
+  }
+}
+
+function audit(a: TeamAccess, entry: Pick<AuditEntry, "action" | "host"> & Partial<AuditEntry>): void {
+  const id = (a.audit[0]?.id ?? 1000) + 1;
+  a.audit.unshift({
+    id,
+    at: Date.now(),
+    agentId: null,
+    actor: "owner",
+    method: null,
+    path: null,
+    status: null,
+    grantId: null,
+    detail: null,
+    ...entry,
+  });
+}
+
+function addGrant(a: TeamAccess, body: CreateGrantBody, requestId: RequestId | null): Grant {
+  const g = {
+    ...grant(`fixture${++seq}`, body.host, body.methods, body.paths, body.expiresAt ?? null),
+    requestId,
+    createdAt: Date.now(),
+  };
+  a.grants.unshift(g);
+  audit(a, { action: "grant.create", host: g.host, grantId: g.id });
+  return g;
+}
+
+// The owner's access routes, as the app relays them to the broker. The secret is dropped here, as the broker
+// keeps it only encrypted.
+function accessWrite(
+  team: string,
+  b: Record<string, unknown>,
+  method: string,
+  sub: string,
+  item: string,
+  verb?: string,
+): string | undefined {
+  const a = teamAccess(team);
+  if (sub === "credentials" && method === "PUT") {
+    const body = b as PutCredentialBody;
+    const at = Date.now();
+    a.credentials = [
+      {
+        host: item,
+        scheme: body.scheme,
+        username: body.username ?? null,
+        headerName: body.headerName ?? null,
+        createdAt: at,
+        updatedAt: at,
+        rejectedAt: null,
+      },
+      ...a.credentials.filter((c) => c.host !== item),
+    ];
+    audit(a, { action: "credential.set", host: item });
+  }
+  if (sub === "credentials" && method === "DELETE") {
+    if (!a.credentials.some((c) => c.host === item)) {
+      throw new Refusal({ code: "not_found", message: "There is no such credential." });
+    }
+    a.credentials = a.credentials.filter((c) => c.host !== item);
+    for (const g of a.grants) if (g.host === item && g.revokedAt === null) g.revokedAt = Date.now();
+    audit(a, { action: "credential.delete", host: item });
+  }
+  if (sub === "grants" && method === "POST") return addGrant(a, b as CreateGrantBody, null).id;
+  if (sub === "grants" && method === "DELETE") {
+    const g = a.grants.find((x) => x.id === item);
+    if (!g) throw new Refusal({ code: "not_found", message: "There is no such grant." });
+    g.revokedAt = Date.now();
+    audit(a, { action: "grant.revoke", host: g.host, grantId: g.id });
+  }
+  if (sub === "requests") {
+    const r = a.requests.find((x) => x.id === item);
+    if (!r) throw new Refusal({ code: "not_found", message: "There is no such request." });
+    if (r.status !== "pending")
+      throw new Refusal({ code: "already_decided", message: "This request was already decided." });
+    if (verb === "approve" && !a.credentials.some((c) => c.host === r.host)) {
+      throw new Refusal({
+        code: "no_credential",
+        message: `${r.host} has no credential.`,
+        fix: `Store a credential for ${r.host} first.`,
+      });
+    }
+    r.status = verb === "approve" ? "approved" : "denied";
+    r.decidedAt = Date.now();
+    if (verb === "approve") addGrant(a, { ...r, expiresAt: (b as ApproveBody).expiresAt }, r.id);
+    audit(a, { action: verb === "approve" ? "request.approve" : "request.deny", host: r.host });
+  }
+  return undefined;
+}
+
 function write(b: Record<string, unknown>, path: string, method: string): string | undefined {
-  const [, kind, id, sub] = path.split("/").slice(1);
+  const [, kind, id, sub, item, verb] = path.split("/").slice(1).map(decodeURIComponent);
+  if (kind === "teams" && id && ["credentials", "grants", "requests"].includes(String(sub))) {
+    return accessWrite(id, b, method, String(sub), item ?? "", verb);
+  }
   if (method === "PATCH" && kind === "settings") Object.assign(settings, b);
   if (method === "PATCH" && kind === "teams") Object.assign(teams.find((t) => t.id === id) ?? {}, b);
   if (method === "PATCH" && kind === "threads") Object.assign(threads.find((t) => t.id === id) ?? {}, b);
@@ -263,8 +504,8 @@ function write(b: Record<string, unknown>, path: string, method: string): string
     const to = b.to === undefined ? t?.ownerId : `${t?.teamId}-${b.to}`;
     const m = msg(b.ask ? "reply" : "ask", "owner", String(to), String(b.body), 0);
     t?.messages.push({ ...m, at: Date.now(), ask: (b.ask as MessageId | undefined) ?? null });
-    const answered = needsYou.findIndex((i) => i.kind === "question" && i.message.id === b.ask);
-    if (answered >= 0) needsYou.splice(answered, 1);
+    const answered = questions.findIndex((i) => i.kind === "question" && i.message.id === b.ask);
+    if (answered >= 0) questions.splice(answered, 1);
   }
   if (method === "POST" && kind === "teams" && sub === "threads") {
     const newId: ThreadId = `th_fixture${++seq}`;
@@ -306,10 +547,27 @@ createServer(async (req, res) => {
   }
   res.setHeader("content-type", "application/json");
   if (url.pathname === "/api/templates") return res.end(JSON.stringify({ templates }));
-  const id = write(await body(req), url.pathname, req.method ?? "GET");
+  const [, , , team, part] = url.pathname.split("/");
+  if (team && part === "access") {
+    const { audit: _, ...view } = teamAccess(team);
+    return res.end(JSON.stringify(view));
+  }
+  if (team && part === "audit") {
+    const before = Number(url.searchParams.get("before") ?? Number.POSITIVE_INFINITY);
+    const older = teamAccess(team).audit.filter((e) => e.id < before);
+    return res.end(JSON.stringify({ entries: older.slice(0, AUDIT_PAGE), hasMore: older.length > AUDIT_PAGE }));
+  }
+  let id: string | undefined;
+  try {
+    id = write(await body(req), url.pathname, req.method ?? "GET");
+  } catch (error) {
+    if (!(error instanceof Refusal)) throw error;
+    res.statusCode = error.body.code === "not_found" ? 404 : 409;
+    return res.end(JSON.stringify(error.body));
+  }
   // A short delay so the in-progress look of a control can be seen.
   setTimeout(() => {
     changed();
     res.end(JSON.stringify({ rev, id }));
   }, 400);
-}).listen(7400, "127.0.0.1", () => console.log("fixture on http://127.0.0.1:7400"));
+}).listen(port, "127.0.0.1", () => console.log(`fixture on http://127.0.0.1:${port}`));

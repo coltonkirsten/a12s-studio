@@ -113,9 +113,11 @@ export function ownerRoutes(deps: OwnerDeps): Route[] {
   const { repo, a12s, broker, dispatcher, scheduler, teams, stream } = deps;
   const written = (id?: string): WriteResult => ({ rev: stream.rev(), ...(id === undefined ? {} : { id }) });
   // A change in the broker can add or remove a Needs You card, so the attention answer is read again before the
-  // route answers: the state at the returned rev already shows the change.
+  // route answers: the state at the returned rev already shows the change. The rev moves even when no card does:
+  // the state does not carry a team's access, so a page showing it reads it again when the rev moves.
   const relayed = async (id?: string): Promise<WriteResult> => {
     await scheduler.refresh();
+    stream.changed();
     return written(id);
   };
 

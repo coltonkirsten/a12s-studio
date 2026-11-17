@@ -1,11 +1,16 @@
 import type { WriteResult } from "@a12s-studio/contract/api";
+import type { AccessRequest as Request } from "@a12s-studio/contract/broker-admin";
 import type { MessageId } from "@a12s-studio/contract/names";
 import type { NeedsYouItem, StudioState, TeamView } from "@a12s-studio/contract/state";
 import { type CSSProperties, type ReactNode, useState } from "react";
-import { api, useAction } from "../api.ts";
+import { api, inOrder, useAccess, useAction } from "../api.ts";
+import { expiresAt, expiryText, type Lifetime, lifetimeLabel } from "../logic/grants.ts";
 import { displayName } from "../logic/names.ts";
-import { href } from "../logic/route.ts";
+import { href, settingsHref } from "../logic/route.ts";
 import { shortTime } from "../logic/time.ts";
+import { CredentialForm } from "../parts/access/credentials.tsx";
+import { GrantLines } from "../parts/access/grants.tsx";
+import { LifetimePicker } from "../parts/access/lifetime.tsx";
 import { Problem } from "../parts/problem.tsx";
 
 export function NeedsYou({ state }: { state: StudioState }) {
@@ -73,16 +78,9 @@ function Card({ item, team }: { item: NeedsYouItem; team: TeamView }) {
       const r = item.request;
       return frame(
         displayName(r.agentId),
-        `Asks for ${r.methods.join(", ")} on ${r.host}${r.days ? ` for ${r.days} days` : ""}`,
+        `Asks for ${r.methods.join(", ")} on ${r.host}${r.days ? ` for ${lifetimeLabel(r.days)}` : ""}`,
         r.createdAt,
-        <>
-          <ul className="card-paths">
-            {r.paths.map((path) => (
-              <li key={path}>{path}</li>
-            ))}
-          </ul>
-          <p className="card-why">{r.reason}</p>
-        </>,
+        <AccessRequest teamId={item.teamId} request={r} hostHasCredential={item.hostHasCredential} />,
       );
     }
     case "agent_error":
@@ -104,13 +102,18 @@ function Card({ item, team }: { item: NeedsYouItem; team: TeamView }) {
         <BudgetBox team={item.teamId} current={item.dailyUsd} />,
       );
     case "credential_rejected":
-      return frame(item.host, `${item.host} refused the stored credential.`, item.at, null);
+      return frame(
+        item.host,
+        `${item.host} refused the stored credential. Calls to it fail until it is replaced.`,
+        item.at,
+        <ReplaceCredential teamId={item.teamId} host={item.host} />,
+      );
     case "grant_expiring":
       return frame(
         item.host,
-        `Access to ${item.host} ends ${shortTime(item.expiresAt, now)}: ${item.paths.join(", ")}`,
+        `Access to ${item.host} ${expiryText(item.expiresAt, now).toLowerCase()}.`,
         null,
-        null,
+        <ExtendGrant item={item} />,
       );
   }
 }
@@ -183,5 +186,123 @@ function BudgetBox({ team, current }: { team: string; current: number }) {
       </button>
       <Problem problem={action.problem} />
     </Actions>
+  );
+}
+
+// An agent that names no lifetime gets a month unless the owner picks another.
+const UNASKED: Lifetime = 30;
+
+function AccessRequest({
+  teamId,
+  request: r,
+  hostHasCredential,
+}: {
+  teamId: string;
+  request: Request;
+  hostHasCredential: boolean;
+}) {
+  const [lifetime, setLifetime] = useState<Lifetime>(r.days ?? UNASKED);
+  const approve = useAction();
+  const deny = useAction();
+  const busy = approve.pending || deny.pending;
+  return (
+    <>
+      <div className="card-change">
+        <GrantLines grant={r} />
+      </div>
+      <p className="card-why">“{r.reason}”</p>
+      {!hostHasCredential && (
+        <div className="card-step">
+          <p>{r.host} has no credential yet. Add one first; approving waits for it.</p>
+          <CredentialForm team={teamId} host={r.host} />
+        </div>
+      )}
+      <div className="card-actions spread">
+        <LifetimePicker value={lifetime} wanted={r.days} set={setLifetime} />
+        <span className="card-buttons">
+          <button
+            type="button"
+            className={deny.pending ? "button pending" : "button"}
+            disabled={busy}
+            onClick={() => deny.run(() => api.deny(teamId, r.id))}
+          >
+            Deny
+          </button>
+          <button
+            type="button"
+            className={approve.pending ? "button primary pending" : "button primary"}
+            disabled={busy || !hostHasCredential}
+            onClick={() => approve.run(() => api.approve(teamId, r.id, { expiresAt: expiresAt(lifetime, Date.now()) }))}
+          >
+            Approve
+          </button>
+        </span>
+      </div>
+      <Problem problem={approve.problem ?? deny.problem} />
+    </>
+  );
+}
+
+function ReplaceCredential({ teamId, host }: { teamId: string; host: string }) {
+  const [open, setOpen] = useState(false);
+  const access = useAccess(teamId);
+  const replacing = access.view?.credentials.find((c) => c.host === host);
+  if (open) {
+    return (
+      <div className="card-step">
+        <CredentialForm team={teamId} host={host} replacing={replacing} onClose={() => setOpen(false)} />
+      </div>
+    );
+  }
+  return (
+    <Actions>
+      <a className="button quiet" href={settingsHref(teamId)}>
+        Team settings
+      </a>
+      <button type="button" className="button primary" onClick={() => setOpen(true)}>
+        Replace credential
+      </button>
+    </Actions>
+  );
+}
+
+/** A new grant with the same host, methods and paths, then the old one revoked, so access never lapses. */
+function ExtendGrant({ item }: { item: Extract<NeedsYouItem, { kind: "grant_expiring" }> }) {
+  const [lifetime, setLifetime] = useState<Lifetime>(UNASKED);
+  const access = useAccess(item.teamId);
+  const action = useAction();
+  const grant = access.view?.grants.find((g) => g.id === item.grantId);
+  return (
+    <>
+      <div className="card-change">
+        <GrantLines grant={grant ?? { host: item.host, methods: [], paths: item.paths }} />
+      </div>
+      <div className="card-actions spread">
+        <LifetimePicker value={lifetime} wanted={null} set={setLifetime} />
+        <button
+          type="button"
+          className={action.pending ? "button primary pending" : "button primary"}
+          disabled={!grant}
+          onClick={() =>
+            grant &&
+            action.run(() =>
+              inOrder([
+                () =>
+                  api.grant(item.teamId, {
+                    host: grant.host,
+                    methods: grant.methods,
+                    paths: grant.paths,
+                    expiresAt: expiresAt(lifetime, Date.now()),
+                  }),
+                () => api.revoke(item.teamId, grant.id),
+              ]),
+            )
+          }
+        >
+          Extend
+        </button>
+      </div>
+      <Problem problem={action.problem ?? access.problem} />
+    </>
   );
 }

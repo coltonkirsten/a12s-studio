@@ -833,9 +833,10 @@ PUT    /teams/:team/addons/:addon     (turn on)                          DELETE 
 The access routes relay to the broker's admin socket (section 9.5) and pass its refusals on unchanged. `GET …/access`
 answers the broker's `AccessView` and `GET …/audit` its `AuditPage`; the writes answer `{ rev }`, `POST …/grants`
 with the new grant's `id`. A write that can change a Needs You card (all of them) reads the broker's attention items
-again before it answers, so the state at its `rev` shows the change. A credential's `secret` passes through the
-app's memory once and is never logged or stored by the app. Removing or clearing inbox Messages also marks the
-matching Studio messages `none`.
+again before it answers, so the state at its `rev` shows the change. It also moves the `rev` when no card changes:
+the state does not carry a team's access, so the UI reads `GET …/access` again whenever the `rev` moves. A
+credential's `secret` passes through the app's memory once and is never logged or stored by the app. Removing or
+clearing inbox Messages also marks the matching Studio messages `none`.
 
 ### 7.6 Message bodies
 
