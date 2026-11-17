@@ -9,7 +9,7 @@ import { fileURLToPath } from "node:url";
 import type { MessagesPage, WriteResult } from "@a12s-studio/contract/api";
 import type { AccessView } from "@a12s-studio/contract/broker-admin";
 import type { AgentView, NeedsYouItem, StudioState } from "@a12s-studio/contract/state";
-import { ANSWER_MS, createTeam, messages, ownerAsk, replyTo, type Studio, step } from "./studio.ts";
+import { ANSWER_MS, answerFrom, createTeam, messages, ownerMessage, type Studio, step } from "./studio.ts";
 
 const repo = fileURLToPath(new URL("../../..", import.meta.url));
 // What the data folder holds of Studio's own; the Fleet file and the run's logs stay.
@@ -90,23 +90,23 @@ export async function p3(studio: Studio): Promise<void> {
   const lead = `${team}-lead`;
   const dev = `${team}-dev`;
 
-  await step("With the awake cap at 1 and asks for two agents, two are never awake together", async () => {
+  await step("With the awake cap at 1 and messages for two agents, two are never awake together", async () => {
     const { awakeCap } = studio.state().settings;
     await studio.api("PATCH", "/settings", { awakeCap: 1, paused: false });
-    const first = await ownerAsk(studio, team, "Two answers", "Reply to this ask with the single word: one");
+    const first = await ownerMessage(studio, team, "Two answers", "Answer me with the single word: one");
     const second = await studio.api<WriteResult>("POST", `/threads/${first.thread}/messages`, {
-      body: "Reply to this ask with the single word: two",
+      body: "Answer me with the single word: two",
       to: "dev",
     });
     await studio.open(first.thread);
     let held = false;
     await studio.until(
-      "both replies",
+      "both answers",
       (s) => {
         const up = awake(s);
         if (up.length > 1) throw new Error(`${up.join(" and ")} were awake together`);
         held ||= agents(s).some((a) => a.waitingFor === "cap");
-        return replyTo(s, first.ask, lead) !== undefined && replyTo(s, second.id ?? "", dev) !== undefined;
+        return answerFrom(s, lead, first.message) !== undefined && answerFrom(s, dev, second.id ?? "") !== undefined;
       },
       2 * ANSWER_MS,
     );
@@ -118,15 +118,15 @@ export async function p3(studio: Studio): Promise<void> {
     const { spentTodayUsd, dailyUsd } = budget(studio.state(), team);
     assert.ok(spentTodayUsd > 0, "the team has spent nothing today");
     await studio.api("PATCH", `/teams/${team}`, { dailyBudgetUsd: spentTodayUsd / 2 });
-    const ask = await ownerAsk(studio, team, "Held", "Reply to this ask with the single word: three");
+    const held = await ownerMessage(studio, team, "Held", "Answer me with the single word: three");
     await studio.until(
       `${lead} waiting for the budget, and the budget card`,
       (s) => agent(s, lead)?.waitingFor === "budget" && hasCard(s, "budget", (card) => card.teamId === team),
       60_000,
     );
     await studio.api("PATCH", `/teams/${team}`, { dailyBudgetUsd: dailyUsd });
-    await studio.open(ask.thread);
-    await studio.until(`a reply from ${lead}`, (s) => replyTo(s, ask.ask, lead) !== undefined, ANSWER_MS);
+    await studio.open(held.thread);
+    await studio.until(`an answer from ${lead}`, (s) => answerFrom(s, lead, held.message) !== undefined, ANSWER_MS);
   });
 
   await step("A forced agent error shows its card; set back and woken, the card is gone", async () => {
@@ -154,13 +154,13 @@ export async function p3(studio: Studio): Promise<void> {
   for (let run = 1; run <= BACKGROUND_RUNS; run++) {
     await step(`A command in the background keeps the agent working until it reports (${run} of 3)`, async () => {
       const notBackground = `${lead} did not run the command in the background`;
-      const ask = await ownerAsk(
+      const asked = await ownerMessage(
         studio,
         team,
         `Background ${run}`,
         "Run `sleep 45` as a background command, end your turn, and when it finishes post the word done.",
       );
-      await studio.open(ask.thread);
+      await studio.open(asked.thread);
       // The report itself, not a message that mentions it ("I will post done when it finishes").
       const report = (s: StudioState) => messages(s).find((m) => m.from === lead && /^\W*done\W*$/i.test(m.body));
       const done = (s: StudioState) => report(s) !== undefined;
@@ -188,28 +188,27 @@ export async function p3(studio: Studio): Promise<void> {
   }
 
   await step("Unattended: a wake the lead set fires and the team finishes a task inside its budget", async () => {
-    const ask = await ownerAsk(
+    const asked = await ownerMessage(
       studio,
       team,
       "Later",
-      "Use schedule to wake yourself in this thread one minute from now, then end your turn without replying. " +
+      "Use schedule to wake yourself in this thread one minute from now, then end your turn. " +
         "When that wake arrives, ask dev to write the word hello into ~/hello.txt. " +
-        "When dev has replied, reply to this ask with the single word: finished",
+        "When dev has answered, send me the single word: finished",
     );
-    await studio.open(ask.thread);
-    const state = await studio.until(
-      `a reply from ${lead}`,
-      (s) => replyTo(s, ask.ask, lead) !== undefined,
-      3 * ANSWER_MS,
-    );
+    await studio.open(asked.thread);
+    // The word itself: the lead's first Turn may also leave a message for the owner (build-spec 5.5).
+    const finished = (s: StudioState) =>
+      messages(s).find((m) => m.from === lead && m.to === "owner" && /^\W*finished\W*$/i.test(m.body));
+    const state = await studio.until(`the word finished from ${lead}`, (s) => finished(s) !== undefined, 3 * ANSWER_MS);
     const thread = messages(state);
     const wake = thread.find((m) => m.from === "system" && m.body.startsWith("scheduled wake"));
-    const reply = replyTo(state, ask.ask, lead);
+    const answer = finished(state);
     assert.ok(wake, "the thread has no scheduled wake");
-    assert.ok(reply && reply.at > wake.at, "the lead replied before its wake");
+    assert.ok(answer && answer.at > wake.at, "the lead answered before its wake");
     assert.ok(
-      thread.some((m) => m.kind === "ask" && m.from === lead && m.to === dev && m.at > wake.at),
-      `${lead} did not ask ${dev} after the wake`,
+      thread.some((m) => m.from === lead && m.to === dev && m.at > wake.at),
+      `${lead} did not write to ${dev} after the wake`,
     );
     assert.match(await studio.shell(dev, "cat ~/hello.txt"), /hello/i);
     const { spentTodayUsd, dailyUsd } = budget(studio.state(), team);
