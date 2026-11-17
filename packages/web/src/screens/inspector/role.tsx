@@ -1,17 +1,15 @@
 import type { AgentView } from "@a12s-studio/contract/state";
-import { useContext, useState } from "react";
-import { api, Rev, useRead } from "../../api.ts";
+import { useState } from "react";
+import { api, useRead } from "../../api.ts";
 import { HOME } from "../../logic/files.ts";
-import { Problem } from "../../parts/problem.tsx";
+import { Versions } from "../../parts/versions.tsx";
 import { Editor } from "./editor.tsx";
 import { Refusal } from "./refusal.tsx";
 
 const NOTES = `${HOME}/memory/notes.md`;
 
-/** The role is part of the agent's instructions; the notes are the file it keeps for itself. */
+/** The role, which the owner and the team's lead write; the notes, the file the agent keeps for itself. */
 export function Role({ agent }: { agent: AgentView }) {
-  const rev = useContext(Rev);
-  const settings = useRead(() => api.agent(agent.id), `${agent.id}:${rev}`);
   const [version, setVersion] = useState(0);
   const notes = useRead(() => api.file(agent.id, NOTES), `${agent.id}:${agent.presence}:${version}`);
   const saveNotes = (content: string) => api.putFile(agent.id, NOTES, { content, encoding: "utf-8" });
@@ -21,16 +19,13 @@ export function Role({ agent }: { agent: AgentView }) {
   return (
     <>
       <section className="inspector-section">
-        {settings.data && (
-          <Editor
-            key={settings.data.role}
-            label="Role"
-            value={settings.data.role}
-            save={(role) => api.patchAgent(agent.id, { role })}
-          />
-        )}
-        <Problem problem={settings.problem} />
-        <p className="inspector-quiet">Part of its instructions. A change applies at its next idle moment.</p>
+        <Versions
+          id={agent.id}
+          label="Role"
+          load={(before) => api.role(agent.id, before)}
+          save={(role) => api.patchAgent(agent.id, { role })}
+        />
+        <p className="inspector-quiet">You and the team's lead write it. A change arrives with its next message.</p>
       </section>
       <section className="inspector-section">
         {text === null ? (

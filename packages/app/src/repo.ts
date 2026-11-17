@@ -21,7 +21,6 @@ export type Agent = {
   id: string;
   teamId: string;
   slug: string;
-  role: string;
   model: string;
   sleepAfterIdle: string;
   compactMinTokens: number;
@@ -91,6 +90,13 @@ export type Wake = {
   repeatSeconds: number | null;
 };
 
+export type RuleVersion = { id: number; body: string; author: string; createdAt: number };
+
+// One instruction layer's versions: the owner rules, a team's rules, or one agent's role. Reading is separate from
+// writing so that the owner rules can be read through a team's repo and written only through the unscoped one.
+export type RuleHistory = { layer: "owner" | "team" | "role"; versions(limit: number, before?: number): RuleVersion[] };
+export type RuleScope = RuleHistory & { insert(body: string, author: string, at: number): number };
+
 export type BoardRow = Thread & {
   // Messages to the owner since owner_seen_at.
   forOwner: number;
@@ -109,10 +115,11 @@ const SETTING_KEYS = {
 
 const TEAM = `id, name, purpose, accent, lead_agent_id AS leadAgentId, daily_budget_usd AS dailyBudgetUsd,
   paused, a12s_token AS a12sToken, created_at AS createdAt`;
-const AGENT = `id, team_id AS teamId, slug, role, model, sleep_after_idle AS sleepAfterIdle,
+const AGENT = `id, team_id AS teamId, slug, model, sleep_after_idle AS sleepAfterIdle,
   compact_min_tokens AS compactMinTokens, cpu, memory, created_at AS createdAt`;
 const THREAD = `id, team_id AS teamId, title, owner_agent_id AS ownerAgentId, status, created_at AS createdAt,
   updated_at AS updatedAt`;
+const RULE = "id, body, author, created_at AS createdAt";
 const WAKE = `id, team_id AS teamId, agent_id AS agentId, thread_id AS threadId, note, due_at AS dueAt,
   repeat_seconds AS repeatSeconds`;
 const MESSAGE = `id, team_id AS teamId, thread_id AS threadId, from_id AS fromId, to_id AS toId, body,
@@ -147,6 +154,36 @@ export function createRepo(db: DatabaseSync, onWrite: () => void = () => {}) {
     if (changes > 0) onWrite();
     return changes;
   };
+
+  // A layer's store. `team_id IS ?` and `agent_id IS ?` match null, so the owner rules (no team) and a team's rules
+  // (no agent) are scopes like a role. A role is written only for a current agent of the same team.
+  function rules(layer: RuleHistory["layer"], teamId: string | null, agentId: string | null): RuleScope {
+    return {
+      layer,
+      versions(limit, before) {
+        return all(
+          `SELECT ${RULE} FROM rules WHERE team_id IS ? AND agent_id IS ? AND (? IS NULL OR id < ?)
+           ORDER BY id DESC LIMIT ?`,
+          teamId,
+          agentId,
+          before ?? null,
+          before ?? null,
+          limit,
+        ) as RuleVersion[];
+      },
+      insert(body, author, at) {
+        const result = db
+          .prepare(
+            `INSERT INTO rules (team_id, agent_id, body, author, created_at) SELECT ?, ?, ?, ?, ?
+             WHERE ? IS NULL OR EXISTS (SELECT 1 FROM agents WHERE team_id = ? AND id = ? AND removed_at IS NULL)`,
+          )
+          .run(teamId, agentId, body, author, at, agentId, teamId, agentId);
+        if (Number(result.changes) === 0) throw new Error(`No current agent ${agentId} on ${teamId}.`);
+        onWrite();
+        return Number(result.lastInsertRowid);
+      },
+    };
+  }
 
   // Every read and write here binds team_id, so an id from another team finds nothing, exactly like an id that
   // does not exist.
@@ -197,12 +234,11 @@ export function createRepo(db: DatabaseSync, onWrite: () => void = () => {}) {
       },
       insertAgent(a: Agent): void {
         run(
-          `INSERT INTO agents (id, team_id, slug, role, model, sleep_after_idle, compact_min_tokens, cpu, memory,
-             created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          `INSERT INTO agents (id, team_id, slug, model, sleep_after_idle, compact_min_tokens, cpu, memory,
+             created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
           a.id,
           teamId,
           a.slug,
-          a.role,
           a.model,
           a.sleepAfterIdle,
           a.compactMinTokens,
@@ -213,9 +249,8 @@ export function createRepo(db: DatabaseSync, onWrite: () => void = () => {}) {
       },
       updateAgent(a: Agent): void {
         run(
-          `UPDATE agents SET role = ?, model = ?, sleep_after_idle = ?, compact_min_tokens = ?, cpu = ?, memory = ?
+          `UPDATE agents SET model = ?, sleep_after_idle = ?, compact_min_tokens = ?, cpu = ?, memory = ?
            WHERE team_id = ? AND id = ?`,
-          a.role,
           a.model,
           a.sleepAfterIdle,
           a.compactMinTokens,
@@ -225,6 +260,13 @@ export function createRepo(db: DatabaseSync, onWrite: () => void = () => {}) {
           a.id,
         );
       },
+      // Read only: what an agent's route can reach has no way to write the owner rules.
+      ownerRules(): RuleHistory {
+        const { insert: _, ...history } = rules("owner", null, null);
+        return history;
+      },
+      teamRules: () => rules("team", teamId, null),
+      roleRules: (agentId: string) => rules("role", teamId, agentId),
       removeAgent(id: string, at: number): void {
         run("UPDATE agents SET removed_at = ? WHERE team_id = ? AND id = ?", at, teamId, id);
         run("DELETE FROM wakes WHERE team_id = ? AND agent_id = ?", teamId, id);
@@ -591,6 +633,7 @@ export function createRepo(db: DatabaseSync, onWrite: () => void = () => {}) {
 
   return {
     forTeam,
+    ownerRules: () => rules("owner", null, null),
     tx: <T>(fn: () => T extends Promise<unknown> ? never : T): T => tx(db, fn),
 
     settings(): Settings {

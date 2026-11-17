@@ -267,51 +267,68 @@ test("Files: a folder, a file, and a write; any path outside /home/agent is refu
   assert.equal((await s.owner("GET", "/api/agents/web-dev/files")).status, 400);
 });
 
-test("Settings: PATCH takes all six fields, writes the spec again and the row; null is a12s's default", async (t) => {
-  const s = await setup(t);
+// Each spec a12s was given, by agent.
+function recordPuts(puts: string[]) {
+  return (fake: FakeA12s): A12s => ({
+    ...fake,
+    putAgent: async (name, spec, mode) => {
+      if (spec.resources?.memory === "1Ki") throw new A12sError("other", "memory is below the minimum");
+      await fake.putAgent(name, spec, mode);
+      puts.push(name);
+    },
+  });
+}
+
+test("Settings: the five settings put the spec again and then the row; null is a12s's default", async (t) => {
+  const puts: string[] = [];
+  const s = await setup(t, { wrap: recordPuts(puts) });
   const before = (await s.owner("GET", "/api/agents/web-dev")).body as AgentSettings;
   assert.equal(before.cpu, null);
   assert.equal(before.memory, null);
 
-  const patch: AgentSettings = {
-    role: "Writes and tests the code. Prefers small changes.",
-    model: "opus",
-    sleepAfterIdle: "30m",
-    compactMinTokens: 50000,
-    cpu: 2,
-    memory: "4Gi",
-  };
-  assert.equal((await s.owner("PATCH", "/api/agents/web-dev", patch)).status, 200);
-  assert.deepEqual((await s.owner("GET", "/api/agents/web-dev")).body, patch);
+  const settings = { model: "opus", sleepAfterIdle: "30m", compactMinTokens: 50000, cpu: 2, memory: "4Gi" };
+  puts.length = 0;
+  assert.equal((await s.owner("PATCH", "/api/agents/web-dev", settings)).status, 200);
+  assert.deepEqual(puts, ["web-dev"]);
+  assert.deepEqual((await s.owner("GET", "/api/agents/web-dev")).body, { ...settings, role: before.role });
   const spec = s.a12s.agents.get("web-dev")?.spec;
   assert.equal(spec?.harness.model, "opus");
   assert.deepEqual(spec?.power, { sleepAfterIdle: "30m", compactBeforeSleep: { minTokens: 50000 } });
   assert.deepEqual(spec?.resources, { cpu: 2, memory: "4Gi" });
-  assert.match(spec?.instructions ?? "", /Prefers small changes\.$/);
 
   await s.owner("PATCH", "/api/agents/web-dev", { cpu: null, memory: null });
   assert.equal(s.a12s.agents.get("web-dev")?.spec.resources, undefined);
-  assert.deepEqual((await s.owner("GET", "/api/agents/web-dev")).body, { ...patch, cpu: null, memory: null });
+  const now = (await s.owner("GET", "/api/agents/web-dev")).body as AgentSettings;
+  assert.deepEqual([now.cpu, now.memory], [null, null]);
 
   for (const bad of [{ team: "notes" }, { cpu: 0 }, { compactMinTokens: -1 }, { memory: "" }, { model: "" }]) {
     assert.equal((await s.owner("PATCH", "/api/agents/web-dev", bad)).status, 400, JSON.stringify(bad));
   }
 });
 
-test("Settings: a spec a12s refuses changes nothing in the row", async (t) => {
-  const s = await setup(t, {
-    wrap: (fake) => ({
-      ...fake,
-      putAgent: async (name, spec, mode) => {
-        if (spec.resources?.memory === "1Ki") throw new A12sError("other", "memory is below the minimum");
-        return fake.putAgent(name, spec, mode);
-      },
-    }),
-  });
-  assert.equal((await s.owner("PATCH", "/api/agents/web-dev", { memory: "1Ki", model: "opus" })).status, 502);
+test("Settings: a spec a12s refuses changes nothing, the role sent with it included", async (t) => {
+  const s = await setup(t, { wrap: recordPuts([]) });
+  const before = (await s.owner("GET", "/api/agents/web-dev")).body as AgentSettings;
+  const patch = { memory: "1Ki", model: "opus", role: "Only tests." };
+  assert.equal((await s.owner("PATCH", "/api/agents/web-dev", patch)).status, 502);
+  assert.deepEqual((await s.owner("GET", "/api/agents/web-dev")).body, before);
+});
+
+test("Role: a role writes a version, puts no spec, and GET answers it", async (t) => {
+  const puts: string[] = [];
+  const s = await setup(t, { wrap: recordPuts(puts) });
+  puts.length = 0;
+  const role = "Writes and tests the code. Prefers small changes.";
+  assert.equal((await s.owner("PATCH", "/api/agents/web-dev", { role })).status, 200);
+  assert.deepEqual(puts, []);
+  assert.equal(((await s.owner("GET", "/api/agents/web-dev")).body as AgentSettings).role, role);
+  assert.doesNotMatch(s.a12s.agents.get("web-dev")?.spec.instructions ?? "", /Prefers small changes/);
+
+  // With a setting, the spec is put first and the role is written after it.
+  assert.equal((await s.owner("PATCH", "/api/agents/web-dev", { role: "Ships.", model: "haiku" })).status, 200);
+  assert.deepEqual(puts, ["web-dev"]);
   const now = (await s.owner("GET", "/api/agents/web-dev")).body as AgentSettings;
-  assert.equal(now.memory, null);
-  assert.notEqual(now.model, "opus");
+  assert.deepEqual([now.role, now.model], ["Ships.", "haiku"]);
 });
 
 // Each terminal a12s opened, with its size.

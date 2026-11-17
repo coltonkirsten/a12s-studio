@@ -1,7 +1,7 @@
 // Development only: stands in for the app's owner API with a recorded state, so every state of the UI can be
 // looked at without Docker, a12s or a login. Vite never bundles this folder.
 import { createServer, type ServerResponse } from "node:http";
-import type { ErrorBody, Template } from "@a12s-studio/contract/api";
+import type { ErrorBody, RuleVersion, Template } from "@a12s-studio/contract/api";
 import type {
   AccessRequest,
   AccessView,
@@ -510,6 +510,69 @@ setInterval(() => {
   changed();
 }, 2500);
 
+// Every version of the owner rules ("owner"), a team's rules (its id) and a role (the agent's id), newest first.
+const RULES_PAGE = 50;
+let ruleSeq = 5;
+const rules = new Map<string, RuleVersion[]>([
+  [
+    "owner",
+    [
+      {
+        id: 2,
+        body: "Write in plain English.\nKeep posts short.\nNever push to main.",
+        author: "owner",
+        at: now - 3 * DAY,
+      },
+      { id: 1, body: "Write in plain English.\nKeep posts short.", author: "owner", at: now - 9 * DAY },
+    ],
+  ],
+  [
+    "website",
+    [
+      {
+        id: 5,
+        body: "Small pull requests, one change each.\nEvery change gets a test.\nAsk the owner before adding a dependency.",
+        author: "website-lead",
+        at: now - 40 * MIN,
+      },
+      {
+        id: 4,
+        body: "Small pull requests, one change each.\nEvery change gets a test.",
+        author: "owner",
+        at: now - 2 * DAY,
+      },
+      { id: 3, body: "Small pull requests.", author: "owner", at: now - 6 * DAY },
+    ],
+  ],
+]);
+for (const team of teams) {
+  for (const a of team.agents)
+    rules.set(a.id, [{ id: ++ruleSeq, body: a.roleLine, author: "owner", at: now - 9 * DAY }]);
+}
+
+// A rules write: a new version unless the text is the one now. A role also changes the agent's role line.
+const RULES_PATH = /^\/api\/(?:rules|teams\/([^/]+)\/rules|agents\/([^/]+)\/role)$/;
+
+function rulesWrite(path: string, method: string, b: Record<string, unknown>): void {
+  const match = RULES_PATH.exec(path);
+  const patched = method === "PATCH" ? /^\/api\/agents\/([^/]+)$/.exec(path)?.[1] : undefined;
+  const key = patched ?? match?.[1] ?? match?.[2] ?? (match ? "owner" : undefined);
+  if (key === undefined || (patched && typeof b.role !== "string")) return;
+  const versions = rules.get(key) ?? [];
+  const text = String(patched ? b.role : b.body).trim();
+  if (versions[0]?.body !== text)
+    rules.set(key, [{ id: ++ruleSeq, body: text, author: "owner", at: Date.now() }, ...versions]);
+  const agentView = teams.flatMap((t) => t.agents).find((a) => a.id === key);
+  if (agentView) agentView.roleLine = text.split("\n")[0] ?? "";
+}
+
+function rulesPage(path: string, before: number): string | undefined {
+  const match = RULES_PATH.exec(path);
+  if (!match) return undefined;
+  const older = (rules.get(match[1] ?? match[2] ?? "owner") ?? []).filter((v) => v.id < before);
+  return JSON.stringify({ versions: older.slice(0, RULES_PAGE), hasMore: older.length > RULES_PAGE });
+}
+
 async function body(req: AsyncIterable<Buffer>): Promise<Record<string, unknown>> {
   let raw = "";
   for await (const chunk of req) raw += chunk;
@@ -679,9 +742,16 @@ createServer(async (req, res) => {
     const older = teamAccess(team).audit.filter((e) => e.id < before);
     return res.end(JSON.stringify({ entries: older.slice(0, AUDIT_PAGE), hasMore: older.length > AUDIT_PAGE }));
   }
+  if (req.method === "GET") {
+    const page = rulesPage(url.pathname, Number(url.searchParams.get("before") ?? Number.POSITIVE_INFINITY));
+    if (page) return res.end(page);
+  }
   let id: string | undefined;
   try {
-    id = write(await body(req), url.pathname, req.method ?? "GET");
+    const b = await body(req);
+    const method = req.method ?? "GET";
+    rulesWrite(url.pathname, method, b);
+    id = write(b, url.pathname, method);
   } catch (error) {
     if (!(error instanceof Refusal)) throw error;
     res.statusCode = error.body.code === "not_found" ? 404 : 409;

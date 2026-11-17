@@ -1,6 +1,7 @@
 import { StudioError } from "../errors.ts";
 import { presenceOf } from "../live.ts";
 import { nameOf } from "../router.ts";
+import { roleLine } from "../rules.ts";
 import type { Tool } from "./mcp.ts";
 
 export const roster: Tool<Record<string, never>> = {
@@ -19,7 +20,7 @@ export const roster: Tool<Record<string, never>> = {
         const s = status.get(a.id);
         return {
           name: a.slug,
-          role: a.role.split("\n")[0] ?? "",
+          role: roleLine(team, a.id),
           presence: presenceOf(s?.phase, !!s?.background.length),
         };
       }),

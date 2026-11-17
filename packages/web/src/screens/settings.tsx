@@ -7,6 +7,7 @@ import { parseUsd } from "../logic/money.ts";
 import { title } from "../logic/names.ts";
 import { Problem } from "../parts/problem.tsx";
 import { Sheet } from "../parts/sheet.tsx";
+import { Versions } from "../parts/versions.tsx";
 
 const SLEEPS = ["5m", "15m", "30m", "1h", "2h"];
 
@@ -97,7 +98,7 @@ export function SettingsSheet({ settings, onClose }: { settings: Settings; onClo
       <LimitField
         key={`cap${settings.awakeCap}`}
         label="Agents awake at once"
-        hint="From 1 to 64. More wait their turn; your own asks go first."
+        hint="From 1 to 64. More wait their turn; your own messages go first."
         value={settings.awakeCap}
         parse={whole(1, 64)}
         save={(awakeCap) => patch({ awakeCap })}
@@ -138,6 +139,15 @@ export function SettingsSheet({ settings, onClose }: { settings: Settings; onClo
         parse={whole(0, 10_000_000)}
         save={(defaultCompactMinTokens) => patch({ defaultCompactMinTokens })}
       />
+      <section className="sheet-section">
+        <h3>Rules for every agent</h3>
+        <Versions
+          id="owner"
+          label="Every agent of every team follows these. Each gets a change with its next message."
+          load={api.rules}
+          save={api.putRules}
+        />
+      </section>
       <div className="sheet-actions">
         <button type="button" className="button primary" onClick={onClose}>
           Done

@@ -8,6 +8,7 @@ import { StudioError } from "./errors.ts";
 import { sendAttachment } from "./files.ts";
 import type { Live } from "./live.ts";
 import type { Repo } from "./repo.ts";
+import { text } from "./rules.ts";
 import type { Scheduler } from "./scheduler.ts";
 import { mcpServer } from "./tools/mcp.ts";
 
@@ -16,6 +17,7 @@ function json(res: ServerResponse, status: number, body: unknown): void {
 }
 
 const FILE = /^\/files\/([^/]+)\/([^/]+)$/;
+const RULES = /^\/rules\/([^/]+)$/;
 
 // The listener agents reach as the external Service `studio`. It serves no owner route.
 export function createAgentServer(deps: {
@@ -37,6 +39,11 @@ export function createAgentServer(deps: {
         const [id, name] = file.slice(1).map((p) => decodeURIComponent(p));
         const message = deps.repo.forTeam(caller.teamId).message(id ?? "");
         return await sendAttachment(res, deps.filesDir, message, name ?? "");
+      }
+      const layer = req.method === "GET" ? RULES.exec(path)?.[1] : undefined;
+      if (layer === "owner" || layer === "team" || layer === "role") {
+        const body = text(layer, deps.repo.forTeam(caller.teamId), caller);
+        return res.writeHead(200, { "content-type": "text/plain; charset=utf-8" }).end(body);
       }
       if (path !== "/mcp") throw new StudioError(404, "not_found", `No route ${path}.`);
       if (req.method !== "POST") throw new StudioError(405, "method", "Use POST for /mcp.");

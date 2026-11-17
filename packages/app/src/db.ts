@@ -1,6 +1,6 @@
 import { DatabaseSync } from "node:sqlite";
 
-const migrations: string[] = [
+export const migrations: string[] = [
   `
   CREATE TABLE settings (
     key TEXT PRIMARY KEY, value TEXT NOT NULL
@@ -128,6 +128,21 @@ const migrations: string[] = [
   CREATE INDEX messages_queue ON messages (to_id, delivery, created_at);
   CREATE INDEX messages_a12s ON messages (a12s_message_id);
   CREATE INDEX messages_turn ON messages (turn_id);
+  `,
+  `
+  CREATE TABLE rules (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    team_id TEXT REFERENCES teams(id),
+    agent_id TEXT REFERENCES agents(id),
+    body TEXT NOT NULL,
+    author TEXT NOT NULL,
+    created_at INTEGER NOT NULL,
+    CHECK (agent_id IS NULL OR team_id IS NOT NULL)
+  ) STRICT;
+  CREATE INDEX rules_scope ON rules (team_id, agent_id, id DESC);
+  INSERT INTO rules (team_id, agent_id, body, author, created_at)
+    SELECT team_id, id, role, 'owner', created_at FROM agents ORDER BY created_at, rowid;
+  ALTER TABLE agents DROP COLUMN role;
   `,
 ];
 

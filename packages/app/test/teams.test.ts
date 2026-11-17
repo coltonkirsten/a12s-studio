@@ -41,11 +41,33 @@ test("creating a team makes its token, its agents and its rows", async (t) => {
     ],
   );
   assert.deepEqual([...s.a12s.agents.keys()], ["web-lead", "web-dev"]);
+  // The brief and the roles are loaded by the hooks, not written into the instructions.
+  const instructions = s.a12s.agents.get("web-dev")?.spec.instructions ?? "";
+  assert.doesNotMatch(instructions, /The site\.|# Your role|Writes and tests/);
   assert.match(
-    s.a12s.agents.get("web-dev")?.spec.instructions ?? "",
-    /# Team: Web\nThe site\.\n\n# Your role\nWrites and tests/,
+    s.db.prepare("SELECT body, author FROM rules WHERE agent_id = 'web-dev'").get()?.body as string,
+    /^Writes and tests the website's code\./,
   );
   await assert.rejects(s.a12s.forTeam(team.a12sToken).wake("other-lead"), { code: "out_of_prefix" });
+});
+
+test("a new brief puts no spec; a new name puts every agent's", async (t) => {
+  const puts: string[] = [];
+  const wrap = (fake: FakeA12s): A12s => ({
+    ...fake,
+    putAgent(name, spec, mode) {
+      puts.push(`${name} ${mode}`);
+      return fake.putAgent(name, spec, mode);
+    },
+  });
+  const s = await setup(t, { wrap });
+  await s.app.teams.createTeam(body);
+  puts.length = 0;
+  await s.app.teams.patchTeam("web", { purpose: "A new brief." });
+  assert.deepEqual(puts, []);
+  await s.app.teams.patchTeam("web", { name: "Website" });
+  assert.deepEqual(puts, ["web-lead replace", "web-dev replace"]);
+  for (const agent of s.a12s.agents.values()) assert.match(agent.spec.instructions, /the team "Website"/);
 });
 
 test("a team's slug comes from its name, is never reused, and a template must exist", async (t) => {

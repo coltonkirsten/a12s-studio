@@ -13,6 +13,7 @@ import type {
   PostMessageBody,
   PowerBody,
   PutFileBody,
+  RulesPage,
   Template,
   TurnEventsResponse,
   TurnsResponse,
@@ -76,6 +77,7 @@ async function read<T>(path: string, lists: string[], what: string): Promise<T> 
 }
 
 const at = encodeURIComponent;
+const page = (before?: number) => (before === undefined ? "" : `?before=${before}`);
 
 export const api = {
   templates: async () => (await read<{ templates: Template[] }>("/templates", ["templates"], "templates")).templates,
@@ -103,6 +105,13 @@ export const api = {
   approve: (team: string, request: string, body: ApproveBody) =>
     write("POST", `/teams/${at(team)}/requests/${at(request)}/approve`, body),
   deny: (team: string, request: string) => write("POST", `/teams/${at(team)}/requests/${at(request)}/deny`),
+  rules: (before?: number) => read<RulesPage>(`/rules${page(before)}`, ["versions"], "rules"),
+  putRules: (body: string) => write("PUT", "/rules", { body }),
+  teamRules: (team: string, before?: number) =>
+    read<RulesPage>(`/teams/${at(team)}/rules${page(before)}`, ["versions"], "rules"),
+  putTeamRules: (team: string, body: string) => write("PUT", `/teams/${at(team)}/rules`, { body }),
+  role: (agent: string, before?: number) =>
+    read<RulesPage>(`/agents/${at(agent)}/role${page(before)}`, ["versions"], "role"),
   agent: (agent: string) => read<AgentSettings>(`/agents/${at(agent)}`, [], "agent settings"),
   patchAgent: (agent: string, body: PatchAgentBody) => write("PATCH", `/agents/${at(agent)}`, body),
   turns: (agent: string) => read<TurnsResponse>(`/agents/${at(agent)}/turns`, ["turns"], "Turns"),

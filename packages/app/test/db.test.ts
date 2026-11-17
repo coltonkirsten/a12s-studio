@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { test } from "node:test";
-import { openDb, tx } from "../src/db.ts";
+import { migrations, openDb, tx } from "../src/db.ts";
 import { createRepo } from "../src/repo.ts";
 import { boardStatus } from "../src/router.ts";
 
@@ -16,7 +16,7 @@ test("migrations apply to a new file and re-apply as a no-op", () => {
   first.close();
 
   const again = openDb(file);
-  assert.equal(again.prepare("PRAGMA user_version").get()?.user_version, 2);
+  assert.equal(again.prepare("PRAGMA user_version").get()?.user_version, migrations.length);
   const settings = again.prepare("SELECT key, value FROM settings ORDER BY key").all();
   assert.equal(settings.length, 7);
   assert.deepEqual({ ...settings[0] }, { key: "awake_cap", value: "4" });
@@ -45,7 +45,9 @@ test("migration 2 turns asks, replies and notes into one kind of message and kee
   const old = new DatabaseSync(file);
   old.exec(`
     CREATE TABLE teams (id TEXT PRIMARY KEY) STRICT;
-    CREATE TABLE agents (id TEXT PRIMARY KEY, team_id TEXT NOT NULL REFERENCES teams(id)) STRICT;
+    CREATE TABLE agents (
+      id TEXT PRIMARY KEY, team_id TEXT NOT NULL REFERENCES teams(id), role TEXT NOT NULL DEFAULT '',
+      created_at INTEGER NOT NULL DEFAULT 0) STRICT;
     CREATE TABLE threads (
       id TEXT PRIMARY KEY, team_id TEXT NOT NULL REFERENCES teams(id), title TEXT NOT NULL,
       owner_agent_id TEXT NOT NULL REFERENCES agents(id), status TEXT NOT NULL CHECK (status IN ('open','done')),
@@ -59,7 +61,7 @@ test("migration 2 turns asks, replies and notes into one kind of message and kee
     CREATE TABLE turns (id TEXT PRIMARY KEY, team_id TEXT NOT NULL, thread_id TEXT, cost_usd REAL NOT NULL) STRICT;
     CREATE UNIQUE INDEX messages_one_reply ON messages (ask_id) WHERE kind = 'reply';
     INSERT INTO teams VALUES ('web');
-    INSERT INTO agents VALUES ('web-lead', 'web'), ('web-dev', 'web');
+    INSERT INTO agents (id, team_id) VALUES ('web-lead', 'web'), ('web-dev', 'web');
     INSERT INTO threads VALUES ('th_open', 'web', 'Waiting', 'web-lead', 'open', 1, 1),
       ('th_answered', 'web', 'Answered', 'web-lead', 'open', 1, 1);
     INSERT INTO messages (id, team_id, thread_id, kind, from_id, to_id, ask_id, body, delivery, created_at) VALUES
@@ -73,7 +75,7 @@ test("migration 2 turns asks, replies and notes into one kind of message and kee
   old.close();
 
   const db = openDb(file);
-  assert.equal(db.prepare("PRAGMA user_version").get()?.user_version, 2);
+  assert.equal(db.prepare("PRAGMA user_version").get()?.user_version, migrations.length);
   assert.equal(db.prepare("PRAGMA foreign_keys").get()?.foreign_keys, 1);
   const columns = db
     .prepare("SELECT name FROM pragma_table_info('messages')")
@@ -91,5 +93,37 @@ test("migration 2 turns asks, replies and notes into one kind of message and kee
   assert.equal(repo.board({ status: "all", limit: 10 }).find((t) => t.id === "th_open")?.forOwner, 2);
   assert.equal(board.get("th_answered"), "open");
   assert.deepEqual([...repo.dispatchable().keys()], ["web-dev"], "a queued note is now a message to deliver");
+  db.close();
+});
+
+test("migration 3 keeps every role as a first version by the owner, and the role column goes", () => {
+  const file = join(mkdtempSync(join(tmpdir(), "studio-db-")), "studio.db");
+  const old = new DatabaseSync(file);
+  for (const sql of migrations.slice(0, 2)) old.exec(sql);
+  old.exec(`
+    PRAGMA user_version = 2;
+    INSERT INTO teams (id, name, purpose, accent, daily_budget_usd, a12s_token, created_at)
+      VALUES ('web', 'Web', 'p', '#000000', 25, 't', 1);
+    INSERT INTO agents (id, team_id, slug, role, model, sleep_after_idle, compact_min_tokens, created_at, removed_at)
+      VALUES ('web-lead', 'web', 'lead', 'Plans.', 'sonnet', '15m', 0, 10, NULL),
+             ('web-dev', 'web', 'dev', 'Codes.\nTests.', 'sonnet', '15m', 0, 20, NULL),
+             ('web-qa', 'web', 'qa', 'Tested.', 'sonnet', '15m', 0, 30, 40);
+  `);
+  old.close();
+
+  const db = openDb(file);
+  assert.deepEqual(
+    db
+      .prepare("SELECT team_id, agent_id, body, author, created_at FROM rules ORDER BY id")
+      .all()
+      .map((row) => ({ ...row })),
+    [
+      { team_id: "web", agent_id: "web-lead", body: "Plans.", author: "owner", created_at: 10 },
+      { team_id: "web", agent_id: "web-dev", body: "Codes.\nTests.", author: "owner", created_at: 20 },
+      { team_id: "web", agent_id: "web-qa", body: "Tested.", author: "owner", created_at: 30 },
+    ],
+  );
+  const columns = db.prepare("SELECT name FROM pragma_table_info('agents')").all();
+  assert.ok(!columns.some((c) => c.name === "role"));
   db.close();
 });
