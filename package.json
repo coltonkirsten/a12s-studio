@@ -14,8 +14,8 @@
     "packages/e2e"
   ],
   "scripts": {
-    "check": "biome check && npm run typecheck --workspaces && npm test",
-    "test": "node --test \"packages/*/test/**/*.test.ts\" \"packages/web/src/logic/**/*.test.ts\"",
+    "check": "biome check && npm run typecheck --workspaces && tsc -p scripts && npm test",
+    "test": "node --test \"packages/*/test/**/*.test.ts\" \"packages/web/src/logic/**/*.test.ts\" \"scripts/test/*.test.ts\"",
     "start": "trap 'kill 0' EXIT; node packages/broker/src/main.ts & node packages/app/src/main.ts & wait",
     "dev": "trap 'kill 0' EXIT; npm run dev -w @a12s-studio/app & npm run dev -w @a12s-studio/broker & npm run dev -w @a12s-studio/web & wait",
     "build": "npm run build -w @a12s-studio/web",
