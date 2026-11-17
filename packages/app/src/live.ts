@@ -149,7 +149,7 @@ export function doingNow(tool: string, input: unknown): string {
   }
   if (tool.startsWith(TOOL_PREFIX)) {
     const name = tool.slice(TOOL_PREFIX.length);
-    if (name === "post") return str("to") ? `Writing to ${str("to")}` : "Writing in the thread";
+    if (name === "post") return `Writing to ${str("to")}`;
     if (STUDIO_LINES[name]) return STUDIO_LINES[name];
   }
   return `Using ${tool}`;

@@ -9,7 +9,7 @@ export type Entry =
 const SHOWN_DEPTH = 3;
 
 function betweenAgents(m: MessageView): boolean {
-  return m.from !== "owner" && m.from !== "system" && m.to !== null && m.to !== "owner";
+  return m.from !== "owner" && m.from !== "system" && m.to !== "owner";
 }
 
 /** "Lead", "Lead and Dev", "Lead, Dev and Writer". */
@@ -20,7 +20,7 @@ function names(ids: string[]): string {
 }
 
 function summary(run: MessageView[]): string {
-  const agents = [...new Set(run.flatMap((m) => [m.from, m.to ?? ""]))];
+  const agents = [...new Set(run.flatMap((m) => [m.from, m.to]))];
   const count = `${run.length} ${run.length === 1 ? "message" : "messages"}`;
   const depth = Math.max(...run.map((m) => m.depth));
   return [names(agents), count, ...(depth >= SHOWN_DEPTH ? [`${depth} deep`] : [])].join(" · ");
@@ -28,7 +28,7 @@ function summary(run: MessageView[]): string {
 
 /**
  * Runs of agent-to-agent messages become one line (build-spec 7.7); the owner sees their own words, what is written
- * to them, Studio's messages and records in the thread as they are.
+ * to them and Studio's messages as they are.
  */
 export function fold(messages: MessageView[]): Entry[] {
   const entries: Entry[] = [];

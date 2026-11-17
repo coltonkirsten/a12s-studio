@@ -33,7 +33,6 @@ const MISSING_MESSAGE = "m_000000000000";
 
 const cases: [string, (id: string) => [string, Record<string, unknown>], "thread" | "message"][] = [
   ["post to a teammate in a thread", (id) => ["post", { to: "dev", thread: id, body: "x" }], "thread"],
-  ["post a record in a thread", (id) => ["post", { thread: id, body: "x" }], "thread"],
   ["read a thread", (id) => ["read", { thread: id }], "thread"],
   ["read a thread before a message", (id) => ["read", { thread: id, before: id }], "thread"],
   ["update_thread", (id) => ["update_thread", { thread: id, status: "done" }], "thread"],

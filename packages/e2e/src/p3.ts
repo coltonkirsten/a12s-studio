@@ -9,7 +9,7 @@ import { fileURLToPath } from "node:url";
 import type { MessagesPage, WriteResult } from "@a12s-studio/contract/api";
 import type { AccessView } from "@a12s-studio/contract/broker-admin";
 import type { AgentView, NeedsYouItem, StudioState } from "@a12s-studio/contract/state";
-import { ANSWER_MS, answerFrom, createTeam, messages, ownerMessage, type Studio, step } from "./studio.ts";
+import { ANSWER_MS, agentOf, answerFrom, createTeam, messages, ownerMessage, type Studio, step } from "./studio.ts";
 
 const repo = fileURLToPath(new URL("../../..", import.meta.url));
 // What the data folder holds of Studio's own; the Fleet file and the run's logs stay.
@@ -17,7 +17,6 @@ const STUDIO_DATA = ["config.json", "app", "broker"];
 const BACKGROUND_RUNS = 3;
 
 const agents = (state: StudioState): AgentView[] => state.teams.flatMap((t) => t.agents);
-const agent = (state: StudioState, id: string): AgentView | undefined => agents(state).find((a) => a.id === id);
 const awake = (state: StudioState) =>
   agents(state)
     .filter((a) => a.presence === "awake" || a.presence === "working")
@@ -121,7 +120,7 @@ export async function p3(studio: Studio): Promise<void> {
     const held = await ownerMessage(studio, team, "Held", "Answer me with the single word: three");
     await studio.until(
       `${lead} waiting for the budget, and the budget card`,
-      (s) => agent(s, lead)?.waitingFor === "budget" && hasCard(s, "budget", (card) => card.teamId === team),
+      (s) => agentOf(s, lead)?.waitingFor === "budget" && hasCard(s, "budget", (card) => card.teamId === team),
       60_000,
     );
     await studio.api("PATCH", `/teams/${team}`, { dailyBudgetUsd: dailyUsd });
@@ -132,7 +131,7 @@ export async function p3(studio: Studio): Promise<void> {
   await step("A forced agent error shows its card; set back and woken, the card is gone", async () => {
     const errorCard = (s: StudioState) => hasCard(s, "agent_error", (card) => card.agentId === dev);
     await studio.api("POST", `/agents/${dev}/power`, { state: "asleep" });
-    await studio.until(`${dev} asleep`, (s) => agent(s, dev)?.presence === "asleep", ANSWER_MS);
+    await studio.until(`${dev} asleep`, (s) => agentOf(s, dev)?.presence === "asleep", ANSWER_MS);
     // Too little memory for the agent computer to start.
     await studio.api("PATCH", `/agents/${dev}`, { memory: "8Mi" });
     // a12s answers the wake with the failure (the computer is killed while a12s sets it up); the phase it then
@@ -146,7 +145,7 @@ export async function p3(studio: Studio): Promise<void> {
     await studio.api("POST", `/agents/${dev}/power`, { state: "awake" });
     await studio.until(
       `${dev} awake and no error card`,
-      (s) => !errorCard(s) && agent(s, dev)?.presence !== "error",
+      (s) => !errorCard(s) && agentOf(s, dev)?.presence !== "error",
       ANSWER_MS,
     );
   });
@@ -169,7 +168,7 @@ export async function p3(studio: Studio): Promise<void> {
           `${lead} working in the background with one work item and no Turn`,
           (s) => {
             if (done(s)) throw new Error(`${notBackground}: it reported before any background work showed`);
-            const a = agent(s, lead);
+            const a = agentOf(s, lead);
             return a?.presence === "working" && a.turn === null && a.work.length === 1;
           },
           ANSWER_MS,
@@ -181,7 +180,7 @@ export async function p3(studio: Studio): Promise<void> {
       await studio.until(`the word done from ${lead}`, done, ANSWER_MS);
       await studio.until(
         `${lead} with no work and not working`,
-        (s) => agent(s, lead)?.work.length === 0 && agent(s, lead)?.presence !== "working",
+        (s) => agentOf(s, lead)?.work.length === 0 && agentOf(s, lead)?.presence !== "working",
         ANSWER_MS,
       );
     });
@@ -206,10 +205,7 @@ export async function p3(studio: Studio): Promise<void> {
     const answer = finished(state);
     assert.ok(wake, "the thread has no scheduled wake");
     assert.ok(answer && answer.at > wake.at, "the lead answered before its wake");
-    assert.ok(
-      thread.some((m) => m.from === lead && m.to === dev && m.at > wake.at),
-      `${lead} did not write to ${dev} after the wake`,
-    );
+    // The file is the evidence the lead handed the task on: it may write to dev in a thread of its own.
     assert.match(await studio.shell(dev, "cat ~/hello.txt"), /hello/i);
     const { spentTodayUsd, dailyUsd } = budget(studio.state(), team);
     assert.ok(spentTodayUsd < dailyUsd, `spent ${spentTodayUsd} of a ${dailyUsd} budget`);

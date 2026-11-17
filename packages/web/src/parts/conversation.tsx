@@ -117,7 +117,7 @@ export function Conversation({ team, thread, route }: Props) {
 // Under a message to an agent: how it reached that agent. It opens the agent's inspector.
 function Delivery({ message, route }: { message: MessageView; route: Route }) {
   const line = deliveryLine(message);
-  if (line === null || message.to === null) return null;
+  if (line === null) return null;
   return (
     <a className="delivery" href={inspectHref(message.to, route)}>
       {line}
@@ -140,7 +140,7 @@ function EntryView({ entry, now, route }: { entry: Entry; now: number; route: Ro
             <div key={m.id} className="talk-message">
               <header>
                 <b>{displayName(m.from)}</b>
-                <span>to {displayName(m.to ?? "")}</span>
+                <span>to {displayName(m.to)}</span>
                 <time>{shortTime(m.at, now)}</time>
               </header>
               <div className="body">
@@ -179,7 +179,7 @@ function Message({ message, now, route }: { message: MessageView; now: number; r
     <div className="msg theirs">
       <header>
         <b>{displayName(message.from)}</b>
-        {message.to !== null && <span>to {displayName(message.to)}</span>}
+        <span>to {displayName(message.to)}</span>
         <time>{shortTime(message.at, now)}</time>
       </header>
       <div className="body">

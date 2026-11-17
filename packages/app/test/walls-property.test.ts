@@ -54,7 +54,7 @@ for (const seed of [1, 2, 3]) {
       const [name, args] = pick([
         ["post", { to: pick(slugs), title: `t${i}`, body: `b${i}` }],
         ["post", { to: pick(slugs), thread: id, body: `b${i}` }],
-        ["post", { thread: id, body: `n${i}`, ...(i % 2 ? { to: pick(slugs) } : {}) }],
+        ["post", { to: i % 2 ? pick(slugs) : "owner", thread: id, body: `n${i}` }],
         ["read", {}],
         ["read", { status: "all", before: id }],
         ["read", { thread: id }],

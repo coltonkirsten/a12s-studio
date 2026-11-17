@@ -127,3 +127,47 @@ test("migration 3 keeps every role as a first version by the owner, and the role
   assert.ok(!columns.some((c) => c.name === "role"));
   db.close();
 });
+
+test("migration 4 gives every message a receiver, and no thread newly needs the owner", () => {
+  const file = join(mkdtempSync(join(tmpdir(), "studio-db-")), "studio.db");
+  const old = new DatabaseSync(file);
+  for (const sql of migrations.slice(0, 3)) old.exec(sql);
+  old.exec(`
+    PRAGMA user_version = 3;
+    INSERT INTO teams (id, name, purpose, accent, daily_budget_usd, a12s_token, created_at)
+      VALUES ('web', 'Web', 'p', '#000000', 25, 't', 1);
+    INSERT INTO agents (id, team_id, slug, model, sleep_after_idle, compact_min_tokens, created_at)
+      VALUES ('web-lead', 'web', 'lead', 'sonnet', '15m', 0, 10), ('web-dev', 'web', 'dev', 'sonnet', '15m', 0, 20);
+    INSERT INTO threads (id, team_id, title, owner_agent_id, status, owner_seen_at, created_at, updated_at) VALUES
+      ('th_quiet', 'web', 'Quiet', 'web-lead', 'open', 50, 1, 1),
+      ('th_waiting', 'web', 'Waiting', 'web-lead', 'open', 50, 1, 1);
+    INSERT INTO messages (id, team_id, thread_id, from_id, to_id, body, cause_id, depth, delivery, created_at) VALUES
+      ('m_seen', 'web', 'th_quiet', 'web-lead', 'owner', 'Done.', NULL, 0, 'none', 40),
+      ('m_record', 'web', 'th_quiet', 'web-dev', NULL, 'Staging is rebuilt.', 'm_seen', 1, 'none', 60),
+      ('m_ask', 'web', 'th_waiting', 'web-lead', 'owner', 'Blue or green?', NULL, 0, 'none', 70),
+      ('m_progress', 'web', 'th_waiting', 'web-lead', NULL, 'Still waiting.', NULL, 0, 'none', 80),
+      ('m_sent', 'web', 'th_waiting', 'web-lead', 'web-dev', 'Hold on.', NULL, 0, 'queued', 90);
+  `);
+  old.close();
+
+  const db = openDb(file);
+  assert.equal(db.prepare("PRAGMA foreign_keys").get()?.foreign_keys, 1);
+  assert.throws(
+    () =>
+      db.exec(
+        "INSERT INTO messages (id, team_id, from_id, body, delivery, created_at) VALUES ('m', 'web', 'system', 'b', 'none', 1)",
+      ),
+    /NOT NULL/,
+  );
+  const repo = createRepo(db).forTeam("web");
+  assert.deepEqual(
+    ["m_seen", "m_record", "m_ask", "m_progress", "m_sent"].map((id) => repo.message(id)?.toId),
+    ["owner", "owner", "owner", "owner", "web-dev"],
+  );
+  assert.deepEqual([repo.message("m_record")?.causeId, repo.message("m_record")?.depth], ["m_seen", 1]);
+  const board = new Map(repo.board({ status: "all", limit: 10 }).map((t) => [t.id, boardStatus(t)]));
+  assert.equal(board.get("th_quiet"), "open", "what was written to nobody asks for nobody now");
+  assert.equal(board.get("th_waiting"), "needs_you");
+  assert.deepEqual([...repo.dispatchable().keys()], ["web-dev"]);
+  db.close();
+});

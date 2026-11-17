@@ -108,8 +108,8 @@ Throwaway code. Each has one decision hanging on it.
 | M7 | An agent asleep with a pending Message and no `wakeOnMessage`: does it stay asleep until `wake()`? Does `wake()` on a prefix token work and stay outside `maxWakesPerHour`? | The wake design (section 5.3). **Measured:** `POST …/power {"state":"awake"}` on a prefix token wakes it. |
 | M8 | How a Docker volume name maps to an agent computer's home drive (`GET /v1/drives`). | The backup script. **Measured:** `GET /v1/drives` (owner token) lists `{ name, kind, computer, attachedTo?, orphaned? }`; an agent computer's home drive is `home-<computer>` with kind `home`, and it outlives the computer (`orphaned: true`). Its Docker volume is `a12s-<fleet>-<drive name>`, labelled `a12s.fleet`, `a12s.drive` and `a12s.computer`. The backup lists the home drives through the API and reaches each volume by that name. |
 | M9 | A Service a12s runs, named `<team>-addon-<id>`, whose spec `uses` the external Services `broker` and `studio`: is that name stamped as the caller on its calls to both? Do two Services start from one image whose `service.json` carries a third name? Is an agent computer whose spec does not name the Service refused by the proxy? Which tool prefix do agents see for its MCP port? Does a write that names an image the host lacks pull it? | Section 10 as written. It is measured by the first add-on package, not in Phase 0. |
-| M10 | With `inbox.duringTurn: steer`: is a Message sent to a `Busy` agent listed by a `turn.steered` event of the running Turn, and does the model read it before that Turn ends? Does one sent as the Turn ends start a new Turn that lists it in `turn.started`, once? | Delivery into a running Turn (section 5.3). It is measured by the a12s step of the steering work, not in Phase 0. Where a12s cannot steer, a message for a working agent starts its next Turn; the app's code is the same, because `turn.steered` is only one more way a message is reported delivered. |
-| M11 | A `UserPromptSubmit` hook given through `harness.settings` prints text: does it reach the model when a Message starts a Turn, and when one joins a running Turn? Does `curl` in a hook reach `STUDIO_URL`? | How a changed rule reaches an agent (section 6). It is measured by the rules package. If the hook does not run for a Message that joins a Turn, a changed layer arrives with the next Turn instead. If its output never reaches the model, the app sends the changed layer to each agent it applies to as a message from `system`. |
+| M10 | With `inbox.duringTurn: steer`: is a Message sent to a `Busy` agent listed by a `turn.steered` event of the running Turn, and does the model read it before that Turn ends? Does one sent as the Turn ends start a new Turn that lists it in `turn.started`, once? | Delivery into a running Turn (section 5.3). It is measured by the a12s step of the steering work, not in Phase 0. Where a12s cannot steer, a message for a working agent starts its next Turn; the app's code is the same, because `turn.steered` is only one more way a message is reported delivered. **Measured** (a12s 0.12.0, Claude Code 2.1.280, by `steer.ts`): a Message sent to an agent in the middle of a one-minute foreground command is listed by a `turn.steered` event of that Turn once the command ends, and the model answers it in the same Turn. In the pair runs about two in five of the messages between the two agents joined a running Turn. |
+| M11 | A `UserPromptSubmit` hook given through `harness.settings` prints text: does it reach the model when a Message starts a Turn, and when one joins a running Turn? Does `curl` in a hook reach `STUDIO_URL`? | How a changed rule reaches an agent (section 6). It is measured by the rules package. If the hook does not run for a Message that joins a Turn, a changed layer arrives with the next Turn instead. If its output never reaches the model, the app sends the changed layer to each agent it applies to as a message from `system`. **Measured** (same releases, by `steer.ts`): the hook runs for a Message that joins a running Turn; after the owner changed the team rules during a long command, the steered Message brought the new text, the model followed it in that Turn, and the agent computer kept its session and container. `curl` in the hook reaches `STUDIO_URL`. |
 
 **Phase 0 exit:** inside an agent container the environment and disk show no GitHub token, a push works, and the
 forwarder logged the right caller name.
@@ -251,7 +251,7 @@ CREATE TABLE messages (
   team_id TEXT NOT NULL REFERENCES teams(id),
   thread_id TEXT REFERENCES threads(id),               -- null only when from_id = 'system'
   from_id TEXT NOT NULL,                               -- agent id | 'owner' | 'system'
-  to_id TEXT,                                          -- agent id | 'owner' | null (a record in the thread)
+  to_id TEXT NOT NULL,                                 -- agent id | 'owner'
   body TEXT NOT NULL,
   file_name TEXT,                                      -- stored at app/files/<id>/<file_name>
   cause_id TEXT REFERENCES messages(id),               -- the message that set it off (section 5.9); null: none
@@ -386,7 +386,7 @@ a one-sentence fix. Tool inputs are strict: a field a tool does not name is refu
 ```ts
 post: {
   body: string,            // 1..32000 chars
-  to?: string,             // agent slug or "owner"; left out: a record in the thread, delivered to nobody
+  to: string,              // agent slug or "owner"
   thread?: string,         // thread id
   title?: string,          // 1..120 chars: starts a new thread owned by the caller
   file?: string            // absolute path under /home/agent
@@ -394,7 +394,8 @@ post: {
 ```
 
 Exactly one of `thread` and `title` is given. `to` is another current agent on the team, or `owner`; never the
-caller. There is one kind of message: no field says what a message is for, and none points at the message it
+caller. Every post names its receiver: one that reached nobody would leave whoever asked waiting, so a post without
+`to` is refused with who to name. There is one kind of message: no field says what a message is for, and none points at the message it
 answers. What a message does to its receiver is section 5.3.
 
 **A file** is copied when the post is made: the app reads it from the caller's home with `readFile` and stores it at
@@ -480,7 +481,7 @@ A message's `delivery`:
 
 | State | Meaning |
 |---|---|
-| `none` | Nothing to deliver: `to_id` is `owner` or null. |
+| `none` | Nothing to deliver: `to_id` is `owner`. |
 | `queued` | Waiting in the app. |
 | `sent` | In the agent's a12s inbox; `a12s_message_id` set. |
 | `delivered` | A `turn.started` or a `turn.steered` event listed that a12s Message id. `turn_id` is that Turn, and `steered` is 1 for `turn.steered`. |
@@ -488,7 +489,7 @@ A message's `delivery`:
 Rules when a message is committed (`router.ts`):
 
 - A message to a current agent: `queued`, then the dispatcher runs.
-- A message to `owner`, or with no receiver: `none`.
+- A message to `owner`: `none`.
 - A `post` returns only after its transaction has committed. The dispatcher runs after the commit, not inside it.
 
 No rule looks at what a message is for, at what it answers, or at how many came before it. Section 5.9 records
@@ -749,20 +750,22 @@ You are {agent}, a member of the team "{team}" in a12s Studio. One person, the o
 How work flows
 - All work lives in threads. Your studio tools are post, read, update_thread, roster, rules, schedule and access.
 - Nobody sees your plain output. The owner and your teammates see only what you send with post.
-- post writes one message in a thread. With to, it goes to that teammate or to the owner. A teammate who is
+- post writes one message in a thread, and to names who it is for: a teammate or the owner. A teammate who is
   working gets it inside the turn they are in, between two steps; one who is idle or asleep is woken by it.
-  Without to, it is only recorded in the thread and reaches nobody: use that for progress.
+  To answer a message, post to its sender.
 - Messages reach you the same way. One that arrives while you work belongs to the turn you are in: read it,
   adjust what you are doing, carry on. Not every message needs an answer.
 - After a message that needs an answer, do what you can without it, then end your turn. The answer comes to
   you by itself. Never call read to wait for it.
-- When a thread's work is finished, tell whoever asked for it, once, and set the thread to done.
+- When you finish something you were asked to do, post the result to whoever asked, once. When a thread's
+  work is finished, set the thread to done.
 
 Messaging teammates
 - A message to a teammate costs them a turn or interrupts their work. Send one only when it changes what they
   should do, or gives them something they asked for.
 - Never send a message only to acknowledge, thank, agree or say you are starting. Silence means received.
-- Batch. One message with everything, not several small ones. Progress goes in a post without to.
+- Batch. One message with everything, not several small ones. Post no progress reports: the owner can watch
+  your work as it happens.
 - Stop when an exchange has stopped producing decisions. After three rounds with the same teammate on the same
   question, decide yourself and say what you chose, or put the options to the owner once.
 - Every message to the owner asks for their attention. Write to them to hand over a result, or for a real gap.
@@ -965,7 +968,7 @@ event that ends it. No clock in the app or the browser decides that an agent is 
 | `Grep`, `Glob` | Searching |
 | `WebFetch`, `WebSearch` | Browsing `<host or query>` |
 | `Agent`, `Task` | Working with a sub-agent |
-| studio `post` | Writing to `<receiver>` (with no receiver: Writing in the thread) |
+| studio `post` | Writing to `<receiver>` |
 | other studio tools | Checking the board / the roster / the rules / access / its schedule |
 | anything else | Using `<tool name>` |
 
@@ -1116,7 +1119,7 @@ All of it is drawn from the open thread's `MessageView`s and `ThreadView.chain`;
   line: the names of the agents in it, senders and receivers, in the order they first appear, the number of
   messages, and, from a depth of 3, the
   greatest `depth` in the run (`Lead and Dev · 14 messages · 9 deep`). It opens on click. Messages from or to the
-  owner, messages from `system` and records with no receiver are never folded.
+  owner and messages from `system` are never folded.
 - **The delivery line.** Under every message to an agent is one quiet line made from `delivered`: `joined Dev's
   turn`, `woke Dev`, or `waiting for Dev` while it is null. It opens Dev's inspector, on its Now tab.
 - **The Chain view** (`logic/chain.ts`, `parts/chain.tsx`). A switch in the thread's header replaces the
@@ -1590,9 +1593,10 @@ from the README alone.
     missing one; `post` to another team's agent is refused; a property test runs random tool calls from two teams and
     asserts every row's `team_id` equals its caller's team and no read returns another team's row; run-time a12s
     calls for team A never name a team B agent (asserted by the fake).
-  - *Routing:* a message to an agent is sent, and wakes it if it sleeps; one to the owner or to nobody produces no
-    a12s send; a message for a working agent is delivered by `turn.steered` into the running Turn and starts none;
-    one that misses the Turn starts the next and is delivered once; no post is refused for what it answers or for how
+  - *Routing:* a message to an agent is sent, and wakes it if it sleeps; one to the owner produces no a12s send; a
+    post that names no receiver is refused and writes nothing; a message for a working agent is delivered by
+    `turn.steered` into the running Turn and starts none; one that misses the Turn starts the next and is delivered
+    once; no post is refused for what it answers or for how
     many came before it; cause and depth along a chain through three agents, and none for a post outside a Turn; a
     thread needs the owner from an agent's message to them until they post or mark it read, and never when done;
     owner messages jump the queue; pause holds and resume delivers in order;
@@ -1641,5 +1645,5 @@ from the README alone.
   | `p1.ts` | Two teams are created and both leads answer the owner. A lead writes to a second agent and does not call `read` to wait for the answer, which comes back in the thread. The app is stopped and started mid-conversation; the state is the same and still live. |
   | `p2.ts` | From inside an agent's container a call with no grant is a 403. The agent requests access with the `access` tool; the card appears; approving makes the same call succeed at once; a second request, denied, stays a 403; a grant with a short expiry is a 403 after it; the same call from another team's agent is a 403. The agent clones the repository, commits and pushes a branch, which GitHub then lists; the token is in neither the container's environment nor its home drive. |
   | `p3.ts` | With the awake cap at 1 and messages for two agents, two are never awake together. A budget set below today's spend holds the team and shows its card; raising it delivers. A forced agent error (memory `8Mi`: a12s answers the wake with the failure and reports phase `Error`) shows its card, and is gone after the memory is set back and the agent woken. An agent asked to run a command in the background and end its Turn stays working, with the command listed under it and no Turn, until the command ends and the agent reports. After a backup, the data folder is emptied and restored, and teams, threads, grants and an agent's notes are as before. |
-  | `steer.ts` | Two agents get tasks that depend on each other: each needs something only the other produces, and both must check the joined result. The owner writes one message and nothing more. When the thread is done the script prints, for that thread: the messages between the two agents, how many joined a running Turn and how many started one, the deepest chain, the Turns and the cost. It fails only if the work is not done in 20 minutes or the two exchange more than 40 messages; every other number is a report, not a verdict. It runs three times and prints the three rows. Then a message sent to an agent in the middle of a long command is delivered into that Turn. Then a team rule is changed while an agent works and the agent gets a message: the file `load-rules` keeps in the agent's home holds the new text, and the agent computer has not restarted; the lead changes a role with the `rules` tool and another agent's attempt is refused. |
+  | `steer.ts` | Two agents get tasks that depend on each other: each needs something only the other produces, and both must check the joined result. The owner writes one message and nothing more. When the thread is done the script prints, for that thread: the messages between the two agents, how many joined a running Turn and how many started one, the deepest chain, the Turns and the cost, and the longest run of those messages whose sender called no tool but `post` since the one before (a measure of idle back and forth). It fails only if the work is not done in 20 minutes or the two exchange more than 40 messages; every other number is a report, not a verdict. It runs three times and prints the three rows. Then a message sent to an agent in the middle of a long command is delivered into that Turn. Then a team rule is changed while an agent works and the agent gets a message: the file `load-rules` keeps in the agent's home holds the new text, and the agent computer has not restarted; the lead changes a role with the `rules` tool and another agent's attempt is refused. |
   | `p4.ts` | The example add-on is turned on for one team: its agent uses the tool, the broker's audit shows the call under the instance's name, the reported cost is in the team's spend and a budget below it holds the team; the instance's container holds no secret; another team's agent cannot reach it; turned off, the grants are revoked and the Service is gone. |

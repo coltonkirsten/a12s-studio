@@ -1,6 +1,13 @@
-import type { ErrorBody, MessagesPage, WriteResult } from "@a12s-studio/contract/api";
+import type {
+  ErrorBody,
+  MessagesPage,
+  ToolCall,
+  TurnEventsResponse,
+  TurnsResponse,
+  WriteResult,
+} from "@a12s-studio/contract/api";
 import { OWNER_PORT } from "@a12s-studio/contract/names";
-import type { MessageView, StudioState } from "@a12s-studio/contract/state";
+import type { AgentView, MessageView, StudioState } from "@a12s-studio/contract/state";
 
 const BASE = `http://127.0.0.1:${OWNER_PORT}/api`;
 const RECONNECT_MS = 250;
@@ -34,6 +41,8 @@ export type Studio = {
   // Wakes the agent as the owner can, then runs `command` with sh in its container and answers the output. A secret
   // goes in `input`, on the command's stdin: a12s journals the command itself.
   shell(agent: string, command: string, input?: string): Promise<string>;
+  // The agent computer's harness session, as a12s status reports it; null before its first Turn.
+  session(agent: string): Promise<string | null>;
   atEnd: AtEnd;
   // The data folder, STUDIO_HOME of both processes.
   home: string;
@@ -58,6 +67,9 @@ export async function step<T>(title: string, run: () => Promise<T>): Promise<T> 
 
 export const messages = (state: StudioState): MessageView[] => state.open?.messages ?? [];
 
+export const agentOf = (state: StudioState, id: string): AgentView | undefined =>
+  state.teams.flatMap((t) => t.agents).find((a) => a.id === id);
+
 // The first message from `from` to `to` (by default the owner) after the message `after`, in the open thread.
 export function answerFrom(state: StudioState, from: string, after: string, to = "owner"): MessageView | undefined {
   const all = messages(state);
@@ -80,6 +92,27 @@ export async function ownerMessage(studio: Studio, team: string, title: string, 
   const message = first.find((m) => m.from === "owner");
   if (!message) throw new Error(`thread ${thread} has no message from the owner`);
   return { thread, message: message.id };
+}
+
+// The tool calls `agent` started between `from` and `to` (ms since the epoch), from its finished Turns. The app lists
+// only an agent's newest Turns, so `first`, the Turn the window starts in, must be among them.
+export async function toolCalls(
+  studio: Studio,
+  agent: string,
+  first: string | null,
+  from: number,
+  to: number,
+): Promise<ToolCall[]> {
+  const { turns } = await studio.api<TurnsResponse>("GET", `/agents/${agent}/turns`);
+  if (!turns.some((t) => t.id === first)) {
+    throw new Error(`the Turns the app lists for ${agent} do not reach back to the one the window starts in`);
+  }
+  const calls: ToolCall[] = [];
+  for (const turn of turns.filter((t) => t.finishedAt >= from && (t.startedAt ?? t.finishedAt) <= to)) {
+    const { calls: all } = await studio.api<TurnEventsResponse>("GET", `/agents/${agent}/turns/${turn.id}/events`);
+    calls.push(...all.filter((c) => c.startedAt >= from && c.startedAt <= to));
+  }
+  return calls.sort((a, b) => a.startedAt - b.startedAt);
 }
 
 export function connectStudio(app: HostProcess, broker: HostProcess, a12s: A12s, atEnd: AtEnd, home: string): Studio {
@@ -179,6 +212,10 @@ export function connectStudio(app: HostProcess, broker: HostProcess, a12s: A12s,
     async shell(agent: string, command: string, input?: string): Promise<string> {
       await api("POST", `/agents/${agent}/power`, { state: "awake" });
       return a12s(["shell", agent, "--", "sh", "-c", command], input);
+    },
+    async session(agent: string): Promise<string | null> {
+      const status = JSON.parse(await a12s(["--json", "status", agent])) as { session?: string };
+      return status.session ?? null;
     },
     atEnd,
     home,
