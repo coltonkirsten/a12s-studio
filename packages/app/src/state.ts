@@ -103,7 +103,7 @@ export function deriveState(
       agents: scoped.agents().map((agent) => {
         const rec = live.agent(agent.id);
         const queue = waiting.get(agent.id);
-        let presence = presenceOf(rec?.phase);
+        let presence = presenceOf(rec?.phase, (rec?.work.size ?? 0) > 0);
         if (rec?.phase === "Error") {
           needsYou.push({ kind: "agent_error", teamId: team.id, agentId: agent.id, error: rec.error ?? "" });
         }
@@ -126,6 +126,16 @@ export function deriveState(
                 text: rec.turn.text.slice(-TURN_TEXT),
               }
             : null,
+          work: [...(rec?.work ?? [])]
+            .map(([id, { kind, description, threadId, startedAt, line }]) => ({
+              id,
+              kind,
+              description,
+              threadId,
+              startedAt,
+              line,
+            }))
+            .sort((a, b) => a.startedAt - b.startedAt),
           queued: queue?.count ?? 0,
           ...(rec?.phase === "Error" && rec.error ? { error: rec.error } : {}),
         };

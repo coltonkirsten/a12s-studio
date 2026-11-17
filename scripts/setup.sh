@@ -29,7 +29,7 @@ command -v docker >/dev/null || die "Docker is not installed. Install Docker Des
 docker info >/dev/null 2>&1 || die "Docker is not running. Start Docker Desktop and run this again."
 command -v a12s >/dev/null || die "a12s is not installed: brew install coltonkirsten/tap/a12s"
 a12s_version=$(a12s version | sed -n 's/^a12s v\([0-9.]*\).*/\1/p')
-at_least "${a12s_version:-0}" 0.11.1 || die "a12s ${a12s_version:-?} is too old; 0.11.1 or later is needed: brew upgrade a12s"
+at_least "${a12s_version:-0}" 0.11.2 || die "a12s ${a12s_version:-?} is too old; 0.11.2 or later is needed: brew upgrade a12s"
 command -v node >/dev/null || die "Node.js is not installed. Install Node 24 or later."
 node=$(command -v node)
 at_least "$(node -p process.versions.node)" 24.0.0 || die "Node $(node -p process.versions.node) is too old; 24 or later is needed."

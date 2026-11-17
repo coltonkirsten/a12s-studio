@@ -60,6 +60,11 @@ export type AgentSpec = {
   resources?: { cpu?: number; memory?: string };
 };
 
+// Work the harness runs on past the Turn that started it: a sub-agent, a command run in the background, a detached
+// process. `kind` is the harness's own (local_agent, local_bash, …); `toolUseId` is the call that started it, absent
+// for a detached process.
+export type BackgroundItem = { id: string; kind: string; description: string; startedAt: number; toolUseId?: string };
+
 export type Tokens = { input: number; output: number; cacheRead: number; cacheWrite: number };
 
 // What each model has cost so far in the Turn's session, sub-agents included: running totals, not one Turn's share.
@@ -69,11 +74,12 @@ export type A12sEvent =
   | { type: "agent_computer.phase"; agent: string; at: number; phase: Phase; error?: string }
   | { type: "turn.started"; agent: string; at: number; turn: string; messageIds: string[] }
   | { type: "text.delta"; agent: string; at: number; turn: string; text: string }
+  // A background sub-agent's calls carry its launching call as `parent`, and no Turn between the agent's Turns.
   | {
       type: "tool.started";
       agent: string;
       at: number;
-      turn: string;
+      turn?: string;
       id: string;
       name: string;
       input: unknown;
@@ -83,7 +89,7 @@ export type A12sEvent =
       type: "tool.finished";
       agent: string;
       at: number;
-      turn: string;
+      turn?: string;
       id: string;
       name: string;
       isError: boolean;
@@ -101,6 +107,17 @@ export type A12sEvent =
       modelCostsUsd: ModelCosts;
       tokens?: Tokens;
     }
+  | {
+      type: "task.started";
+      agent: string;
+      at: number;
+      turn?: string;
+      id: string;
+      kind: string;
+      description: string;
+      toolUseId?: string;
+    }
+  | { type: "task.finished"; agent: string; at: number; id: string }
   | { type: "gap" };
 
 // One connection to a12s. ready() resolves once no later event can be missed and rejects when a12s does not answer.
@@ -111,7 +128,13 @@ export type EventFeed = AsyncIterable<A12sEvent> & {
   close(): void;
 };
 
-export type AgentStatus = { name: string; phase: Phase; error?: string; pending: number };
+export type AgentStatus = {
+  name: string;
+  phase: Phase;
+  error?: string;
+  pending: number;
+  background: BackgroundItem[];
+};
 
 export type Outgoing = { body: string; metadata: Record<string, string>; replaceKey: string };
 

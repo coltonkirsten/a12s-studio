@@ -13,6 +13,7 @@ function agent(id: string, turn: string | null, text = ""): AgentView {
     presence: turn ? "working" : "asleep",
     line: null,
     turn: turn ? { id: turn, threadId: null, startedAt: 0, text } : null,
+    work: [],
     queued: 0,
   };
 }

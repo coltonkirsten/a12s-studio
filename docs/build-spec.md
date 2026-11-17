@@ -62,7 +62,7 @@ fleet/fleet.yaml       written once by setup; names the Fleet, nothing else
 
 `STUDIO_HOME` overrides the folder (tests use a temp dir). Ports are constants in code, not settings.
 
-**Install** (`scripts/setup.sh [--owner-login <login>]`, idempotent): checks Docker, a12s 0.11.1+ and Node 24+;
+**Install** (`scripts/setup.sh [--owner-login <login>]`, idempotent): checks Docker, a12s 0.11.2+ and Node 24+;
 when the Fleet `studio` has never been started, writes `fleet/fleet.yaml` (`metadata.name: studio`, no agent
 computers) and runs `a12s up` once to start the Controller; prints the `a12s creds set anthropic` command when the
 Controller has no `anthropic` credential; writes `config.json` (asking for the owner's Tailscale login unless given);
@@ -849,6 +849,8 @@ the text into React elements, so no HTML string is set anywhere in the web. A bo
 repeats what it read on the web or in a file.
 
 - **No HTML.** `disableParsingRawHTML` is on. A tag in the source is shown as the characters it is.
+- **Nothing hidden.** `disableFrontmatter` is on: a body that opens with a block between two `---` lines shows it
+  like any other text. An agent cannot write words the owner does not see.
 - **Links.** `safeHref` is the only judge of an address, and it is the library's `sanitizer`: an absolute `http:`,
   `https:` or `mailto:` URL passes; anything else, a relative address included, is dropped and the link's text
   stays as text. A link opens in a new tab with `rel="noopener noreferrer"`.

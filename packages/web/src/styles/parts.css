@@ -318,7 +318,8 @@
   color: var(--text-2);
 }
 
-.streaming::after {
+/* The caret follows the last words written, inside the block they are in. */
+.streaming .markdown > :last-child::after {
   content: "";
   display: inline-block;
   width: 2px;
@@ -1015,4 +1016,197 @@
 
 .sheet-text + .access-part {
   margin-top: 20px;
+}
+
+/* Message bodies: an agent's markdown, in body type throughout */
+
+.markdown {
+  white-space: normal;
+  min-width: 0;
+}
+
+.markdown > :first-child {
+  margin-top: 0;
+}
+
+.markdown > :last-child {
+  margin-bottom: 0;
+}
+
+.markdown :is(p, ul, ol, blockquote, pre, table, hr) {
+  margin: 0 0 0.65em;
+}
+
+.markdown :is(h1, h2, h3, h4, h5, h6) {
+  margin: 1em 0 0.3em;
+  font-size: 1em;
+  font-weight: 600;
+  line-height: 1.35;
+}
+
+.markdown :is(h1, h2) {
+  font-size: 1.15em;
+  letter-spacing: -0.01em;
+}
+
+.markdown :is(ul, ol) {
+  padding-left: 1.4em;
+}
+
+.markdown li + li,
+.markdown li > :is(ul, ol) {
+  margin-top: 0.2em;
+}
+
+.markdown li:has(> input[type="checkbox"]) {
+  list-style: none;
+  margin-left: -1.3em;
+}
+
+.markdown input[type="checkbox"] {
+  margin: 0 0.4em 0 0;
+  vertical-align: -1px;
+  accent-color: var(--accent);
+  pointer-events: none;
+}
+
+.markdown blockquote {
+  margin-left: 0;
+  margin-right: 0;
+  padding-left: 12px;
+  box-shadow: inset 2px 0 0 var(--fill-2);
+  color: var(--text-2);
+}
+
+.markdown a {
+  color: var(--accent-text);
+  text-decoration: none;
+}
+
+.markdown a:hover {
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.markdown code {
+  padding: 0.1em 0.35em;
+  border-radius: var(--radius-xs);
+  background: var(--fill);
+  font-family: var(--mono);
+  font-size: 0.88em;
+}
+
+.markdown pre {
+  max-width: 100%;
+  overflow-x: auto;
+  padding: 10px 12px;
+  border-radius: var(--radius-m);
+  background: var(--fill);
+  line-height: 1.45;
+  white-space: pre;
+  overflow-wrap: normal;
+}
+
+.markdown pre code {
+  padding: 0;
+  background: none;
+  font-size: var(--size-small);
+}
+
+.markdown table {
+  display: block;
+  max-width: 100%;
+  overflow-x: auto;
+  border-collapse: collapse;
+  font-variant-numeric: tabular-nums;
+  overflow-wrap: normal;
+}
+
+.markdown :is(th, td) {
+  padding: 5px 16px 5px 0;
+  border-bottom: 1px solid var(--hairline);
+  text-align: left;
+  white-space: nowrap;
+}
+
+.markdown th {
+  color: var(--text-2);
+  font-size: var(--size-small);
+  font-weight: 600;
+}
+
+.markdown tr:last-child td {
+  border-bottom: none;
+}
+
+.markdown hr {
+  height: 1px;
+  border: 0;
+  background: var(--hairline);
+}
+
+/* Work under an agent: sub-agents and background tasks, one quiet line each */
+
+.work {
+  margin: -2px 0 6px 28px;
+  padding: 0 0 0 10px;
+  list-style: none;
+  box-shadow: inset 1.5px 0 0 var(--fill-2);
+  font-size: var(--size-small);
+  line-height: 1.4;
+}
+
+.work-item {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  column-gap: 6px;
+  align-items: baseline;
+  padding: 2px 0;
+}
+
+.work-item > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.work-kind {
+  color: var(--text-3);
+  font-size: var(--size-caption);
+  font-weight: 500;
+}
+
+.work-what {
+  color: var(--text);
+}
+
+/* Under an agent in the narrow list, when and what it is doing sit on a row of their own. */
+.work-meta {
+  grid-column: 2;
+  color: var(--text-3);
+}
+
+.work-line {
+  color: var(--accent-text);
+}
+
+.work-line::before {
+  content: " · ";
+  color: var(--text-3);
+}
+
+.msg.live .work {
+  margin: 4px 0 6px;
+}
+
+.msg.live .work-item {
+  grid-template-columns: auto auto minmax(0, 1fr);
+}
+
+.msg.live .work-meta {
+  grid-column: 3;
+}
+
+.msg.live .work-meta::before {
+  content: "· ";
 }

@@ -8,7 +8,7 @@
   },
   "dependencies": {
     "@a12s-studio/contract": "*",
-    "@coltonkirsten/a12s": "0.10.0",
+    "@coltonkirsten/a12s": "0.11.2",
     "@modelcontextprotocol/sdk": "1.32.2",
     "zod": "4.6.7"
   },

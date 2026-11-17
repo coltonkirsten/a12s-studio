@@ -26,8 +26,20 @@ export type AgentView = {
   waitingFor?: WaitingFor;
   line: string | null;
   turn: { id: string; threadId: ThreadId | null; startedAt: number; text: string } | null;
+  // Sub-agents and background work running now, oldest first.
+  work: WorkItem[];
   queued: number;
   error?: string;
+};
+
+export type WorkItem = {
+  id: string;
+  kind: "agent" | "task";
+  description: string;
+  threadId: ThreadId | null;
+  startedAt: number;
+  // What a sub-agent is doing now; a background command or process has none.
+  line: string | null;
 };
 
 export type ThreadSummary = {

@@ -7,7 +7,8 @@ import { href } from "../logic/route.ts";
 import { shortTime } from "../logic/time.ts";
 import { Composer } from "./composer.tsx";
 import { Icon } from "./icons.tsx";
-import { Dot } from "./presence.tsx";
+import { Markdown } from "./markdown.tsx";
+import { Dot, doing, WorkList } from "./presence.tsx";
 import { Problem } from "./problem.tsx";
 
 const STATUS: Record<BoardStatus, string> = { open: "Open", needs_you: "Needs you", done: "Done" };
@@ -22,7 +23,9 @@ export function Conversation({ team, thread, questions }: Props) {
   const action = useAction();
   const scroller = useRef<HTMLDivElement>(null);
   const pinned = useRef(true);
-  const working = team.agents.filter((a) => a.turn && a.turn.threadId === thread.id);
+  const working = team.agents.filter(
+    (a) => a.turn?.threadId === thread.id || a.work.some((w) => w.threadId === thread.id),
+  );
   const now = Date.now();
   const done = thread.status === "done";
 
@@ -71,16 +74,25 @@ export function Conversation({ team, thread, questions }: Props) {
             questions={questions}
           />
         ))}
-        {working.map((agent) => (
-          <div key={agent.id} className="msg theirs live">
-            <header>
-              <Dot presence={agent.presence} />
-              <b>{displayName(agent.id)}</b>
-              <span className="doing">{agent.line ?? "Working"}</span>
-            </header>
-            {agent.turn?.text && <div className="body streaming">{agent.turn.text}</div>}
-          </div>
-        ))}
+        {working.map((agent) => {
+          // The agent's line and words are about its Turn; when that runs in another thread, only its work here shows.
+          const turn = agent.turn?.threadId === thread.id ? agent.turn : null;
+          return (
+            <div key={agent.id} className="msg theirs live">
+              <header>
+                <Dot presence={agent.presence} />
+                <b>{displayName(agent.id)}</b>
+                {(turn || !agent.turn) && <span className="doing">{doing(agent)}</span>}
+              </header>
+              <WorkList items={agent.work.filter((w) => w.threadId === thread.id)} />
+              {turn?.text && (
+                <div className="body streaming">
+                  <Markdown text={turn.text} streaming />
+                </div>
+              )}
+            </div>
+          );
+        })}
       </div>
       <Composer
         key={thread.id}
@@ -111,7 +123,9 @@ function EntryView({ entry, now, questions }: { entry: Entry; now: number; quest
                 <span>to {displayName(m.to ?? "")}</span>
                 <time>{shortTime(m.at, now)}</time>
               </header>
-              <div className="body">{m.body}</div>
+              <div className="body">
+                <Markdown text={m.body} />
+              </div>
             </div>
           ))}
         </div>
@@ -148,7 +162,7 @@ function Message({ message, now, questions }: { message: MessageView; now: numbe
         <time>{shortTime(message.at, now)}</time>
       </header>
       <div className="body">
-        {message.body}
+        <Markdown text={message.body} />
         {file}
       </div>
     </div>
