@@ -150,6 +150,55 @@ for (const seed of [1, 2, 3, 4]) {
   });
 }
 
+test("while one team's status cannot be read, no agent of any team is woken", async (t) => {
+  let down = false;
+  const s = await setup(t, {
+    wrap: (fake) => ({
+      ...fake,
+      forTeam(token) {
+        const client = fake.forTeam(token);
+        return {
+          ...client,
+          async status() {
+            const status = await client.status();
+            if (down && status.some((agent) => agent.name === "web-lead")) throw new Error("status is down");
+            return status;
+          },
+        };
+      },
+    }),
+  });
+  sleepAll(s);
+  t.mock.method(console, "error", () => {});
+  down = true;
+  ownerThread(s.app.repo.forTeam("notes"), { body: "Is there room?" });
+  await s.app.dispatcher.run();
+  assert.equal(phase(s, "notes-lead"), "Asleep", "the other team's awake agents are unknown");
+
+  down = false;
+  await s.app.dispatcher.run();
+  assert.equal(phase(s, "notes-lead"), "Ready");
+});
+
+test("an agent paused back to sleep before a run saw it awake is woken again", async (t) => {
+  const s = await setup(t);
+  sleepAll(s);
+  const start = Date.now();
+  t.mock.timers.enable({ apis: ["Date"], now: start });
+  ownerThread(s.app.repo.forTeam("web"), { body: "For the lead." });
+  await s.app.dispatcher.run();
+  assert.equal(phase(s, "web-lead"), "Ready");
+
+  await s.app.teams.pause(null);
+  assert.equal(phase(s, "web-lead"), "Asleep");
+  await s.app.teams.resume(null);
+  assert.equal(phase(s, "web-lead"), "Asleep", "a wake a12s may not have reported yet is not repeated");
+
+  t.mock.timers.setTime(start + 30_000);
+  await s.app.dispatcher.run();
+  assert.equal(phase(s, "web-lead"), "Ready", "its pending work wakes it");
+});
+
 test("under the cap the owner's ask wakes its agent first, then the oldest waits its turn", async (t) => {
   const s = await setup(t, { live: true });
   await patch(s, "/settings", { awakeCap: 1 });

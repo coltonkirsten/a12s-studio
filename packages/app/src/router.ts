@@ -217,8 +217,8 @@ export function changeThread(
   });
 }
 
-export function systemAsk(team: TeamRepo, agentId: string, body: string): MessageId {
-  return insert(team, { threadId: null, kind: "ask", fromId: "system", toId: agentId, askId: null, body });
+export function systemAsk(team: TeamRepo, agentId: string, body: string, threadId: ThreadId | null = null): MessageId {
+  return insert(team, { threadId, kind: "ask", fromId: "system", toId: agentId, askId: null, body });
 }
 
 // It wakes nobody: it rides along with the agent's next ask or reply.

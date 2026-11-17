@@ -3,7 +3,7 @@ import type { BrokerClient } from "./broker-client.ts";
 import type { Dispatcher } from "./dispatcher.ts";
 import { StudioError } from "./errors.ts";
 import type { Repo, Wake } from "./repo.ts";
-import { systemNote } from "./router.ts";
+import { systemAsk, systemNote } from "./router.ts";
 
 const TICK_MS = 30_000;
 
@@ -80,17 +80,12 @@ export function createScheduler(deps: {
   }
 
   // Each wake becomes its ask in the same transaction that removes or moves it, so a crash can neither lose nor
-  // repeat one. A wake belongs to a current agent (removing an agent removes its wakes), so its ask is queued.
+  // repeat one.
   function fireWakes(now: number): void {
     for (const wake of repo.dueWakes(now)) {
       const team = repo.forTeam(wake.teamId);
-      const body = `scheduled wake ${wake.id}: ${wake.note}`;
       team.tx(() => {
-        team.insertMessage(
-          { threadId: wake.threadId, kind: "ask", fromId: "system", toId: wake.agentId, askId: null, body },
-          "queued",
-          now,
-        );
+        systemAsk(team, wake.agentId, `scheduled wake ${wake.id}: ${wake.note}`, wake.threadId);
         team.wakeFired(wake.id, nextDue(wake, now));
       });
     }

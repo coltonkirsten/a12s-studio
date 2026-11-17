@@ -21,6 +21,10 @@ type Candidate = {
 
 const MAX_NOTES = 20;
 const NOTE_MAX = 500;
+// a12s starts an agent before it answers the wake, so its status lags by moments at most. An agent still reported
+// asleep this long after its wake went back to sleep unseen (a pause or the owner's Sleep during the run that woke
+// it) and has to be wakeable again.
+const WAKE_GRACE_MS = 30_000;
 
 // The limits that can hold a wake; null for an agent that is already awake, which none of them stop.
 type WakeLimits = { awake: number; freeDiskGb: () => number } | null;
@@ -77,8 +81,9 @@ function render(message: Message, thread: Thread | undefined, notes: Message[]):
 export function createDispatcher(repo: Repo, a12s: A12s): Dispatcher {
   let running: Promise<void> | null = null;
   let again = false;
-  // Woken by a run, but not yet reported awake by a12s: they count against the cap, and are not woken twice.
-  const justWoken = new Set<string>();
+  // Woken by a run, with the time, but not yet reported awake by a12s: they count against the cap, and are not
+  // woken twice.
+  const justWoken = new Map<string, number>();
 
   // The candidates in queue order, and how many agents are awake. `awake` is null when a team's status could not be
   // read: its awake agents are unknown, so no wake can be known to fit under the cap.
@@ -99,7 +104,8 @@ export function createDispatcher(repo: Repo, a12s: A12s): Dispatcher {
       }
       const spentTodayUsd = scoped.spentToday(now);
       for (const { name, pending, ...reported } of status) {
-        if (reported.phase !== "Asleep") justWoken.delete(name);
+        const lapsed = now - (justWoken.get(name) ?? now) >= WAKE_GRACE_MS;
+        if (reported.phase !== "Asleep" || lapsed) justWoken.delete(name);
         // a12s has the wake but still reports the old phase: the agent is on its way up.
         const phase = justWoken.has(name) ? "Starting" : reported.phase;
         if (phase !== "Asleep" && awake !== null) awake++;
@@ -153,7 +159,7 @@ export function createDispatcher(repo: Repo, a12s: A12s): Dispatcher {
     // Send, then wake: the agent wakes with its work already in its inbox.
     if (phase !== "Asleep" || waiting === 0) return false;
     await client.wake(agentId);
-    justWoken.add(agentId);
+    justWoken.set(agentId, Date.now());
     return true;
   }
 

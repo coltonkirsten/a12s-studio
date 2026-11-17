@@ -426,7 +426,8 @@ Rules when a message is committed (`router.ts`):
 and runs once more). It is called after every committed message, every a12s phase change, every settings change,
 and every scheduler tick. It keeps no state of its own except the set of agents it has just woken, each cleared once
 `status()` reports it not asleep: a12s takes a wake before it reports the new phase, and until then the agent counts
-as awake and is not woken twice. Phases and pending counts come from each team's `status()` at the start of a run;
+as awake and is not woken twice. An agent still reported asleep 30 s after its wake is cleared too: it went back to
+sleep before a run saw it awake (a pause, or the owner's Sleep), and can be woken again. Phases and pending counts come from each team's `status()` at the start of a run;
 when a team's cannot be read, its awake agents are unknown, so the run wakes nobody.
 
 ```
@@ -799,8 +800,8 @@ and the `turns` row keeps them as JSON in `model_costs`.
 
 `cost_usd` = the sum, over the models the Turn reports, of the model's total minus the same model's total in the
 agent's previous Turn (its latest stored Turn with a session). A model counts in full when the previous Turn has
-another `session`, does not list the model, or lists a larger total. A Turn that ended before the harness started has no session and costs nothing. The rule
-lives in one function with table tests.
+another `session`, does not list the model, or lists a larger total. A Turn that ended before the harness started
+has no session and costs nothing. The rule lives in one function with table tests.
 
 ### 7.5 Owner API
 
