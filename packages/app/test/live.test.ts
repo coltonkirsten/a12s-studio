@@ -21,7 +21,7 @@ async function setup(t: { after(fn: () => unknown): void }, opts: Parameters<typ
 const delivery = (s: S, id: string) =>
   String(s.db.prepare("SELECT delivery FROM messages WHERE id = ?").get(id)?.delivery);
 const agentView = (s: S, id: string) =>
-  deriveState(s.app.repo, s.app.live, null)
+  deriveState(s.app, null)
     .teams.flatMap((t) => t.agents)
     .find((a) => a.id === id);
 
@@ -147,7 +147,7 @@ test("a lost feed shows a12s down, and the next feed resyncs what was missed", a
 
   s.a12s.setReachable(false);
   await until(() => !s.app.live.up());
-  assert.equal(deriveState(s.app.repo, s.app.live, null).a12s, "down");
+  assert.equal(deriveState(s.app, null).a12s, "down");
 
   // While the feed is down the lead takes the ask and finishes; no event reaches the app.
   s.a12s.startTurn("web-lead");
@@ -250,13 +250,13 @@ test("a new app over the same database derives the same state", async (t) => {
   first.a12s.finishTurn("web-lead");
   await until(() => first.db.prepare("SELECT count(*) AS n FROM turns").get()?.n === 1);
   await until(() => first.app.live.agent("web-lead")?.phase === "Ready");
-  const before = deriveState(first.app.repo, first.app.live, posted.thread);
+  const before = deriveState(first.app, posted.thread);
   await first.close();
 
   const second = await studio({ a12s, dbFile: first.dbFile, live: true });
   t.after(() => second.close());
   await until(() => second.app.live.up() && second.app.live.agent("web-lead") !== undefined);
-  assert.deepEqual(deriveState(second.app.repo, second.app.live, posted.thread), before);
+  assert.deepEqual(deriveState(second.app, posted.thread), before);
 });
 
 test("an agent hired after the feed opened shows the phase a12s reported while it was being made", async (t) => {

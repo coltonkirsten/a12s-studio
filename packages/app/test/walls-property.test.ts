@@ -95,3 +95,44 @@ for (const seed of [1, 2, 3]) {
     assert.ok(delivered > 0, "the run should have delivered something");
   });
 }
+
+for (const seed of [4, 5]) {
+  test(`random access calls from two teams never make or show a request of the other team (seed ${seed})`, async (t) => {
+    const s = await studio();
+    t.after(() => s.close());
+    await s.twoTeams();
+    const pick = random(seed);
+    const made = new Map<string, string>(); // request id -> the agent that made it
+    const reach = { host: "api.example.com", methods: ["GET"], reason: "To read it." };
+
+    for (let i = 0; i < 80; i++) {
+      const agent = pick(AGENTS);
+      const team = teamOf(agent);
+      const stranger = pick(AGENTS);
+      const [args] = pick([
+        [{ action: "request", ...reach, paths: [`/v1/${i}`] }],
+        [{ action: "request", ...reach, paths: [`/v1/${i}`], team: teamOf(stranger) }],
+        [{ action: "request", ...reach, paths: [`/v1/${i}`], agentId: stranger }],
+        [{ action: "request", ...reach, paths: [`/v1/${i}`], agent: stranger }],
+        [{ action: "list" }],
+        [{ action: "list", team: teamOf(stranger) }],
+      ] as const);
+      const answer = await s.tool(agent, "access", args);
+      if (typeof answer.request === "string") made.set(answer.request, agent);
+      for (const { id } of (answer.pending as { id: string }[] | undefined) ?? []) {
+        assert.equal(teamOf(made.get(id) ?? ""), team, `${agent} saw ${id}`);
+      }
+    }
+
+    assert.ok(made.size > 5, "too few requests succeeded");
+    let rows = 0;
+    for (const team of ["web", "notes"]) {
+      for (const request of (await s.app.broker.forTeam(team).access()).requests) {
+        assert.equal(made.get(request.id), request.agentId, request.id);
+        assert.equal(teamOf(request.agentId), team, request.id);
+        rows++;
+      }
+    }
+    assert.equal(rows, made.size);
+  });
+}

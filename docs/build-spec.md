@@ -335,7 +335,7 @@ with the same `Host` and single-header rules: the name must be an add-on instanc
 ### 5.2 The six tools
 
 Agents address each other by agent slug (`dev`), or `owner`. Tool results are JSON text. Errors are tool errors with
-a one-sentence fix.
+a one-sentence fix. Tool inputs are strict: a field a tool does not name is refused, never dropped.
 
 ```ts
 post: {
@@ -390,7 +390,9 @@ access: {
   days?: number                                           // request: wanted lifetime, 1..365
 }
 // list    -> { grants: [{ host, methods, paths, expires }], pending: [{ id, host, methods, paths }] }
+//            grants that are not revoked and not expired; the team's pending requests
 // request -> { request: id, status: "pending" }   (a card appears in Needs You)
+// a team has at most 10 pending requests; another is refused until the owner decides one
 ```
 
 ### 5.3 Delivery and wake rules
@@ -752,7 +754,7 @@ Derived on every state build, never stored:
 | failed Turn | An agent's latest Turn has status `failed` and `acked_at` is null. | Open inspector, Dismiss. |
 | budget | A team's spend today is at or over its budget. | Raise budget. |
 | credential rejected | The broker saw the host refuse a stored credential. | Replace credential. |
-| grant expiring | A grant expires within three days. | Extend, Let it expire. |
+| grant expiring | A grant expires within three days. The card stays until it expires or is revoked. | Extend (a new grant with the same reach, then the old one revoked). |
 | add-on error | An add-on instance's status is error. | Open team settings, Turn off. |
 
 ### 7.4 Cost of a Turn
@@ -801,8 +803,11 @@ PUT    /addons/:addon                 the manifest (section 10.1)        DELETE 
 PUT    /teams/:team/addons/:addon     (turn on)                          DELETE /teams/:team/addons/:addon
 ```
 
-The access routes relay to the broker's admin socket. A credential's `secret` passes through the app's memory once
-and is never logged or stored by the app. Removing or clearing inbox Messages also marks the matching Studio
+The access routes relay to the broker's admin socket (section 9.5) and pass its refusals on unchanged. `GET …/access`
+answers the broker's `AccessView` and `GET …/audit` its `AuditPage`; the writes answer `{ rev }`, `POST …/grants`
+with the new grant's `id`. A write that can change a Needs You card (all of them) reads the broker's attention items
+again before it answers, so the state at its `rev` shows the change. A credential's `secret` passes through the
+app's memory once and is never logged or stored by the app. Removing or clearing inbox Messages also marks the matching Studio
 messages `none`.
 
 ## 8. Templates
@@ -974,8 +979,8 @@ POST   /teams/:team/requests                   { agentId, host, methods, paths, 
 POST   /teams/:team/requests/:id/approve       { expiresAt? }
 POST   /teams/:team/requests/:id/deny
 GET    /teams/:team/audit?before=&limit=
-GET    /attention                              pending requests, grants expiring within 3 days and not warned,
-                                               credentials with rejected_at
+GET    /attention                              pending requests, grants not revoked that expire within 3 days
+                                               (with warnedAt), credentials with rejected_at
 POST   /grants/:id/warned
 DELETE /teams/:team                            removes its credentials, grants and requests; audit rows stay
 ```
@@ -989,7 +994,9 @@ warning on and changes no one's access. No admin route returns a secret.
   decisions the request. The deletes and `warned` answer 204.
 - Refusals are `{ code, message, fix? }`: 400 `invalid` (a body, host, method, pattern, team slug or expiry that
   breaks a rule; an `agentId` that is not of the team), 404 `not_found` (also for another team's grant or
-  request), 409 `already_decided`, 409 `no_credential`. A refused change writes nothing.
+  request), 409 `already_decided`, 409 `no_credential`, 409 `too_many_pending` (the team already has 10 pending
+  requests, so a misled agent cannot flood Needs You; the fix is to wait for the owner to decide). A refused change
+  writes nothing.
 - A grant may be created for a host that has no credential yet; it gives nothing until one is stored. Storing a
   credential for a host that has one replaces it.
 
@@ -999,9 +1006,12 @@ warning on and changes no one's access. No admin route returns a secret.
 - `sweep.ts` runs each minute: it stamps `expired_at` on grants past their expiry that were not revoked and audits
   `grant.expire` with actor `broker`.
 - The warning reaches the agent through the app: the app's scheduler tick calls `GET /attention`; for each expiring
-  grant it posts a note from `system` to the team's lead (`Access to <host> <paths> expires on <date>. Use access to
-  request an extension if the team still needs it.`), then calls `POST /grants/:id/warned`. The same answer feeds the
-  access cards in Needs You. The tick is the only polling in the system, over a local socket.
+  grant not yet warned it posts a note from `system` to the team's lead (`Access to <host> <paths> expires on
+  <date>. Use access to request an extension if the team still needs it.`), then calls `POST /grants/:id/warned`, so
+  the lead hears it once. The same answer feeds the access cards in Needs You, a warned grant's included. For a
+  team with a pending request the app also reads `GET /teams/:team/access`, for the card's "has a credential". The
+  app keeps the last answer in memory; while the broker does not answer, the state shows `broker: "down"` and that
+  answer. The tick is the only polling in the system, over a local socket.
 
 ### 9.7 Default-deny invariants
 
@@ -1257,6 +1267,10 @@ from the README alone.
     the cap is never exceeded under random arrivals; a budget hold stops sends and an edit releases them; a restart
     between commit and send neither loses nor duplicates.
   - *Broker:* section 9.7.
+  - *Access through the app:* run against the real broker code in-process (its admin API on a temp socket, its
+    forwarder, an HTTPS stub upstream). The exit path of Phase 2 end to end; `access` takes no team or agent; one
+    team's `list` shows nothing of another's; another team's request id in an owner URL is a 404; the agent listener
+    serves no approve or credential route; a stored secret appears in no log line, response or state.
   - *Add-ons:* section 10.5.
   - *Owner gate:* wrong login, missing headers with a foreign `Host`, forwarded request without identity, cross-origin
     write → refused.

@@ -1,18 +1,28 @@
 import { McpServer, type ToolCallback } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
-import type { ZodRawShape } from "zod";
+import { type ZodRawShape, z } from "zod";
 import type { TeamA12s } from "../a12s/port.ts";
+import type { TeamBroker } from "../broker-client.ts";
 import type { Caller } from "../caller.ts";
 import type { Dispatcher } from "../dispatcher.ts";
 import { StudioError } from "../errors.ts";
 import type { TeamRepo } from "../repo.ts";
+import type { Scheduler } from "../scheduler.ts";
+import { access } from "./access.ts";
 import { post } from "./post.ts";
 import { read } from "./read.ts";
 import { roster } from "./roster.ts";
 import { updateThread } from "./update_thread.ts";
 
 // What a tool may touch: everything is already scoped to the caller's team, so no tool can name another one.
-export type ToolContext = { caller: Caller; team: TeamRepo; a12s: TeamA12s; dispatcher: Dispatcher };
+export type ToolContext = {
+  caller: Caller;
+  team: TeamRepo;
+  a12s: TeamA12s;
+  broker: TeamBroker;
+  dispatcher: Dispatcher;
+  scheduler: Scheduler;
+};
 
 export type Tool<S extends ZodRawShape> = {
   name: string;
@@ -38,10 +48,16 @@ function register<S extends ZodRawShape>(server: McpServer, ctx: ToolContext, to
       );
     }
   };
+  // Strict: a field the tool does not name (a team, an agent, a "from") is refused, never silently dropped.
+  const inputSchema = z.strictObject(tool.input);
   // TypeScript cannot resolve the SDK's conditional callback type for a generic shape; for each concrete tool it is
   // exactly this function's type.
-  const typed = callback as unknown as ToolCallback<S>;
-  server.registerTool(tool.name, { description: tool.description, inputSchema: tool.input }, typed);
+  const typed = callback as unknown as ToolCallback<typeof inputSchema>;
+  server.registerTool<ZodRawShape, typeof inputSchema>(
+    tool.name,
+    { description: tool.description, inputSchema },
+    typed,
+  );
 }
 
 // A new server per request, bound to one caller: stateless, so nothing about a caller outlives its request.
@@ -51,5 +67,6 @@ export function mcpServer(ctx: ToolContext): McpServer {
   register(server, ctx, read);
   register(server, ctx, updateThread);
   register(server, ctx, roster);
+  register(server, ctx, access);
   return server;
 }

@@ -4,6 +4,7 @@ import type { CreateTeamBody, HireBody, PatchTeamBody, Template } from "@a12s-st
 import { AGENT_SLUG, agentId, teamSlug } from "@a12s-studio/contract/names";
 import { type A12s, A12sError } from "./a12s/port.ts";
 import { agentSpec } from "./a12s/spec.ts";
+import type { BrokerClient } from "./broker-client.ts";
 import type { Dispatcher } from "./dispatcher.ts";
 import { StudioError } from "./errors.ts";
 import type { Agent, Repo, Team, TeamRepo } from "./repo.ts";
@@ -15,8 +16,14 @@ const PAUSED_MID_TURN = "You were paused mid-turn. Continue where you stopped.";
 
 type TemplateFiles = Template & { roles: { slug: string; role: string }[] };
 
-export function createTeams(deps: { repo: Repo; a12s: A12s; dispatcher: Dispatcher; templatesDir: string }) {
-  const { repo, a12s, dispatcher, templatesDir } = deps;
+export function createTeams(deps: {
+  repo: Repo;
+  a12s: A12s;
+  broker: BrokerClient;
+  dispatcher: Dispatcher;
+  templatesDir: string;
+}) {
+  const { repo, a12s, broker, dispatcher, templatesDir } = deps;
   // Slugs of creates under way; their rows are written only after the a12s work.
   const creating = new Set<string>();
 
@@ -192,8 +199,11 @@ export function createTeams(deps: { repo: Repo; a12s: A12s; dispatcher: Dispatch
       scoped.tx(() => scoped.removeAgent(id, Date.now()));
     },
 
+    // The broker first: if the purge fails the team stays, so its credentials are never left with no team to remove
+    // them from.
     async deleteTeam(teamId: string): Promise<void> {
       const { team, scoped } = live(teamId);
+      await broker.forTeam(team.id).purge();
       for (const agent of scoped.agents()) await removeComputer(team, agent.id);
       await a12s.removeToken(team.id);
       scoped.markDeleted(Date.now());

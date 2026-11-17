@@ -73,7 +73,7 @@ async function viaA12s(url: string | URL, init?: RequestInit): Promise<Response>
   });
 }
 
-test("a real MCP client sees the four tools, and no tool takes a team or a sender", async () => {
+test("a real MCP client sees the five tools, and no tool takes a team or a sender", async () => {
   const { port } = s.app.agentServer.address() as { port: number };
   const client = new Client({ name: "test", version: "1.0.0" });
   await client.connect(
@@ -83,19 +83,21 @@ test("a real MCP client sees the four tools, and no tool takes a team or a sende
     }),
   );
   const { tools } = await client.listTools();
-  assert.deepEqual(tools.map((t) => t.name).sort(), ["post", "read", "roster", "update_thread"]);
+  assert.deepEqual(tools.map((t) => t.name).sort(), ["access", "post", "read", "roster", "update_thread"]);
   for (const t of tools) {
     const fields = Object.keys(t.inputSchema.properties ?? {});
-    for (const forbidden of ["team", "teamId", "team_id", "from", "fromId", "caller", "agent"]) {
+    for (const forbidden of ["team", "teamId", "team_id", "from", "fromId", "caller", "agent", "agentId"]) {
       assert.ok(!fields.includes(forbidden), `${t.name} takes ${forbidden}`);
     }
+    assert.equal(t.inputSchema.additionalProperties, false, `${t.name} accepts fields it does not name`);
   }
   const roster = await client.callTool({ name: "roster", arguments: {} });
   assert.match(JSON.stringify(roster.content), /\\"you\\":\\"lead\\"/);
   await client.close();
 });
 
-test("a team or sender slipped into the arguments changes nothing", async () => {
+test("a team or sender slipped into the arguments is refused and writes nothing", async () => {
+  const before = s.db.prepare("SELECT count(*) AS n FROM messages").get();
   const posted = await s.tool("web-dev", "post", {
     kind: "ask",
     to: "lead",
@@ -104,6 +106,6 @@ test("a team or sender slipped into the arguments changes nothing", async () => 
     team: "notes",
     from: "notes-lead",
   });
-  const row = s.db.prepare("SELECT team_id, from_id, to_id FROM messages WHERE id = ?").get(String(posted.message));
-  assert.deepEqual({ ...row }, { team_id: "web", from_id: "web-dev", to_id: "web-lead" });
+  assert.ok(posted.error);
+  assert.deepEqual(s.db.prepare("SELECT count(*) AS n FROM messages").get(), before);
 });

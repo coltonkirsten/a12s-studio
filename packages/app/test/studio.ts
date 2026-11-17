@@ -4,6 +4,9 @@ import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { listenAdmin } from "@a12s-studio/broker/src/admin.ts";
+import { openDb as openBrokerDb } from "@a12s-studio/broker/src/db.ts";
+import { createVault } from "@a12s-studio/broker/src/vault.ts";
 import { CALLER_HEADER, OWNER_PORT, STUDIO_HOST } from "@a12s-studio/contract/names";
 import type { StudioState } from "@a12s-studio/contract/state";
 import { type FakeA12s, fakeA12s } from "../src/a12s/fake.ts";
@@ -21,17 +24,28 @@ export type ToolAnswer = Record<string, unknown> & { error?: { code: string; mes
 // caller header the way the a12s proxy sends it.
 // `wrap` puts a layer between the app and the fake, to make a12s calls fail the way a crash or an outage would.
 // With `live`, the a12s event feed is followed the way main.ts does it.
+// `broker` is the admin socket of a broker the test runs itself, or one nobody serves; without it the app talks to
+// the real broker's admin API on a temp socket.
 export async function studio(
-  opts: { dbFile?: string; a12s?: FakeA12s; wrap?: (fake: FakeA12s) => A12s; live?: boolean } = {},
+  opts: { dbFile?: string; a12s?: FakeA12s; wrap?: (fake: FakeA12s) => A12s; live?: boolean; broker?: string } = {},
 ) {
   const dbFile = opts.dbFile ?? join(mkdtempSync(join(tmpdir(), "studio-")), "studio.db");
   const db = openDb(dbFile);
   const a12s = opts.a12s ?? fakeA12s();
   const webDir = mkdtempSync(join(tmpdir(), "studio-web-"));
   writeFileSync(join(webDir, "index.html"), "<!doctype html><title>Studio</title>");
+  const brokerSocket = opts.broker ?? join(mkdtempSync(join(tmpdir(), "studio-broker-")), "admin.sock");
+  const admin =
+    opts.broker === undefined
+      ? await listenAdmin(
+          { db: openBrokerDb(":memory:"), vault: createVault(Buffer.alloc(32, 7)), now: Date.now },
+          brokerSocket,
+        )
+      : undefined;
   const app = createApp({
     db,
     a12s: opts.wrap ? opts.wrap(a12s) : a12s,
+    brokerSocket,
     templatesDir: TEMPLATES,
     webDir,
     ownerLogin: OWNER_LOGIN,
@@ -161,11 +175,14 @@ export async function studio(
   }
 
   async function close(): Promise<void> {
+    await app.scheduler.stop();
     await app.live.stop();
     app.stream.close();
     app.ownerServer.closeAllConnections();
     await new Promise((resolve) => app.ownerServer.close(resolve));
     await new Promise((resolve) => app.agentServer.close(resolve));
+    admin?.closeAllConnections();
+    if (admin) await new Promise((resolve) => admin.close(resolve));
     db.close();
   }
 
