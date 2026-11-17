@@ -153,7 +153,7 @@ export async function p3(studio: Studio): Promise<void> {
 
   for (let run = 1; run <= BACKGROUND_RUNS; run++) {
     await step(`A command in the background keeps the agent working until it reports (${run} of 3)`, async () => {
-      const notBackground = new Error(`${lead} did not run the command in the background`);
+      const notBackground = `${lead} did not run the command in the background`;
       const ask = await ownerAsk(
         studio,
         team,
@@ -161,19 +161,22 @@ export async function p3(studio: Studio): Promise<void> {
         "Run `sleep 45` as a background command, end your turn, and when it finishes post the word done.",
       );
       await studio.open(ask.thread);
-      const done = (s: StudioState) => messages(s).some((m) => m.from === lead && /\bdone\b/i.test(m.body));
+      // The report itself, not a message that mentions it ("I will post done when it finishes").
+      const report = (s: StudioState) => messages(s).find((m) => m.from === lead && /^\W*done\W*$/i.test(m.body));
+      const done = (s: StudioState) => report(s) !== undefined;
       await studio
         .until(
           `${lead} working in the background with one work item and no Turn`,
           (s) => {
-            if (done(s)) throw notBackground;
+            if (done(s)) throw new Error(`${notBackground}: it reported before any background work showed`);
             const a = agent(s, lead);
             return a?.presence === "working" && a.turn === null && a.work.length === 1;
           },
           ANSWER_MS,
         )
         .catch((error: unknown) => {
-          throw error === notBackground ? error : notBackground;
+          const message = error instanceof Error ? error.message : String(error);
+          throw new Error(message.startsWith(notBackground) ? message : `${notBackground} (${message})`);
         });
       await studio.until(`the word done from ${lead}`, done, ANSWER_MS);
       await studio.until(
