@@ -17,6 +17,8 @@ type TemplateFiles = Template & { roles: { slug: string; role: string }[] };
 
 export function createTeams(deps: { repo: Repo; a12s: A12s; dispatcher: Dispatcher; templatesDir: string }) {
   const { repo, a12s, dispatcher, templatesDir } = deps;
+  // Slugs of creates under way; their rows are written only after the a12s work.
+  const creating = new Set<string>();
 
   function readTemplate(id: string): TemplateFiles {
     const dir = join(templatesDir, id);
@@ -119,45 +121,52 @@ export function createTeams(deps: { repo: Repo; a12s: A12s; dispatcher: Dispatch
       });
     },
 
-    // All a12s work first and then one transaction, so a failure leaves no half-made team behind.
+    // All a12s work first and then one transaction, so a failure leaves no half-made team behind. The slug is
+    // claimed before the first await, so a create running alongside picks another and can never remove this
+    // one's token or agent computers when it fails.
     async createTeam(input: CreateTeamBody): Promise<Team> {
       const known = templateIds();
       if (!known.includes(input.template)) {
         throw new StudioError(404, "not_found", `No template "${input.template}".`, `Use one of: ${known.join(", ")}.`);
       }
-      const id = teamSlug(input.name, repo.teamSlugUsed);
+      const id = teamSlug(input.name, (slug) => creating.has(slug) || repo.teamSlugUsed(slug));
       const { roles } = readTemplate(input.template);
       const settings = repo.settings();
       const scoped = repo.forTeam(id);
       const agents = roles.map(({ slug, role }) => newAgent(scoped, id, slug, role, settings.defaultModel));
-      const token = await a12s.createToken(id);
-      const team: Team = {
-        id,
-        name: input.name,
-        purpose: input.purpose,
-        accent: input.accent,
-        leadAgentId: agentId(id, "lead"),
-        dailyBudgetUsd: settings.defaultDailyBudgetUsd,
-        paused: false,
-        a12sToken: token,
-        createdAt: Date.now(),
-      };
-      const created: Agent[] = [];
+      creating.add(id);
       try {
-        for (const agent of agents) {
-          await a12s.putAgent(agent.id, agentSpec(team, agent), "create");
-          created.push(agent);
+        const token = await a12s.createToken(id);
+        const team: Team = {
+          id,
+          name: input.name,
+          purpose: input.purpose,
+          accent: input.accent,
+          leadAgentId: agentId(id, "lead"),
+          dailyBudgetUsd: settings.defaultDailyBudgetUsd,
+          paused: false,
+          a12sToken: token,
+          createdAt: Date.now(),
+        };
+        const created: Agent[] = [];
+        try {
+          for (const agent of agents) {
+            await a12s.putAgent(agent.id, agentSpec(team, agent), "create");
+            created.push(agent);
+          }
+        } catch (error) {
+          for (const agent of created) await removeComputer(team, agent.id).catch((e) => console.error(e));
+          await a12s.removeToken(team.id).catch((e) => console.error(e));
+          throw error;
         }
-      } catch (error) {
-        for (const agent of created) await removeComputer(team, agent.id).catch((e) => console.error(e));
-        await a12s.removeToken(team.id).catch((e) => console.error(e));
-        throw error;
+        repo.tx(() => {
+          repo.insertTeam(team);
+          for (const agent of agents) scoped.insertAgent(agent);
+        });
+        return team;
+      } finally {
+        creating.delete(id);
       }
-      repo.tx(() => {
-        repo.insertTeam(team);
-        for (const agent of agents) scoped.insertAgent(agent);
-      });
-      return team;
     },
 
     async hire(teamId: string, input: HireBody): Promise<Agent> {
