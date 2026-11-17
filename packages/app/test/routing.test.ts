@@ -127,6 +127,46 @@ test("a message that misses the running Turn starts the next and is delivered on
   assert.equal(received.filter((id) => id === row(s, posted.message).a12s).length, 1);
 });
 
+test("a resync during a Turn leaves a message that joined it as it was recorded", async (t) => {
+  const s = await setup(t, { live: true });
+  const turn = s.a12s.startTurn("web-dev");
+  const joined = await s.tool("web-lead", "post", { to: "dev", title: "Hero", body: "Use the new logo." });
+  await s.app.dispatcher.run();
+  await until(() => delivered(s, joined.message));
+  // A second message stays in the a12s inbox, so the resync reads that inbox, which also lists the first.
+  const dev = s.a12s.agents.get("web-dev");
+  assert.ok(dev);
+  const { inbox: _, ...spec } = dev.spec;
+  dev.spec = spec;
+  const waiting = await s.tool("web-lead", "post", { to: "dev", thread: joined.thread, body: "And the tagline." });
+  await s.app.dispatcher.run();
+  dev.phase = "Ready";
+  s.a12s.emit({ type: "gap" });
+  await until(() => s.app.live.agent("web-dev")?.phase === "Ready");
+  await tick();
+  assert.equal(row(s, waiting.message).delivery, "sent");
+  assert.deepEqual(chain(s, joined.message), { cause: null, depth: 0, turn, steered: 1 });
+});
+
+test("a message that joined a Turn while the feed was down is recorded as joined when the Turn is stored", async (t) => {
+  const s = await setup(t, { live: true });
+  await until(() => s.app.live.up());
+  const turn = s.a12s.startTurn("web-dev");
+  // The feed is down when a12s reports the message as steered, so only the resync tells of it.
+  s.a12s.setReachable(false);
+  await until(() => !s.app.live.up());
+  const posted = await s.tool("web-lead", "post", { to: "dev", title: "Hero", body: "Use the new logo." });
+  await s.app.dispatcher.run();
+  await tick();
+  s.a12s.setReachable(true);
+  await until(() => delivered(s, posted.message), 3000);
+  assert.deepEqual(chain(s, posted.message), { cause: null, depth: 0, turn, steered: 0 });
+
+  s.a12s.finishTurn("web-dev");
+  await until(() => s.app.repo.turnTeam(turn) === "web");
+  assert.deepEqual(chain(s, posted.message), { cause: null, depth: 0, turn, steered: 1 });
+});
+
 test("an agent without the steering policy gets a message at its next Turn", async (t) => {
   const s = await setup(t, { live: true });
   const dev = s.a12s.agents.get("web-dev");

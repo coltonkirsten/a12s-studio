@@ -21,7 +21,7 @@ function nextDue(wake: Wake, now: number): number | null {
 }
 
 // The one 30 s tick: due wakes, the broker's attention items, the expiry warnings they call for, then a dispatcher
-// run, which delivers the wakes' asks under every limit.
+// run, which delivers the wakes' messages under every limit.
 export function createScheduler(deps: {
   repo: Repo;
   broker: BrokerClient;

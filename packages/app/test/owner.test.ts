@@ -115,7 +115,7 @@ test("stream: states are coalesced", async (t) => {
   assert.equal(stream.last().teams.find((team) => team.id === "web")?.name, "Web 19");
 });
 
-test("owner thread and post: asks go to the lead or the named slug, a reply answers an agent's ask", async (t) => {
+test("owner thread and post: a message goes to the lead, the thread's owner or the named slug", async (t) => {
   const s = await setup(t);
   await s.twoTeams();
   const thread = await s.owner("POST", "/api/teams/web/threads", { body: "Build the landing page." });
@@ -207,7 +207,7 @@ test("agents: hire, patch model, power, fire", async (t) => {
   assert.equal((await s.owner("DELETE", "/api/agents/web-lead")).status, 409);
 });
 
-test("settings: pause holds owner asks and shows agents waiting; resume delivers", async (t) => {
+test("settings: pause holds owner messages and shows agents waiting; resume delivers", async (t) => {
   const s = await setup(t, { live: true });
   await s.twoTeams();
   assert.equal((await s.owner("PATCH", "/api/settings", { paused: true })).status, 200);

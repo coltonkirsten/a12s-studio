@@ -42,7 +42,7 @@ const iso = (ms: number) => new Date(ms).toISOString();
 export const schedule: Tool<typeof input> = {
   name: "schedule",
   description:
-    "Wake yourself later, once or on a repeat no faster than hourly, instead of waiting in a loop. At the wake you get an ask with your note.",
+    "Wake yourself later, once or on a repeat no faster than hourly, instead of waiting in a loop. At the wake you get a message with your note.",
   input,
   run({ team, caller }, args) {
     const { action } = args;

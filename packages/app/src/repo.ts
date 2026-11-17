@@ -36,7 +36,6 @@ export type Thread = {
   title: string;
   ownerAgentId: string;
   status: ThreadStatus;
-  ownerSeenAt: number;
   createdAt: number;
   updatedAt: number;
 };
@@ -112,8 +111,8 @@ const TEAM = `id, name, purpose, accent, lead_agent_id AS leadAgentId, daily_bud
   paused, a12s_token AS a12sToken, created_at AS createdAt`;
 const AGENT = `id, team_id AS teamId, slug, role, model, sleep_after_idle AS sleepAfterIdle,
   compact_min_tokens AS compactMinTokens, cpu, memory, created_at AS createdAt`;
-const THREAD = `id, team_id AS teamId, title, owner_agent_id AS ownerAgentId, status, owner_seen_at AS ownerSeenAt,
-  created_at AS createdAt, updated_at AS updatedAt`;
+const THREAD = `id, team_id AS teamId, title, owner_agent_id AS ownerAgentId, status, created_at AS createdAt,
+  updated_at AS updatedAt`;
 const WAKE = `id, team_id AS teamId, agent_id AS agentId, thread_id AS threadId, note, due_at AS dueAt,
   repeat_seconds AS repeatSeconds`;
 const MESSAGE = `id, team_id AS teamId, thread_id AS threadId, from_id AS fromId, to_id AS toId, body,
@@ -371,25 +370,30 @@ export function createRepo(db: DatabaseSync, onWrite: () => void = () => {}) {
         ).map(toMessage);
       },
 
-      // The Turn that received them. A Turn's own record is the truth for its Messages, so it may correct how an
-      // earlier report said they arrived. Answers the rows it changed.
+      // The Turn that received them. Answers the rows it changed.
       markDelivered(a12sIds: string[], turnId: string, steered: boolean, at: number): Message[] {
         const rows = all(
-          `UPDATE messages SET delivery = 'delivered', turn_id = ?, steered = ?,
-             delivered_at = CASE WHEN delivery = 'sent' THEN ? ELSE delivered_at END
-           WHERE team_id = ? AND a12s_message_id IN (SELECT value FROM json_each(?))
-             AND (delivery = 'sent' OR (delivery = 'delivered' AND turn_id = ? AND steered <> ?))
+          `UPDATE messages SET delivery = 'delivered', turn_id = ?, steered = ?, delivered_at = ?
+           WHERE team_id = ? AND delivery = 'sent' AND a12s_message_id IN (SELECT value FROM json_each(?))
            RETURNING ${MESSAGE}`,
           turnId,
           steered ? 1 : 0,
           at,
           teamId,
           JSON.stringify(a12sIds),
-          turnId,
-          steered ? 1 : 0,
         );
         if (rows.length > 0) onWrite();
         return rows.map(toMessage);
+      },
+      // A resync learns which Turn took a message but not how; the Turn's record says which ones joined it.
+      markSteered(a12sIds: string[], turnId: string): void {
+        run(
+          `UPDATE messages SET steered = 1 WHERE team_id = ? AND turn_id = ? AND steered = 0
+             AND a12s_message_id IN (SELECT value FROM json_each(?))`,
+          teamId,
+          turnId,
+          JSON.stringify(a12sIds),
+        );
       },
       // A Message a12s dropped without delivering it (withdrawn, discarded, expired) will never arrive.
       markUndelivered(a12sIds: string[]): void {

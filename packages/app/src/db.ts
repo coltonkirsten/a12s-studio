@@ -121,7 +121,7 @@ const migrations: string[] = [
   INSERT INTO messages_new (id, team_id, thread_id, from_id, to_id, body, file_name, cause_id, depth, delivery,
       a12s_message_id, created_at, delivered_at)
     SELECT id, team_id, thread_id, from_id, to_id, body, file_name, ask_id, ask_id IS NOT NULL, delivery,
-      a12s_message_id, created_at, delivered_at FROM messages;
+      a12s_message_id, created_at, delivered_at FROM messages ORDER BY rowid;
   DROP TABLE messages;
   ALTER TABLE messages_new RENAME TO messages;
   CREATE INDEX messages_thread ON messages (thread_id, created_at);

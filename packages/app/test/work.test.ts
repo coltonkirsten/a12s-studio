@@ -25,7 +25,7 @@ const agentView = (s: S, id: string) => {
   return found;
 };
 
-// The lead takes an owner ask in a new thread; answers the Turn's id and the thread.
+// The lead takes an owner message in a new thread; answers the Turn's id and the thread.
 async function leadTurn(s: S, body = "Compare three hosting plans.") {
   const posted = ownerThread(s.app.repo.forTeam("web"), { body });
   await s.app.dispatcher.run();

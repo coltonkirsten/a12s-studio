@@ -213,6 +213,7 @@ export function createLive(deps: {
     const threadId = scoped.messagesByA12sIds(ids(false))[0]?.threadId ?? null;
     scoped.tx(() => {
       for (const steered of [false, true]) logDelivered(scoped.markDelivered(ids(steered), t.id, steered, startedAt));
+      scoped.markSteered(ids(true), t.id);
       scoped.insertTurn({
         id: t.id,
         agentId: t.agent,

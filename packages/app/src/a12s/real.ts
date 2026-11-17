@@ -122,18 +122,7 @@ const sessionOf = (session: string | null): string | null => session || null;
 // a12s marks an event outside any Turn with an empty one.
 const turnOf = (turn: string): { turn?: string } => (turn ? { turn } : {});
 
-// The event a12s 0.12 journals when the harness takes a Batch into the running Turn, and the mark its stored Turns
-// put on such a Message. The SDK this package depends on does not have them.
-type SteeredEvent = {
-  type: "turn.steered";
-  agentComputer?: string;
-  ts: string;
-  turn: string;
-  data: { inbox?: { messages: { id: string }[] } };
-};
-type StoredMessage = TurnsResponse["turns"][number]["messages"][number] & { steered?: boolean };
-
-export function toEvent(ev: SdkEvent | SteeredEvent): A12sEvent | null {
+export function toEvent(ev: SdkEvent): A12sEvent | null {
   const agent = ev.agentComputer ?? "";
   const at = ms(ev.ts);
   switch (ev.type) {
@@ -196,7 +185,7 @@ function toTurn(t: TurnsResponse["turns"][number]): TurnRecord {
     status: t.status,
     ...(t.error ? { error: t.error } : {}),
     text: t.text,
-    messages: t.messages.map((m: StoredMessage) => ({ id: m.id, steered: m.steered === true })),
+    messages: t.messages.map((m) => ({ id: m.id, steered: m.steered === true })),
     tools: t.tools.map((call) => ({ name: call.name, isError: call.isError === true })),
     ...(t.startedAt ? { startedAt: ms(t.startedAt) } : {}),
     finishedAt: ms(t.finishedAt),

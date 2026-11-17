@@ -64,7 +64,7 @@ fleet/fleet.yaml       written once by setup; names the Fleet, nothing else
 
 `STUDIO_HOME` overrides the folder (tests use a temp dir). Ports are constants in code, not settings.
 
-**Install** (`scripts/setup.sh [--owner-login <login>]`, idempotent): checks Docker, a12s 0.11.2+ and Node 24.2+;
+**Install** (`scripts/setup.sh [--owner-login <login>]`, idempotent): checks Docker, a12s 0.12.0+ and Node 24.2+;
 when the Fleet `studio` has never been started, writes `fleet/fleet.yaml` (`metadata.name: studio`, no agent
 computers) and runs `a12s up` once to start the Controller; prints the `a12s creds set anthropic` command when the
 Controller has no `anthropic` credential; writes `config.json` (asking for the owner's Tailscale login unless given);
