@@ -29,9 +29,10 @@ three gaps, and Studio is exactly those three things:
 | App | 1 process | Routes every message, serves the UI, keeps the Needs You list, fires scheduled wakes, enforces limits. |
 | Broker | 1 process | The only holder of third-party secrets. Makes credentialed calls for agents. |
 | Agent computers | 1 container per agent | The agents. Stopped when asleep, so a sleeping agent uses no memory. |
+| Add-ons | 1 container per team that has one on | Optional capabilities built once and turned on per team. Section 9. |
 | Storage | 2 SQLite files | One for the app, one for the broker. Each has one writer, so there is no database server. |
 | Agent tools | 6 | Section 5. |
-| Screens | 5 | Section 10. |
+| Screens | 5 | Section 11. |
 
 **Why the broker is its own process.** The app reads agent input all day through its tool API. The broker is small,
 changes rarely and denies by default. Keeping them apart means the process that parses agent input never holds a
@@ -54,11 +55,12 @@ Across teams, nothing passes. You are the only bridge.
 | Messages | Agents cannot send to each other directly; a12s send grants are empty. Every message goes through the app, which works out the team from who is calling and never from a parameter. |
 | Network | a12s puts each agent container on its own network with one way out, the Controller's proxy. Agents cannot reach each other. |
 | Access | Every credential and grant in the broker belongs to one team. A caller from another team gets a 403. |
+| Add-ons | A team's add-on is its own container. Only that team's agents are set up to reach it, and a12s refuses everyone else. |
 | Data | Every row in the app's database carries its team. One code path sets it, from the caller's identity. |
 | Budget | Each team has its own daily budget. |
 
-**What teams share:** the owner's Claude login, the Mac and one agent image. A team is a wall for work and access,
-not for billing.
+**What teams share:** the owner's Claude login, the Mac, one agent image and the list of add-ons to choose from. A
+team is a wall for work and access, not for billing.
 
 **Creating a team** is one sheet: pick a template, which fills in a name and a purpose to edit; the blank template
 starts with none and only a lead. Studio makes the team's id from its name. A template is a folder in the repo (`teams/<name>/`
@@ -164,7 +166,7 @@ the app stops delivering and puts awake agents to sleep. Messages queue in the a
 delivers them in order.
 
 **Backups.** One nightly script copies the two SQLite files and each agent's home drive to a folder outside Docker.
-A restore script puts them back.
+A restore script puts them back. An add-on's own drive holds working files only and is not copied.
 
 ## 8. The broker
 
@@ -204,7 +206,44 @@ code.
   agents and everything else.
 - Third-party secrets are kept in the broker's vault and never in a12s's own credential store.
 
-## 9. Usage guard
+## 9. Add-ons
+
+An add-on is a capability built once and turned on per team: turning a script into an audio file, rendering slides
+into a video, driving a headless browser. It is an a12s Service image and a short manifest. Studio has no code for
+any particular add-on.
+
+1. **The library.** You add an add-on by giving Studio its manifest: an id, a name, one line that says what it does,
+   the image, and the outside calls it makes (host, methods, paths). The library is a list in the global settings.
+2. **On per team.** Team settings has a switch for every add-on in the library. Turning one on first shows the exact
+   change: the calls it will make with the team's credentials, and which of those credentials the team does not have
+   yet. Only you turn an add-on on or off. An agent can suggest one in a thread.
+3. **One instance per team.** Turning it on starts one container for that team, named `<team>-addon-<id>`, and gives
+   that team's agents its tools. a12s lets an agent reach only the Services its own setup names, and only Studio
+   writes that setup, so no other team's agent can reach the container. An add-on therefore knows nothing about
+   teams and cannot mix the work of two, whatever its code does.
+4. **No secret in it.** An add-on holds no credential and has no way out to the internet of its own. It calls
+   outside services through the broker, the same way an agent does, and the broker treats it as a caller from its
+   team: that team's credentials, grants and audit log. Turning an add-on on creates the grants its manifest lists;
+   turning it off revokes them and removes the container.
+5. **Its spend counts.** When an add-on does paid work it reports the cost to the app, which adds it to the team's
+   spend for the day. One daily budget covers the team's agents and its add-ons.
+6. **When it breaks.** An add-on that cannot run shows a card in Needs You. A credential the outside service refuses
+   shows the same card it does for an agent.
+
+**Why one instance per team and not one for everyone.** A shared instance would have to keep teams apart in its own
+code, the broker would have to believe it about which team it is working for, and its spend would be split by its
+own count. With one instance per team all three are held by structure: the container's name carries the team, and
+a12s and the broker already enforce names. The price is one small container for each team that uses the add-on.
+
+**Known limits.**
+
+- The grants an add-on brings are the team's grants. That team's agents can make the same calls directly through
+  the broker, and those calls are not counted as spend.
+- The cost an add-on reports is the add-on's own figure. An add-on is code you chose to run, and Studio trusts its
+  count the way it trusts its work.
+- An add-on's container runs for as long as the add-on is on, also while the team's agents sleep.
+
+## 10. Usage guard
 
 Agents share one Claude login. Three guards keep them from using it up. Every limit is a setting you edit in the UI,
 and a change applies at once.
@@ -212,13 +251,14 @@ and a change applies at once.
 1. **Awake cap.** At most N agents are awake at once (default 4). The number follows from the memory Docker has.
    Extra wakes queue; your own asks go first, then the oldest.
 2. **Daily budget per team** (default $25). a12s reports token counts and a list-price cost for every Turn,
-   sub-agents included. The app sums them per team per day. At the budget, that team's deliveries hold until local
-   midnight or until you raise it, and a card appears in Needs You.
+   sub-agents included. The app sums them per team per day, together with what the team's add-ons report. At the
+   budget, that team's deliveries hold until local midnight or until you raise it, and a card appears in Needs You.
 3. **Pause** (section 7).
 
-The budget measures list-price spend, not the plan's real rate limit. It is a guard, not an invoice.
+The budget measures list-price spend and reported add-on cost, not the plan's real rate limit. It is a guard, not an
+invoice.
 
-## 10. The frontend
+## 11. The frontend
 
 **The feel.** Calm and quiet by default. Depth is one click away, never in your face.
 
@@ -243,11 +283,11 @@ The budget measures list-price spend, not the plan's real rate limit. It is a gu
 
 | Screen | What it is |
 |---|---|
-| 1. Teams | The sidebar and home. Each team: name, agent dots, open threads, a needs-you count, today's usage as a thin bar. "New team" is one sheet. Global settings (awake cap, defaults, pause everything) live here. |
+| 1. Teams | The sidebar and home. Each team: name, agent dots, open threads, a needs-you count, today's usage as a thin bar. "New team" is one sheet. Global settings (awake cap, defaults, the add-on library, pause everything) live here. |
 | 2. Team | The main screen: threads on the left, the conversation, a composer. The first time it is empty except for one line: "Tell the team what you want." |
-| 3. Needs You | One list across all teams: questions for you, access requests, an agent in error, a failed Turn, a team at its budget, a rejected credential. Each card says who, what exactly changes, and has Approve and Deny, or a reply box. This is the only place approvals happen. |
+| 3. Needs You | One list across all teams: questions for you, access requests, an agent in error, a failed Turn, a team at its budget, a rejected credential, an add-on that cannot run. Each card says who, what exactly changes, and has Approve and Deny, or a reply box. This is the only place approvals happen. |
 | 4. Agent inspector | Now (the live Turn with its tool log), Inbox (queued messages, with Remove and Clear), Role and notes, Files, Terminal, Settings (model, sleep, compaction, size). |
-| 5. Team settings | Brief, Access (write-only credentials, grants with expiry, the audit log), Budget, and a danger zone (pause, delete). |
+| 5. Team settings | Brief, Access (write-only credentials, grants with expiry, the audit log), Add-ons (one switch each, with today's spend), Budget, and a danger zone (pause, delete). |
 
 **How it stays live.** The server derives one state and pushes it over one stream. The browser renders that state and
 keeps none of its own. The app is the only writer to its database, so there are no database triggers and no polling
@@ -256,15 +296,17 @@ from the browser.
 **Stack.** TypeScript everywhere. App: Node, SQLite, a12s over its HTTP API. UI: React and plain CSS, no component
 kit. Broker: its own package with no runtime dependencies.
 
-## 11. Security model
+## 12. Security model
 
 **What is protected, and from what.** The threat is an agent that has been misled by something it read: a web page,
 a file, a message. Such an agent may try anything its container allows.
 
 - **It cannot reach another team.** It has no a12s send grant, its network leads only to the proxy, and the app and
-  broker scope every request by the caller name the proxy stamps. An agent cannot set that header itself.
+  broker scope every request by the caller name the proxy stamps. An agent cannot set that header itself. The proxy
+  lets it reach only its own team's add-ons.
 - **It cannot read a third-party secret.** None is in its container. The broker attaches credentials outside it.
-- **It cannot widen its own access.** Only a click by the owner in Needs You creates a grant from a request.
+- **It cannot widen its own access.** Only a click by the owner in Needs You creates a grant from a request, and
+  only the owner turns an add-on on.
 - **It cannot act as the owner.** The owner API is a different listener from the agent API, reachable only on
   loopback and through Tailscale, and accepts only the configured owner identity.
 - **It cannot wake its team in circles.** Only asks and replies wake, a reply ends an exchange, and the awake cap,
@@ -272,7 +314,8 @@ a file, a message. Such an agent may try anything its container allows.
 
 **What is trusted.** The Mac, its user account, Docker, a12s and Tailscale. The app and the broker listen on
 loopback, so any process running as the owner on the Mac is as trusted as the owner. The app is trusted to relay the
-owner's approvals to the broker.
+owner's approvals to the broker. An add-on image is trusted to do its work and to report its cost; it is given no
+secret, no route to another team and no route to the internet except the broker.
 
 **The honest exception: the Claude login.** a12s gives the Claude Code harness the owner's Claude token inside each
 agent container, and the agent's own shell can read it. With a subscription login this is how the harness works: the
@@ -285,7 +328,7 @@ model gateway, which keeps the key on the server side. That is out of scope here
 values. Template teams are generic examples. Secret scanning runs from the first commit. Tests that use a Claude
 login never run in CI.
 
-## 12. Out of scope
+## 13. Out of scope
 
 - Other channels: chat apps, email, voice. The app is the only channel.
 - Any cloud: no hosted version, no cloud driver, no infrastructure code.
@@ -294,7 +337,9 @@ login never run in CI.
 - Messages between teams.
 - Sub-teams, org charts, connection graphs.
 - Agents that approve things, rules engines, review gates, "trusted" flags.
-- Agents hiring agents.
+- Agents hiring agents, and agents turning add-ons on.
+- An add-on instance shared between teams, and per-team settings for an add-on. What changes from call to call is
+  an input of the add-on's tools; what a team prefers goes in its brief.
 - Triggers from GitHub, email or files. Only wakes an agent sets for itself.
 - A costs page built on billing data, artifact hosting.
 - A native Mac or phone app, and push notifications.

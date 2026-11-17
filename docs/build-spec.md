@@ -86,18 +86,19 @@ Throwaway code. Each has one decision hanging on it.
 | M6 | Does `tailscale serve` set `Tailscale-User-Login` and `X-Forwarded-For`, strip client-sent `Tailscale-*` headers, and pass on the `Host` the browser used? | `ownerGate` as written. A write's `Origin` is compared with `Host`, so if `tailscale serve` rewrites `Host`, every change through it is refused (reads still work). |
 | M7 | An agent asleep with a pending Message and no `wakeOnMessage`: does it stay asleep until `wake()`? Does `wake()` on a prefix token work and stay outside `maxWakesPerHour`? | The wake design (section 5.3). **Measured:** `POST …/power {"state":"awake"}` on a prefix token wakes it. |
 | M8 | How a Docker volume name maps to an agent computer's home drive (`GET /v1/drives`). | The backup script. |
+| M9 | A Service a12s runs, named `<team>-addon-<id>`, whose spec `uses` the external Services `broker` and `studio`: is that name stamped as the caller on its calls to both? Do two Services start from one image whose `service.json` carries a third name? Is an agent computer whose spec does not name the Service refused by the proxy? Which tool prefix do agents see for its MCP port? Does a write that names an image the host lacks pull it? | Section 10 as written. It is measured by the first add-on package, not in Phase 0. |
 
 **Phase 0 exit:** inside an agent container the environment and disk show no GitHub token, a push works, and the
 forwarder logged the right caller name.
 
 ## 3. Repo layout
 
-npm workspaces, four packages. Workspaces (rather than one package) because the broker's package boundary is a
+npm workspaces, five packages. Workspaces (rather than one package) because the broker's package boundary is a
 security property: `packages/broker/package.json` has **no runtime dependencies**, and a test asserts it
 (section 9.7, invariant 21).
 
 ```
-package.json            workspaces, scripts: check, test, dev, build
+package.json            workspaces, scripts: check, test, dev, build, e2e
 biome.json  tsconfig.base.json  AGENTS.md  README.md  LICENSE
 docs/design.md  docs/build-spec.md
 packages/
@@ -118,7 +119,8 @@ packages/
     src/router.ts       post rules: kinds, replies, thread status, the implicit answer
     src/dispatcher.ts   the one queue: pause, budget, awake cap, delivery
     src/teams.ts        create, hire, fire, delete, pause and resume
-    src/a12s/           port.ts (interface), real.ts (a12s HTTP API), fake.ts (in-memory), spec.ts (agentSpec)
+    src/addons.ts       the add-on library; turning an add-on on and off for a team
+    src/a12s/           port.ts (interface), real.ts (a12s HTTP API), fake.ts (in-memory), spec.ts (agentSpec, addonSpec)
     src/live.ts         a12s events -> presence, line, text, turns
     src/state.ts        derive StudioState; rev counter; SSE fan-out
     src/owner/          ownerGate, routes, static files
@@ -132,7 +134,12 @@ packages/
   web/
     src/main.tsx  app.tsx  stream.ts  api.ts  screens/  parts/  styles/*.css
     src/logic/          pure functions (folding, formatting, command palette); these are tested
+  e2e/                  `npm run e2e`: real Docker, a12s and Claude login; never in CI (section 12)
+    src/run.ts          the Fleet `studio-e2e`, a temp STUDIO_HOME, the real broker and app; runs the scripts; cleans up
+    src/studio.ts       what a script drives Studio with: the owner API, the state stream, a command in a container
+    src/p1.ts  p2.ts  p3.ts  p4.ts      one exit script per phase
 teams/                  templates: blank/, website/, research-notes/
+addons/example/         a reference add-on: Dockerfile, service.json, addon.json and one small server
 scripts/                setup.sh, backup.ts, restore.ts
 launchd/
 .github/workflows/ci.yml
@@ -153,7 +160,7 @@ launchd/
 | Validation | `zod` in the app (tool inputs, owner API bodies). Hand-written guards in the broker. | The MCP SDK already brings zod. |
 | App dependencies | `@coltonkirsten/a12s`, `@modelcontextprotocol/sdk`, `zod`, `ws` (terminal bridge, P3). | |
 | Web dependencies | `react`, `react-dom`, `vite`, `@xterm/xterm` (P3). Plain CSS files with custom properties. No router library (the URL is `/#/<team>/<thread>`, parsed by hand), no state library (the state is the server's), no component kit. | |
-| Scripts | `npm run check` = biome + tsc + tests. `npm run dev` = app, broker and Vite (Vite proxies `/api` to 7400). `npm run build` = Vite build; the app serves `packages/web/dist`. | |
+| Scripts | `npm run check` = biome + tsc + tests. `npm run dev` = app, broker and Vite (Vite proxies `/api` to 7400). `npm run build` = Vite build; the app serves `packages/web/dist`. `npm run e2e` = `node packages/e2e/src/run.ts`. | |
 | CI | One job: `npm ci`, `npm run check`, a secret scan. Nothing that needs Docker, a12s or a Claude login. | |
 
 **Conventions:** ids are a prefix plus 12 random base32 characters (`th_`, `m_`, `w_`, `g_`, `rq_`); Turn ids are
@@ -167,7 +174,8 @@ Natural keys keep the walls simple: a team's id is its slug, an agent's id is it
 - Team slug: `^[a-z][a-z0-9]{1,19}$`. **No hyphen**, so one team's prefix (`web-`) can never cover another team's
   names. Reserved: `studio`, `broker`, `owner`, `system`, `a12s`.
 - Agent slug: `^[a-z][a-z0-9-]{0,29}$`. Agent id = `<team>-<agent>`. The team of an agent computer name is everything
-  before its first hyphen.
+  before its first hyphen. A slug that starts with `addon-` is refused at hire: those names belong to add-on
+  instances (section 10.2), so a name is an agent's or an add-on's by its shape.
 - A team's slug comes from its name (`teamSlug` in `names.ts`): lower case, letters and digits run together, `team`
   if fewer than two are left, then `2`, `3`, ... if it is reserved or has been used. The owner never types it.
 - Slugs are never reused: teams and agents are soft-deleted, because a12s keeps a removed agent computer's home drive
@@ -258,6 +266,30 @@ CREATE TABLE turns (                                   -- one row per finished a
 ) STRICT;
 CREATE INDEX turns_spend ON turns (team_id, finished_at);
 CREATE INDEX turns_agent ON turns (agent_id, finished_at DESC);
+
+CREATE TABLE addons (                                  -- the library (section 10.1)
+  id TEXT PRIMARY KEY,
+  manifest TEXT NOT NULL,                              -- JSON, as the owner gave it
+  added_at INTEGER NOT NULL
+) STRICT;
+
+CREATE TABLE team_addons (                             -- a row = the add-on is on for the team
+  team_id TEXT NOT NULL REFERENCES teams(id),
+  addon_id TEXT NOT NULL REFERENCES addons(id),
+  grant_ids TEXT NOT NULL,                             -- JSON array: the broker grants made when it was turned on
+  created_at INTEGER NOT NULL,
+  PRIMARY KEY (team_id, addon_id)
+) STRICT;
+
+CREATE TABLE addon_usage (                             -- cost an add-on instance reported (section 10.4)
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  team_id TEXT NOT NULL REFERENCES teams(id),
+  addon_id TEXT NOT NULL,
+  at INTEGER NOT NULL,
+  usd REAL NOT NULL CHECK (usd > 0),
+  note TEXT NOT NULL
+) STRICT;
+CREATE INDEX addon_usage_spend ON addon_usage (team_id, at);
 ```
 
 **Where limits live.** Global limits and hire defaults: `settings`. Per-team: `teams.daily_budget_usd`,
@@ -282,6 +314,7 @@ The app's agent listener (`7410`) is the external Service `studio`. It serves:
 - `POST /mcp`: an MCP server over streamable HTTP, stateless (`sessionIdGenerator: undefined`,
   `enableJsonResponse: true`): a new server and transport per request, with the caller bound in a closure.
 - `GET /files/<message id>/<name>`: an attachment, for a caller on the message's team.
+- `POST /usage`: an add-on instance reports the cost of paid work (section 10.4).
 - `GET /healthz`: `{ ok: true }`. The one route that needs no caller; it reads nothing.
 
 `caller.ts` is the only reader of the caller header:
@@ -294,6 +327,10 @@ function resolveCaller(headers): Caller   // throws Refused(403)
 It refuses when the `Host` is not exactly `STUDIO_HOST`, or the header is missing, appears more than once, or is not
 the id of an agent with `removed_at IS NULL` whose team has `deleted_at IS NULL`. `teamId` comes from the agents
 row. Every agent-listener request goes through it before anything else runs. Tool inputs never carry a team, and a "from" is never accepted.
+
+`POST /usage` is the one route an agent may not call. Its caller is resolved by `resolveAddon` in the same file,
+with the same `Host` and single-header rules: the name must be an add-on instance's (section 10.2) with a
+`team_addons` row, on a team with `deleted_at IS NULL`.
 
 ### 5.2 The six tools
 
@@ -476,8 +513,9 @@ agents put to sleep with work in their inbox are woken, and the queued messages 
 
 - **Awake cap** and **queue order**: the dispatcher above. Lowering the cap never forces a sleep; it only stops new
   wakes.
-- **Budget hold**: `spentToday(team)` = sum of `turns.cost_usd` with `finished_at` at or after local midnight. At or
-  over `daily_budget_usd` the dispatcher skips the team. Running Turns finish. A Needs You card offers "Raise budget"
+- **Budget hold**: `spentToday(team)` = sum of `turns.cost_usd` with `finished_at` at or after local midnight, plus
+  the sum of `addon_usage.usd` with `at` in the same span. At or over `daily_budget_usd` the dispatcher skips the
+  team. Running Turns finish. A Needs You card offers "Raise budget"
   (edits the limit in place). The hold ends when the sum drops below the limit: at midnight or after an edit.
 - **Scheduled wakes**: the scheduler tick (every 30 s) takes each `wakes` row with `due_at <= now` and, in one
   transaction, inserts a system ask to the agent (`scheduled wake w_…: <note>`, in the wake's thread if set) and
@@ -491,15 +529,16 @@ agents put to sleep with work in their inbox are woken, and the queued messages 
 One Fleet named `studio`. The app is its only writer after setup.
 
 **Tokens.** The owner token (from `controller.json`) is used for exactly three things: creating and removing prefix
-tokens, writing agent computer specs (a spec that `uses` a Service outside the team's prefix is refused for a prefix
-token), and the one Fleet-wide event stream. Everything else (send, wake, sleep, stop, inbox, files, terminal, Turn
-history) uses the team's prefix token, created at team creation with `POST /v1/tokens` and the prefix `<team>-`;
-`forTeam(token)` binds a team's calls to it.
+tokens, writing agent computer and add-on Service specs (a spec that `uses` a Service outside the team's prefix is
+refused for a prefix token), and the one Fleet-wide event stream. Everything else (send, wake, sleep, stop, inbox,
+files, terminal, Turn history) uses the team's prefix token, created at team creation with `POST /v1/tokens` and the
+prefix `<team>-`; `forTeam(token)` binds a team's calls to it.
 
 **The a12s port.** The app talks to a12s only through `a12s/port.ts`, an interface with the dozen calls it needs
-(`ensureServices`, `createToken`, `removeToken`, `putAgent` and `events` on the owner token; `forTeam(token)` returns
-the rest on a prefix token: `removeAgent`, `send`, `wake`, `sleep`, `stop`, `status`, `inbox`, `withdraw`,
-`clearInbox`, `turns`, `turnEvents`, `readFile`, `writeFile`, `openTerminal`). `real.ts` implements it on a12s's HTTP
+(`ensureServices`, `createToken`, `removeToken`, `putAgent`, `putService` and `events` on the owner token;
+`forTeam(token)` returns the rest on a prefix token: `removeAgent`, `removeService`, `send`, `wake`, `sleep`, `stop`,
+`status`, `services`, `inbox`, `withdraw`, `clearInbox`, `turns`, `turnEvents`, `readFile`, `writeFile`,
+`openTerminal`). `real.ts` implements it on a12s's HTTP
 API and takes only the wire types from the SDK: the SDK has no files or terminal, and its event streams retry
 without end when a12s is down or an agent is asleep, where the app must show that. `fake.ts` implements it in memory
 for tests.
@@ -525,10 +564,11 @@ services:
 A Service has one port number: agents call `http://studio.a12s:7410` and the Controller dials `7410` on the host. So
 `STUDIO_PORT` and `BROKER_PORT` in `contract/names.ts` set both the listeners and the agent-facing URLs.
 
-**Agent spec.** `a12s/spec.ts` exports one pure function, `agentSpec(team, agent)`, that returns the whole
-spec. Fleet `defaults` are not used: the function is the single place a spec is decided. Hiring calls
-`putAgent(create-only)`; any edit to the brief, a role or an agent setting calls `putAgent` again with the fresh
-spec, which a12s applies at the agent's next idle moment.
+**Agent spec.** `a12s/spec.ts` exports one pure function, `agentSpec(team, agent, addons)`, that returns the whole
+spec; `addons` are the manifests of the add-ons the team has on. Fleet `defaults` are not used: the function is the
+single place a spec is decided. Hiring calls `putAgent(create-only)`; any edit to the brief, a role or an agent
+setting, and turning an add-on on or off, calls `putAgent` again with the fresh spec, which a12s applies at the
+agent's next idle moment.
 
 ```yaml
 harness:
@@ -542,7 +582,7 @@ harness:
           hooks: [{ type: command, command: /home/agent/bin/load-notes }]
 image: slim
 credentials: [anthropic]
-instructions: <core> + "\n\n# Team: <name>\n" + <team purpose> + "\n\n# Your role\n" + <agent role>
+instructions: <core> + <add-ons> + "\n\n# Team: <name>\n" + <team purpose> + "\n\n# Your role\n" + <agent role>
 files:
   bin/load-notes: |
     #!/bin/sh
@@ -560,9 +600,17 @@ power:
   sleepAfterIdle: <agent.sleep_after_idle>          # default 15m
   compactBeforeSleep: { minTokens: <agent.compact_min_tokens> }   # default 100000
 grants: { send: [] }
-uses: [studio, { name: broker, mcp: false }]
+uses: [studio, { name: broker, mcp: false }, <the instance of each add-on the team has on>]
 egress: { allow: ["*"] }
 resources: <cpu, memory when set>
+```
+
+`<add-ons>` is empty for a team with none on. Otherwise it is this block, one line per add-on:
+
+```
+\n\n# Add-ons
+Your team has these add-ons. Their tools are in your tool list.
+- <name>: <description> Its tools start with mcp__a12s-<instance name>__.
 ```
 
 `memory/notes.md` is deliberately not in `files`: a12s rewrites spec files, and the notes belong to the agent.
@@ -601,7 +649,8 @@ Access
 ```
 
 **Removing.** Firing an agent: `removeAgent`, set `removed_at`, delete its wakes, mark its queued messages `none`.
-Deleting a team: purge it in the broker first (section 9.5), then remove its agents and its token, then set
+Deleting a team: turn off its add-ons (section 10.3), purge it in the broker (section 9.5), then remove its agents
+and its token, then set
 `deleted_at`. If any step fails the team stays, with the error shown; an agent computer already gone counts as
 removed, so the delete can be run again. A team's lead cannot be fired. Agent slugs `owner` and `system` are refused
 at hire.
@@ -628,13 +677,16 @@ type StudioState = {
   rev: number;                         // goes up by one with every committed change or live phase change
   a12s: "up" | "down"; broker: "up" | "down";
   settings: Settings;
+  addons: Addon[];                     // the library: each add-on's manifest (section 10.1)
   teams: TeamView[];
   needsYou: NeedsYouItem[];
   open: ThreadView | null;             // the thread named in the stream URL
 };
 type TeamView = { id, name, purpose, accent, paused, leadId,
                   budget: { dailyUsd, spentTodayUsd, held },
-                  agents: AgentView[], threads: ThreadSummary[] };   // newest 200 threads
+                  agents: AgentView[], threads: ThreadSummary[],     // newest 200 threads
+                  addons: TeamAddon[] };                             // the add-ons it has on
+type TeamAddon = { id, status: "starting" | "ready" | "error", error?: string, spentTodayUsd };
 type AgentView = { id, slug, roleLine, model,
                    presence: "unknown" | "asleep" | "awake" | "working" | "waiting" | "error",
                    waitingFor?: "cap" | "budget" | "paused" | "disk",
@@ -665,7 +717,8 @@ later; every feed that becomes ready is followed by a resync.
 | `tool.started` (no `parent`) | Sets the line from the table below. Calls with a `parent` (a sub-agent's) are ignored for the line. |
 | `tool.finished` | Nothing for the line; the inspector's log shows it. |
 | `turn.finished` | Writes the `turns` row (section 7.4), applies sections 5.5 and 5.6, clears the line and text, runs the dispatcher. A Turn followed whole (every event from `turn.started` on, no resync since) is stored from its events; any other is read from a12s `turns`, which has all its text, Messages and tool calls (read again for up to a second: a12s sends the event just before it stores the Turn). |
-| `gap`, or a new feed | Resync: `status()` for phases; for each agent, recent Turns not yet in `turns`, stored the same way; for each `sent` message, its a12s state. Running Turns are no longer whole. |
+| `service.phase` | For an add-on instance, its status: `Ready` → ready; `Error` or `Unhealthy` → error (with its message); any other → starting. Other Services are ignored. |
+| `gap`, or a new feed | Resync: `status()` for phases; for each agent, recent Turns not yet in `turns`, stored the same way; for each `sent` message, its a12s state; `services()` for add-on statuses. Running Turns are no longer whole. |
 
 The same resync runs at app start, which is how state survives a restart.
 
@@ -698,6 +751,7 @@ Derived on every state build, never stored:
 | budget | A team's spend today is at or over its budget. | Raise budget. |
 | credential rejected | The broker saw the host refuse a stored credential. | Replace credential. |
 | grant expiring | A grant expires within three days. | Extend, Let it expire. |
+| add-on error | An add-on instance's status is error. | Open team settings, Turn off. |
 
 ### 7.4 Cost of a Turn
 
@@ -741,6 +795,8 @@ POST   /teams/:team/grants            { host, methods, paths, expiresAt? }
 DELETE /teams/:team/grants/:grant
 POST   /teams/:team/requests/:id/approve { expiresAt? }                  POST …/deny
 GET    /teams/:team/audit?before=
+PUT    /addons/:addon                 the manifest (section 10.1)        DELETE /addons/:addon
+PUT    /teams/:team/addons/:addon     (turn on)                          DELETE /teams/:team/addons/:addon
 ```
 
 The access routes relay to the broker's admin socket. A credential's `secret` passes through the app's memory once
@@ -813,7 +869,8 @@ CREATE INDEX audit_team ON audit (team_id, id DESC);
 ```
 
 A team is identified by its slug. The broker derives it from the caller name (everything before the first hyphen)
-and never asks the app who a caller is.
+and never asks the app who a caller is. An add-on instance (section 10.2) is named like an agent, so the broker
+serves it as a caller of its team and has no rule of its own for add-ons.
 
 ### 9.2 Vault
 
@@ -985,11 +1042,134 @@ advertisement, a streamed pack and the real `git` client.
 A grant limits the method, host and path of a request, not its body: a host that lets a field in a POST body choose
 another method is not narrowed by leaving that method out of a grant.
 
-## 10. Phases and work packages
+## 10. Add-ons
 
-Each package is one worktree and one pull request. Packages in the same phase run in parallel; `contract` changes
-needed by a phase land first, in its first package. A phase is done when its exit evidence has been shown to the
-owner.
+An add-on is a Service a12s runs from an image, one instance for each team that has it on. Studio has no code for
+any particular add-on: it keeps a library of manifests, starts and removes instances, and counts what they report.
+`addons.ts` holds the library and both switches.
+
+### 10.1 Manifest and library
+
+```json
+{
+  "id": "narrate",
+  "name": "Narrate",
+  "description": "Turns a script into an audio file.",
+  "image": "registry.example/narrate:1.2.0",
+  "access": [
+    { "host": "api.speech.example", "methods": ["POST"], "paths": ["/v1/speech"] }
+  ]
+}
+```
+
+| Field | Rule |
+|---|---|
+| `id` | `^[a-z][a-z0-9]{1,19}$`. |
+| `name` | 1 to 40 characters. |
+| `description` | One line, 1 to 200 characters. It is shown to the owner and written into agents' instructions. |
+| `image` | An image reference with a tag or a digest. a12s pins the image a tag names when it is first used, so a new build takes a new tag. |
+| `access` | 0 to 8 entries: the outside calls the add-on makes. Each becomes one broker grant (host, methods and path patterns as in section 9.3) for a team that turns the add-on on. |
+
+No other field is accepted. The manifest has no settings: what changes from call to call is an input of the add-on's
+tools.
+
+Everything a12s needs to run the image (its ports, health check, state path and resources) is in the image's own
+`/a12s/service.json`, which Studio does not read. An add-on offers its work as MCP tools on a port that file
+declares, so agents find the tools in their tool list; it may serve files to its callers on the same port.
+
+`PUT /addons/:addon` stores a manifest whose `id` equals the name in the URL. Replacing one that some team has on
+is refused with 409 `in_use` when `access` differs, so a change of outside calls is shown to the owner again at the
+next turn-on; when only the image differs, each instance is written again with the new image. `DELETE` is refused
+with 409 `in_use` while any team has the add-on on.
+
+### 10.2 An instance
+
+A team's instance of an add-on is the a12s Service named `<team>-addon-<id>` (`addonName` in `names.ts`). The name
+has the shape of an agent id, so every rule that reads a team from a caller name holds for it unchanged, and no
+agent can have it (section 4). a12s keeps agent computers and Services in one namespace.
+
+`addonSpec(manifest)` in `a12s/spec.ts` returns the whole Service spec:
+
+```yaml
+image: <manifest.image>
+uses: [{ name: broker, mcp: false }, { name: studio, mcp: false }]
+egress: { allow: [] }
+```
+
+It names no credential, no send grant and no config. The instance reaches the internet only through the broker,
+which serves it under its team's credentials and grants and audits each call under its name.
+
+**Walls.**
+
+- Only an agent computer whose spec `uses` an instance can reach it, and `agentSpec` adds a team's instances to that
+  team's agents only. a12s enforces `uses` in its proxy. An add-on never reads the caller header to keep teams
+  apart: every caller it has is on its one team.
+- The instance's calls to the broker carry its own name as the caller, stamped by a12s, so they are matched against
+  its team's grants and no other's.
+- The owner token writes the spec, because it `uses` Services outside the team's prefix. Removing it and reading
+  its status use the team's prefix token.
+
+### 10.3 Turning on and off
+
+Both are owner routes and nothing else can do either. The row is written only once the instance exists and deleted
+only once it is gone, and each step is a no-op when it is already done, so a switch that failed half-way is flipped
+again.
+
+Turning on (`PUT /teams/:team/addons/:addon`):
+
+1. The team has a credential for every host in `access`. Else 409 `no_credential`, with a fix that names the hosts;
+   nothing is made.
+2. When the team has no row for the add-on: one broker grant per `access` entry, with no expiry.
+3. `putService(addonName(team, id), addonSpec(manifest))`.
+4. The `team_addons` row with the grant ids, when it is new. If step 3 failed, the grants of step 2 are revoked and
+   no row is written.
+5. `putAgent` for each of the team's agents with the fresh spec.
+
+Turning off (`DELETE /teams/:team/addons/:addon`):
+
+1. `putAgent` for each of the team's agents with a spec that leaves the instance out.
+2. `removeService`; a Service already gone counts as removed.
+3. The broker grants in `grant_ids` are revoked. A grant the owner made for the same host is not touched.
+4. The row is deleted. `addon_usage` rows stay: they are the day's spend.
+
+a12s keeps a removed Service's state drive under its name, so an add-on turned on again finds its working files.
+
+### 10.4 Reported cost
+
+An instance reports paid work to the app's agent listener, which it reaches as `STUDIO_URL`:
+
+```
+POST /usage    { "usd": 0.42, "note": "speech, 2800 characters" }    -> { "ok": true }
+```
+
+`usd` is greater than 0 and at most 1000; `note` is 1 to 200 characters; any other field is refused. The team and
+the add-on come from `resolveAddon` (section 5.1), never from the body. The row goes into `addon_usage`, counts in
+`spentToday` (section 5.8) from that moment and shows as the add-on's spend today in Team settings. The dispatcher
+runs after the write, so a report that takes the team to its budget holds its next delivery.
+
+### 10.5 Tests
+
+Written before the code they guard, on the fake a12s, which keeps Services and agent computers in one namespace and
+refuses a spec whose `uses` names a Service that does not exist.
+
+- *Reach:* under random on and off switches for two teams, every agent spec the fake receives `uses` only `studio`,
+  `broker` and instances whose name starts with that agent's team prefix; an agent hired after a turn-on gets the
+  instance; after a turn-off no spec names it.
+- *Usage:* `POST /usage` with an agent's name, an unknown name, an instance that is off, an instance of a deleted
+  team, two caller headers or another `Host` is refused with 403 and writes nothing; a body that names a team is
+  refused; an accepted report lands on the caller's team and holds that team at its budget.
+- *Turn-on:* a missing credential refuses it with nothing made; a failed Service write revokes the grants; a second
+  `PUT` after a failed step 5 completes it and makes no second set of grants.
+- *Turn-off:* exactly the stored grants are revoked; deleting a team turns its add-ons off first.
+- *Names:* hiring `addon-x` is refused; `addonName` output matches `AGENT_ID`, table-tested with the longest ids.
+- *Library:* a manifest with an unknown field, a bad id or an untagged image is refused; a changed `access` on an
+  add-on that is on is refused; a changed image writes each instance again.
+
+## 11. Phases and work packages
+
+Each package is one worktree and one pull request. Packages in the same phase run in parallel, except one marked as
+coming after another; `contract` changes needed by a phase land first, in its first package. A phase is done when
+its exit evidence has been shown to the owner.
 
 **P0. Measurements** (section 2). One package, throwaway code, results written into this file.
 
@@ -1012,8 +1192,10 @@ everything is still there and still live.
 | Package | Scope |
 |---|---|
 | P2-A Broker | The whole `packages/broker`, with the tests of section 9.7. |
-| P2-B App side | `broker-client.ts`, the `access` tool, the access routes, attention items in the scheduler tick and in Needs You, approval notes, `.gitconfig` in `spec.ts`, team purge on delete. |
-| P2-C Web | The Needs You screen with access cards, Team settings → Access (write-only credential form, grants with expiry and the GitHub presets, audit log), the baseline card in the new-team sheet. |
+| P2-B App side | `broker-client.ts`, the `access` tool, the access routes, `scheduler.ts` with the attention items of its tick, the broker's cards in Needs You, approval and expiry notes, team purge on delete. |
+| P2-C Web | The access cards in Needs You, Team settings → Access (write-only credential form, grants with expiry and the GitHub presets, audit log), the baseline step of the new-team sheet. Built against the fixture server until P2-B lands. |
+| P2-D End to end | `packages/e2e`: `run.ts`, `studio.ts` and the P1 exit script; the core instructions' rule that an ask ends the Turn. |
+| P2-E Exit script (after P2-B) | The P2 exit script. |
 
 Exit: approving a card gives access at once; deny and expiry take it away; another team's agent is refused; the
 default-deny tests pass; an agent clones and pushes a repository and its container holds no token.
@@ -1022,25 +1204,39 @@ default-deny tests pass; an agent clones and pushes a repository and its contain
 
 | Package | Scope |
 |---|---|
-| P3-A Limits | Awake cap and queue order, budget hold and the cost rule, free-disk check, the `schedule` tool and scheduled wakes, the notes hook, per-agent sleep and compaction settings, every limit editable in the UI (global settings, team budget, agent settings). |
-| P3-B Inspector | The agent inspector: Now with the tool log, Inbox with Remove and Clear, Role and notes, Files, Terminal, Settings. The `file` field of `post` and attachment download. |
-| P3-C Durability | Agent error, failed Turn and budget cards in Needs You; `scripts/backup.ts` (both databases with SQLite's backup, each home drive as a tar, to `~/a12s-studio-backups/<date>/`, 14 kept) with a nightly LaunchAgent; `scripts/restore.ts`; the documented command to export the vault key. |
+| P3-A Limits | Awake cap and queue order, the cost rule, budget hold with its card in Needs You, free-disk check, the `schedule` tool and scheduled wakes, the global settings sheet and Team settings → Budget, so that every global and team limit is edited in the UI. |
+| P3-B Inspector | The agent inspector: Now with the tool log, Inbox with Remove and Clear, Role and notes, Files, Terminal, Settings (model, sleep, compaction, size: every agent limit). The `file` field of `post` and attachment download. |
+| P3-C Durability (merges last) | `scripts/backup.ts` (both databases with SQLite's backup, each home drive as a tar, to `~/a12s-studio-backups/<date>/`, 14 kept) with a nightly LaunchAgent; `scripts/restore.ts`; the documented command to export the vault key; the P3 exit script. |
 
 Exit: a team runs unattended inside its budget; a forced budget stop (budget set below today's spend) and a forced
 agent error both appear in Needs You; a restore from last night's backup onto an emptied data folder works.
 
-**P4. Polish and publish.**
+**P4. Add-ons** (section 10).
 
 | Package | Scope |
 |---|---|
-| P4-A Motion and keyboard | Thread-opens-from-row and sheet-rises transitions, Cmd+K palette, Cmd+1 to 9, Cmd+N, reduced-motion support. |
-| P4-B Phone | The stacked layout with the bottom bar; touch targets; the installed-web-app manifest and icon. |
-| P4-C Templates and docs | The two template teams, README (what it is, install, first team, security model, limits), `docs/design.md`, screenshots made with template teams only. |
+| P4-0 Measure and contract (first, alone) | Measurement M9, its results written into this file; `contract`: the manifest, `Addon`, `TeamAddon`, the add-on card, the route bodies, `addonName` and the reserved agent slug prefix. |
+| P4-A App side | The three tables, `addons.ts`, `addonSpec` and the add-ons in `agentSpec`, the port's Service calls in `real.ts` and `fake.ts`, `service.phase` in `live.ts`, `resolveAddon` and `POST /usage`, reported cost in `spentToday`, the add-on card, the four routes, the tests of section 10.5. |
+| P4-B Web | The library in the global settings sheet, Team settings → Add-ons with the turn-on sheet (the calls it adds, the credentials still missing), the add-on card. Built against the fixture server until P4-A lands. |
+| P4-C Example and exit script (after P4-A) | `addons/example` and the P4 exit script. |
+
+Exit: an add-on turned on for one team gives that team's agent a tool whose work makes a call through the broker
+under the team's credential; its container holds no secret; another team's agent cannot reach it; its reported cost
+shows in the team's spend and holds the team at its budget; turned off, its tools, its container and its grants are
+gone.
+
+**P5. Polish and publish.**
+
+| Package | Scope |
+|---|---|
+| P5-A Motion and keyboard | Thread-opens-from-row and sheet-rises transitions, Cmd+K palette, Cmd+1 to 9, Cmd+N, reduced-motion support. |
+| P5-B Phone | The stacked layout with the bottom bar; touch targets; the installed-web-app manifest and icon. |
+| P5-C Templates and docs | The two template teams, README (what it is, install, first team, add-ons, security model, limits), `docs/design.md`, screenshots made with template teams only. |
 
 Exit: the owner uses it for a day from the Mac and the phone and files no blocking issue; a fresh clone installs
 from the README alone.
 
-## 11. Testing
+## 12. Testing
 
 - **One runner**, `node --test`. `npm test` runs everything that needs no Docker; that is what CI runs.
 - **Fake a12s.** `a12s/fake.ts` implements the port in memory: agent computers with phases, inboxes with pending
@@ -1059,12 +1255,29 @@ from the README alone.
     the cap is never exceeded under random arrivals; a budget hold stops sends and an edit releases them; a restart
     between commit and send neither loses nor duplicates.
   - *Broker:* section 9.7.
+  - *Add-ons:* section 10.5.
   - *Owner gate:* wrong login, missing headers with a foreign `Host`, forwarded request without identity, cross-origin
     write → refused.
 - **Pure functions get table tests:** path patterns, the cost rule, the "doing now" line, state derivation, slug
   rules, the web `logic/` folder.
 - **`real.ts` against real a12s:** `node packages/app/scripts/a12s-smoke.ts <fleet>` runs every port call once against a
   running Fleet (one haiku agent, removed at the end). Manual, never in CI.
-- **End-to-end against real a12s is manual, never in CI.** `npm run e2e` needs Docker, a12s and the Claude login,
-  creates a Fleet named `studio-e2e` under a temp `STUDIO_HOME`, uses model `haiku` for every agent, runs each
-  phase's exit script, and removes the Fleet. It is run before each phase is shown.
+- **End-to-end against real a12s is manual, never in CI.** `npm run e2e` (`packages/e2e`) is run before each phase
+  is shown. `npm run e2e -- p2` runs one script.
+  - It needs Docker, a12s, a Claude token in `CLAUDE_CODE_OAUTH_TOKEN`, a throwaway GitHub repository and a
+    fine-grained token for it in `E2E_GITHUB_REPO` and `E2E_GITHUB_TOKEN`, and the three Studio ports free. The ports
+    are constants, so a Studio installed on the same Mac is stopped while it runs. Whatever is missing is named at
+    the start, with its fix, before anything is created.
+  - `run.ts` creates a Fleet named `studio-e2e` under a temp `STUDIO_HOME`, sets its `anthropic` credential, starts
+    the real broker and the real app there, sets the default model to `haiku`, runs the exit scripts in order, and
+    removes the Fleet with its drives and the folder whether they pass or fail. It prints no secret.
+  - A script drives Studio only as the owner and agents do: the owner API, the state stream, and a command run
+    inside an agent's container with `a12s shell`. A check that needs no model's judgement (a 403 from the broker,
+    a token that must not be on disk) is made with such a command, never by asking an agent.
+
+  | Script | Shows |
+  |---|---|
+  | `p1.ts` | Two teams are created and both leads answer the owner. A lead asks a second agent, ends its Turn after the ask, and the answer comes back in the thread. The app is stopped and started mid-conversation; the state is the same and still live. |
+  | `p2.ts` | From inside an agent's container a call with no grant is a 403. The agent requests access with the `access` tool; the card appears; approving makes the same call succeed at once; a second request, denied, stays a 403; a grant with a short expiry is a 403 after it; the same call from another team's agent is a 403. The agent clones the repository, commits and pushes a branch, which GitHub then lists; the token is in neither the container's environment nor its home drive. |
+  | `p3.ts` | With the awake cap at 1 and asks for two agents, two are never awake together. A budget set below today's spend holds the team and shows its card; raising it delivers. A forced agent error shows its card. After a backup, the data folder is emptied and restored, and teams, threads, grants and an agent's notes are as before. |
+  | `p4.ts` | The example add-on is turned on for one team: its agent uses the tool, the broker's audit shows the call under the instance's name, the reported cost is in the team's spend and a budget below it holds the team; the instance's container holds no secret; another team's agent cannot reach it; turned off, the grants are revoked and the Service is gone. |
