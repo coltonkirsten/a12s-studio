@@ -17,6 +17,8 @@ export function createApp(deps: {
   brokerSocket: string;
   templatesDir: string;
   webDir: string;
+  // Attachments, app/files/<message>/<name>.
+  filesDir: string;
   ownerLogin: string;
 }) {
   const { a12s } = deps;
@@ -27,7 +29,8 @@ export function createApp(deps: {
   const scheduler = createScheduler({ repo, broker, dispatcher, changed: stream.changed });
   const teams = createTeams({ repo, a12s, broker, dispatcher, templatesDir: deps.templatesDir });
   const live = createLive({ repo, a12s, dispatcher, changed: stream.changed, text: stream.live });
-  const agentServer = createAgentServer({ repo, a12s, broker, dispatcher, scheduler });
+  const { filesDir } = deps;
+  const agentServer = createAgentServer({ repo, a12s, broker, dispatcher, scheduler, filesDir });
   const ownerServer = createOwnerServer({
     repo,
     a12s,
@@ -37,6 +40,7 @@ export function createApp(deps: {
     teams,
     live,
     stream,
+    filesDir,
     ownerLogin: deps.ownerLogin,
     webDir: deps.webDir,
   });

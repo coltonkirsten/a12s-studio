@@ -1,14 +1,21 @@
 import type {
+  AgentSettings,
   CreateTeamBody,
   ErrorBody,
+  FileView,
   HireBody,
+  InboxResponse,
   NewThreadBody,
+  PatchAgentBody,
   PatchSettingsBody,
   PatchTeamBody,
   PatchThreadBody,
   PostMessageBody,
   PowerBody,
+  PutFileBody,
   Template,
+  TurnEventsResponse,
+  TurnsResponse,
   WriteResult,
 } from "@a12s-studio/contract/api";
 import type {
@@ -95,6 +102,20 @@ export const api = {
   approve: (team: string, request: string, body: ApproveBody) =>
     write("POST", `/teams/${at(team)}/requests/${at(request)}/approve`, body),
   deny: (team: string, request: string) => write("POST", `/teams/${at(team)}/requests/${at(request)}/deny`),
+  agent: (agent: string) => read<AgentSettings>(`/agents/${at(agent)}`, [], "agent settings"),
+  patchAgent: (agent: string, body: PatchAgentBody) => write("PATCH", `/agents/${at(agent)}`, body),
+  turns: (agent: string) => read<TurnsResponse>(`/agents/${at(agent)}/turns`, ["turns"], "Turns"),
+  turnEvents: (agent: string, turn: string) =>
+    read<TurnEventsResponse>(`/agents/${at(agent)}/turns/${at(turn)}/events`, ["calls"], "tool calls"),
+  inbox: (agent: string) => read<InboxResponse>(`/agents/${at(agent)}/inbox`, ["messages"], "inbox"),
+  removeInbox: (agent: string, message: string) => write("DELETE", `/agents/${at(agent)}/inbox/${at(message)}`),
+  clearInbox: (agent: string) => write("POST", `/agents/${at(agent)}/inbox/clear`),
+  file: (agent: string, path: string) => read<FileView>(`/agents/${at(agent)}/files?path=${at(path)}`, [], "file"),
+  putFile: (agent: string, path: string, body: PutFileBody) =>
+    write("PUT", `/agents/${at(agent)}/files?path=${at(path)}`, body),
+  attachment: (message: string, name: string) => `/api/files/${at(message)}/${at(name)}`,
+  terminal: (agent: string, rows: number, cols: number) =>
+    `${location.protocol === "https:" ? "wss" : "ws"}://${location.host}/api/agents/${at(agent)}/terminal?rows=${rows}&cols=${cols}`,
 };
 
 /** Writes one after another; the last one's result says when all of them have arrived. */
@@ -157,4 +178,28 @@ export function useAccess(team: string): AccessState {
     };
   }, [team, rev]);
   return access;
+}
+
+export type Loaded<T> = { data: T | null; problem: ErrorBody | null };
+
+/**
+ * A plain read, done again whenever `key` changes (a path, a rev, a presence, a version the caller moves after a
+ * write). The last answer stays on screen while the next one is read, so a reload does not flash.
+ */
+export function useRead<T>(load: () => Promise<T>, key: string): Loaded<T> {
+  const loader = useRef(load);
+  loader.current = load;
+  const [loaded, setLoaded] = useState<Loaded<T> & { key: string | null }>({ data: null, problem: null, key: null });
+  useEffect(() => {
+    let current = true;
+    loader.current().then(
+      (data) => current && setLoaded({ data, problem: null, key }),
+      (error: unknown) => current && setLoaded({ data: null, problem: toProblem(error), key }),
+    );
+    return () => {
+      current = false;
+    };
+  }, [key]);
+  // A refusal belongs to the read it answered: once the key has moved on (the agent woke up), it is not shown.
+  return { data: loaded.data, problem: loaded.key === key ? loaded.problem : null };
 }

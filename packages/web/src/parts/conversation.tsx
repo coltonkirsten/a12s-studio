@@ -137,10 +137,10 @@ function EntryView({ entry, now, questions }: { entry: Entry; now: number; quest
 function Message({ message, now, questions }: { message: MessageView; now: number; questions: MessageView[] }) {
   if (message.from === "system") return <p className="msg system">{message.body}</p>;
   const file = message.file && (
-    <span className="file">
+    <a className="file" href={api.attachment(message.id, message.file)} download>
       <Icon name="clip" size={13} />
       {message.file}
-    </span>
+    </a>
   );
   if (message.from === "owner") {
     return (

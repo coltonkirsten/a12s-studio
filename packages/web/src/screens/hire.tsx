@@ -2,11 +2,10 @@ import { AGENT_SLUG, agentSlug } from "@a12s-studio/contract/names";
 import type { Settings, TeamView } from "@a12s-studio/contract/state";
 import { useState } from "react";
 import { api, useAction } from "../api.ts";
+import { MODELS } from "../logic/agent-settings.ts";
 import { title } from "../logic/names.ts";
 import { Problem } from "../parts/problem.tsx";
 import { Sheet } from "../parts/sheet.tsx";
-
-export const MODELS = ["haiku", "sonnet", "opus"] as const;
 
 export function HireSheet({ team, settings, onClose }: { team: TeamView; settings: Settings; onClose: () => void }) {
   const [name, setName] = useState("");

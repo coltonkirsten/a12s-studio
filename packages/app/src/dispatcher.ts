@@ -2,6 +2,7 @@ import { statfsSync } from "node:fs";
 import { homedir } from "node:os";
 import type { Settings, WaitingFor } from "@a12s-studio/contract/state";
 import type { A12s, AgentStatus, Phase, TeamA12s } from "./a12s/port.ts";
+import { attachmentUrl } from "./files.ts";
 import type { Message, Repo, Team, TeamRepo, Thread } from "./repo.ts";
 import { nameOf } from "./router.ts";
 
@@ -65,6 +66,8 @@ function render(message: Message, thread: Thread | undefined, notes: Message[]):
     message.body,
     "---",
   );
+  const file = attachmentUrl(message);
+  if (file) lines.push(`file: ${file}`);
   if (message.kind === "ask" && message.fromId !== "system") {
     lines.push(`To answer: post(kind="reply", ask="${message.id}")`);
   }

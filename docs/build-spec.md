@@ -40,7 +40,9 @@ wall on a one-user Mac.
   `config.ownerLogin`; allow when the request has no `Tailscale-*` and no `X-Forwarded-For` header and its `Host` is
   `127.0.0.1:7400` or `localhost:7400` (a local browser); refuse everything else with 403. Any request that changes
   state must also carry `Content-Type: application/json` and, when an `Origin` header is present, an `Origin` whose
-  host equals `Host`. This stops other web pages in the owner's browser from driving the API.
+  host equals `Host`. This stops other web pages in the owner's browser from driving the API. A WebSocket (the
+  terminal) opens with a `GET` but carries changes, and any page may open one to any address, so its upgrade is held
+  to the same `Origin` rule.
 - **Honest limit:** the two agent-facing ports trust the caller header from anything that can reach host loopback,
   which is any process running as the owner and any container that can dial `host.docker.internal`. That is inside
   the trust boundary stated in the design. Measurement M2 checks whether a12s can also send a per-Service secret; if
@@ -160,7 +162,7 @@ launchd/
 | HTTP servers | `node:http` with a small route table per listener. | About thirty routes; a framework is not needed. |
 | Validation | `zod` in the app (tool inputs, owner API bodies). Hand-written guards in the broker. | The MCP SDK already brings zod. |
 | App dependencies | `@coltonkirsten/a12s`, `@modelcontextprotocol/sdk`, `zod`, `ws` (terminal bridge, P3). | |
-| Web dependencies | `react`, `react-dom`, `vite`, `@xterm/xterm` (P3), `markdown-to-jsx` (message bodies, section 7.6: one package with no dependencies of its own, and it builds React elements, so the web never sets an HTML string). Plain CSS files with custom properties. No router library (the URL is `/#/<team>/<thread>`, parsed by hand), no state library (the state is the server's), no component kit. | |
+| Web dependencies | `react`, `react-dom`, `vite`, `@xterm/xterm` (P3), `markdown-to-jsx` (message bodies, section 7.6: one package with no dependencies of its own, and it builds React elements, so the web never sets an HTML string). Plain CSS files with custom properties. No router library (the URL is `/#/<team>/<thread>`, with `?inspect=<agent>` while an inspector is open, parsed by hand), no state library (the state is the server's), no component kit. | |
 | Scripts | `npm run check` = biome + tsc + tests. `npm run dev` = app, broker and Vite (Vite proxies `/api` to 7400). `npm run build` = Vite build; the app serves `packages/web/dist`. `npm run e2e` = `node packages/e2e/src/run.ts`. | |
 | CI | One job: `npm ci`, `npm run check`, a secret scan. Nothing that needs Docker, a12s or a Claude login. | |
 
@@ -314,7 +316,8 @@ The app's agent listener (`7410`) is the external Service `studio`. It serves:
 
 - `POST /mcp`: an MCP server over streamable HTTP, stateless (`sessionIdGenerator: undefined`,
   `enableJsonResponse: true`): a new server and transport per request, with the caller bound in a closure.
-- `GET /files/<message id>/<name>`: an attachment, for a caller on the message's team.
+- `GET /files/<message id>/<name>`: an attachment, for a caller on the message's team. The message is looked up
+  through the caller's team, so another team's message is a 404 like a missing one.
 - `POST /usage`: an add-on instance reports the cost of paid work (section 10.4).
 - `GET /healthz`: `{ ok: true }`. The one route that needs no caller; it reads nothing.
 
@@ -346,7 +349,7 @@ post: {
   thread?: string,         // thread id
   title?: string,          // 1..120 chars
   ask?: string,            // message id
-  file?: string            // absolute path under /home/agent (P3)
+  file?: string            // absolute path under /home/agent
 } -> { message: string, thread: string }
 ```
 
@@ -356,6 +359,12 @@ post: {
 | reply | `ask` | The ask is kind `ask`, addressed to the caller, and has no reply yet. Thread and receiver come from the ask. `to`, `thread`, `title` are refused. |
 | note | `thread` | `to` is optional; without it the note is just recorded in the thread. |
 
+**A file** is copied when the post is made: the app reads it from the caller's home with `readFile` and stores it at
+`app/files/<message id>/<name>` (the name is the path's last part) in the transaction that inserts the message, so a
+later change in the home does not change what was posted. The path must pass `homePath` (`files.ts`): absolute,
+`/home/agent` or under it, and no empty, `.` or `..` segment. A folder, a missing file and a file a12s returns only
+in part are refused. The owner's file routes take paths through the same function.
+
 ```ts
 read: {
   thread?: string,                       // omitted: the board
@@ -364,7 +373,7 @@ read: {
   before?: string                        // message or thread id, for paging
 }
 // board  -> { threads: [{ id, title, owner, status: "open"|"needs_you"|"done", updated, last, asksForYou }] }
-// thread -> { thread: {...}, messages: [{ id, kind, from, to, ask, body, file, at }] }
+// thread -> { thread: {...}, messages: [{ id, kind, from, to, ask, body, file, at }] }   (file: the attachment's URL)
 
 update_thread: { thread: string, status?: "open" | "done", owner?: string, title?: string }
 // any agent on the team may; at least one field
@@ -823,10 +832,12 @@ PATCH  /threads/:thread               { status?, title?, owner? }
 GET    /threads/:thread/messages?before=
 PATCH  /settings                      { awakeCap?, defaultDailyBudgetUsd?, minFreeDiskGb?, paused?, default… }
 POST   /turns/:turn/ack
+GET    /agents/:agent                 (the six fields PATCH takes, as they are now)
 GET    /agents/:agent/turns           GET /agents/:agent/turns/:turn/events
 GET    /agents/:agent/inbox           DELETE /agents/:agent/inbox/:id    POST /agents/:agent/inbox/clear
-GET    /agents/:agent/files?path=     PUT /agents/:agent/files?path=
-GET    /agents/:agent/terminal        (WebSocket, bridged to a12s's terminal upgrade)
+GET    /agents/:agent/files?path=     PUT /agents/:agent/files?path=   { content, encoding: "utf-8" | "base64" }
+GET    /agents/:agent/terminal?rows=&cols=   (WebSocket, bridged to a12s's terminal upgrade)
+GET    /files/:message/:name          (an attachment, downloaded)
 GET    /teams/:team/access            (credentials without values, grants, requests)
 PUT    /teams/:team/credentials/:host { scheme, username?, headerName?, secret }
 DELETE /teams/:team/credentials/:host
@@ -843,8 +854,29 @@ answers the broker's `AccessView` and `GET …/audit` its `AuditPage`; the write
 with the new grant's `id`. A write that can change a Needs You card (all of them) reads the broker's attention items
 again before it answers, so the state at its `rev` shows the change. It also moves the `rev` when no card changes:
 the state does not carry a team's access, so the UI reads `GET …/access` again whenever the `rev` moves. A
-credential's `secret` passes through the app's memory once and is never logged or stored by the app. Removing or
-clearing inbox Messages also marks the matching Studio messages `none`.
+credential's `secret` passes through the app's memory once and is never logged or stored by the app.
+
+**The inspector's routes.** An agent's id names its team; an id that names no current team or agent is a 404, and
+every lookup under it (an inbox message, a Turn) goes through that agent, so another agent's or team's id is missing
+like an unknown one. `PATCH /agents/:agent` puts the agent's spec again with the changed fields and writes the row only
+after a12s has taken it; `null` for `cpu` or `memory` is a12s's default. `GET …/turns` answers a12s's last 20 Turns,
+each with its text; `GET …/turns/:turn/events` answers its tool calls, each with its "doing now" line and its input
+and output cut at 4000 characters. `GET …/inbox` answers the agent's messages that are `queued` or `sent`, oldest
+first, each with the a12s Message it was sent as (`sentAs`, null while queued). Removing one marks it `none`; a
+`sent` one is first withdrawn from a12s, and the notes that rode on it leave with it. Clearing marks every `queued`
+one `none`, clears the a12s inbox, and marks `none` the `sent` ones a12s reports withdrawn; a Message a Turn has
+already taken is not withdrawn and stays `sent`. Files are read and written through a12s at a path `homePath`
+accepts. An a12s refusal keeps its meaning: `not_found` is a 404, `asleep` and `busy` a 409 (the inspector offers
+Wake on `asleep`); any other a12s error is a 502.
+
+The terminal's WebSocket carries the terminal's bytes both ways, at the size the URL names (24 by 80 otherwise; the
+web uses that fixed size). The upgrade passes `ownerGate` and the agent lookup before a12s is asked for a terminal. A
+terminal a12s will not open closes the socket with code 1011 and a12s's error code as the reason.
+
+An attachment is always downloaded, never shown: both listeners answer it as `application/octet-stream` with
+`Content-Disposition: attachment`, `nosniff` and a `sandbox` policy. An agent chose its content and its name, and on
+the owner's listener a page of Studio's own origin could drive the owner API. In a conversation, a message's file is
+a link to the owner's route.
 
 ### 7.6 Message bodies
 

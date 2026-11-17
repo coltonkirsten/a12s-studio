@@ -8,7 +8,8 @@ const READS = ["GET", "HEAD"];
 // Every request to the owner listener. A request is the owner's when tailscale serve vouches for the owner's login,
 // or when it was made on this Mac straight to the listener (no proxy headers, a local Host). A write must also be
 // JSON from a page on the same origin, so another web page open in the owner's browser cannot drive the API: a
-// cross-site form cannot send JSON, and a cross-site fetch carries its own Origin.
+// cross-site form cannot send JSON, and a cross-site fetch carries its own Origin. A WebSocket opens with a GET but
+// carries changes (a terminal's keystrokes), and any page may open one to any address: it takes the Origin rule.
 export function ownerGate(method: string, headers: IncomingHttpHeaders, ownerLogin: string): StudioError | null {
   const proxied = Object.keys(headers).some((h) => h.startsWith("tailscale-")) || "x-forwarded-for" in headers;
   const owner = proxied ? headers["tailscale-user-login"] === ownerLogin : LOCAL_HOSTS.includes(headers.host ?? "");
@@ -20,8 +21,10 @@ export function ownerGate(method: string, headers: IncomingHttpHeaders, ownerLog
       "Open Studio on this Mac at 127.0.0.1:7400, or through tailscale serve signed in as the owner.",
     );
   }
-  if (READS.includes(method)) return null;
-  if (headers["content-type"]?.split(";")[0]?.trim() !== "application/json") {
+  const socket = headers.upgrade !== undefined;
+  if (READS.includes(method)) {
+    if (!socket) return null;
+  } else if (headers["content-type"]?.split(";")[0]?.trim() !== "application/json") {
     return new StudioError(415, "not_json", "A change must be sent as application/json.", "Send a JSON body.");
   }
   const origin = headers.origin;

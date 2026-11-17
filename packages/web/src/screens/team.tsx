@@ -2,7 +2,7 @@ import type { AgentView, MessageView, StudioState, TeamView } from "@a12s-studio
 import { type CSSProperties, useState } from "react";
 import { api, useAction } from "../api.ts";
 import { displayName } from "../logic/names.ts";
-import { href, type Route, settingsHref } from "../logic/route.ts";
+import { href, inspectHref, type Route, settingsHref } from "../logic/route.ts";
 import { shortTime } from "../logic/time.ts";
 import { Composer } from "../parts/composer.tsx";
 import { Conversation, StatusChip } from "../parts/conversation.tsx";
@@ -65,7 +65,12 @@ export function TeamScreen({ state, team, route, onHire }: Props) {
           </button>
         </div>
         {team.agents.map((agent) => (
-          <AgentRow key={agent.id} agent={agent} lead={agent.id === team.leadId} />
+          <AgentRow
+            key={agent.id}
+            agent={agent}
+            lead={agent.id === team.leadId}
+            inspect={inspectHref(agent.id, route)}
+          />
         ))}
 
         <div className="section-head">
@@ -118,7 +123,7 @@ export function TeamScreen({ state, team, route, onHire }: Props) {
   );
 }
 
-function AgentRow({ agent, lead }: { agent: AgentView; lead: boolean }) {
+function AgentRow({ agent, lead, inspect }: { agent: AgentView; lead: boolean; inspect: string }) {
   const [open, setOpen] = useState(false);
   const [removing, setRemoving] = useState(false);
   const action = useAction();
@@ -144,6 +149,9 @@ function AgentRow({ agent, lead }: { agent: AgentView; lead: boolean }) {
             {agent.queued > 0 && ` · ${agent.queued} waiting in its inbox`}
           </p>
           <div className={action.pending ? "agent-actions pending" : "agent-actions"}>
+            <a className="button" href={inspect}>
+              Inspect
+            </a>
             <button
               type="button"
               className="button"

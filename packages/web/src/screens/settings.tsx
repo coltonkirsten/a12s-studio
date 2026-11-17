@@ -2,11 +2,11 @@ import type { WriteResult } from "@a12s-studio/contract/api";
 import type { Settings } from "@a12s-studio/contract/state";
 import { useState } from "react";
 import { api, useAction } from "../api.ts";
+import { MODELS } from "../logic/agent-settings.ts";
 import { parseUsd } from "../logic/money.ts";
 import { title } from "../logic/names.ts";
 import { Problem } from "../parts/problem.tsx";
 import { Sheet } from "../parts/sheet.tsx";
-import { MODELS } from "./hire.tsx";
 
 const SLEEPS = ["5m", "15m", "30m", "1h", "2h"];
 

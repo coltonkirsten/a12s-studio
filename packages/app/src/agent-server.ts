@@ -5,6 +5,7 @@ import type { BrokerClient } from "./broker-client.ts";
 import { resolveCaller } from "./caller.ts";
 import type { Dispatcher } from "./dispatcher.ts";
 import { StudioError } from "./errors.ts";
+import { sendAttachment } from "./files.ts";
 import type { Repo } from "./repo.ts";
 import type { Scheduler } from "./scheduler.ts";
 import { mcpServer } from "./tools/mcp.ts";
@@ -13,6 +14,8 @@ function json(res: ServerResponse, status: number, body: unknown): void {
   res.writeHead(status, { "content-type": "application/json" }).end(JSON.stringify(body));
 }
 
+const FILE = /^\/files\/([^/]+)\/([^/]+)$/;
+
 // The listener agents reach as the external Service `studio`. It serves no owner route.
 export function createAgentServer(deps: {
   repo: Repo;
@@ -20,12 +23,19 @@ export function createAgentServer(deps: {
   broker: BrokerClient;
   dispatcher: Dispatcher;
   scheduler: Scheduler;
+  filesDir: string;
 }): Server {
   return createServer(async (req, res) => {
     try {
       const path = new URL(req.url ?? "/", "http://studio").pathname;
       if (req.method === "GET" && path === "/healthz") return json(res, 200, { ok: true });
       const caller = resolveCaller(deps.repo, req.headersDistinct);
+      const file = req.method === "GET" ? FILE.exec(path) : null;
+      if (file) {
+        const [id, name] = file.slice(1).map((p) => decodeURIComponent(p));
+        const message = deps.repo.forTeam(caller.teamId).message(id ?? "");
+        return await sendAttachment(res, deps.filesDir, message, name ?? "");
+      }
       if (path !== "/mcp") throw new StudioError(404, "not_found", `No route ${path}.`);
       if (req.method !== "POST") throw new StudioError(405, "method", "Use POST for /mcp.");
       const team = deps.repo.forTeam(caller.teamId);
@@ -38,6 +48,7 @@ export function createAgentServer(deps: {
         broker: deps.broker.forTeam(caller.teamId),
         dispatcher: deps.dispatcher,
         scheduler: deps.scheduler,
+        files: deps.filesDir,
       });
       const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined, enableJsonResponse: true });
       res.on("close", () => {

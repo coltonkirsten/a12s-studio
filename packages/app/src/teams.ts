@@ -1,6 +1,6 @@
 import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import type { CreateTeamBody, HireBody, PatchTeamBody, Template } from "@a12s-studio/contract/api";
+import type { CreateTeamBody, HireBody, PatchAgentBody, PatchTeamBody, Template } from "@a12s-studio/contract/api";
 import { AGENT_SLUG, agentId, teamSlug } from "@a12s-studio/contract/names";
 import { type A12s, A12sError } from "./a12s/port.ts";
 import { agentSpec } from "./a12s/spec.ts";
@@ -221,12 +221,14 @@ export function createTeams(deps: {
       await dispatcher.run();
     },
 
-    async patchAgent(teamId: string, id: string, patch: { role?: string; model?: string }): Promise<void> {
+    // The row changes only once a12s has taken the spec, so the two never disagree.
+    async patchAgent(teamId: string, id: string, patch: PatchAgentBody): Promise<void> {
       const { team, scoped } = live(teamId);
       const agent = scoped.agent(id);
       if (!agent) throw new StudioError(404, "not_found", `No agent ${id} on ${teamId}.`);
-      await a12s.putAgent(id, agentSpec(team, { ...agent, ...patch }), "replace");
-      scoped.updateAgent(id, patch);
+      const next = { ...agent, ...patch };
+      await a12s.putAgent(id, agentSpec(team, next), "replace");
+      scoped.updateAgent(next);
     },
 
     pause: (teamId: string | null) => setPaused(teamId, true),

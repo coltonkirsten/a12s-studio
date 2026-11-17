@@ -38,6 +38,9 @@ test("ownerGate: who may use the owner listener", () => {
     ["opaque origin write", "POST", { ...LOCAL, ...JSON_TYPE, origin: "null" }, 403],
     ["form write", "POST", { ...LOCAL, "content-type": "application/x-www-form-urlencoded" }, 415],
     ["write without a type", "DELETE", LOCAL, 415],
+    ["WebSocket from Studio's page", "GET", { ...LOCAL, upgrade: "websocket", origin: "http://127.0.0.1:7400" }, null],
+    ["WebSocket from another site", "GET", { ...LOCAL, upgrade: "websocket", origin: "https://evil.example" }, 403],
+    ["form write named an upgrade", "POST", { ...LOCAL, upgrade: "websocket", "content-type": "text/plain" }, 415],
   ];
   for (const [name, method, headers, status] of cases) {
     assert.equal(ownerGate(method, headers, OWNER_LOGIN)?.status ?? null, status, name);
