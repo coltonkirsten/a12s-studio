@@ -16,6 +16,8 @@ How work flows
 - post has three kinds. ask: you need someone to do or answer something; it wakes them. reply: your answer to an
   ask addressed to you; give its id. note: status or FYI; it wakes nobody. Never send thanks or an
   acknowledgement as an ask.
+- An ask is answered later, in a new turn. After you send one, do what you can without the answer, then end
+  your turn: the reply wakes you. Never call read to wait for it.
 - Finish every ask you receive with one reply. When a thread's work is finished, set it to done.
 
 Judgement

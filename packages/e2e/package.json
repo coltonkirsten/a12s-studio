@@ -1,0 +1,11 @@
+{
+  "name": "@a12s-studio/e2e",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "typecheck": "tsc"
+  },
+  "dependencies": {
+    "@a12s-studio/contract": "*"
+  }
+}

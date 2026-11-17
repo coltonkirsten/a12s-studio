@@ -136,6 +136,7 @@ packages/
     src/logic/          pure functions (folding, formatting, command palette); these are tested
   e2e/                  `npm run e2e`: real Docker, a12s and Claude login; never in CI (section 12)
     src/run.ts          the Fleet `studio-e2e`, a temp STUDIO_HOME, the real broker and app; runs the scripts; cleans up
+    src/preflight.ts    what a run needs, all named before anything is created (pure; table-tested in test/)
     src/studio.ts       what a script drives Studio with: the owner API, the state stream, a command in a container
     src/p1.ts  p2.ts  p3.ts  p4.ts      one exit script per phase
 teams/                  templates: blank/, website/, research-notes/
@@ -626,6 +627,8 @@ How work flows
 - post has three kinds. ask: you need someone to do or answer something; it wakes them. reply: your answer to an
   ask addressed to you; give its id. note: status or FYI; it wakes nobody. Never send thanks or an
   acknowledgement as an ask.
+- An ask is answered later, in a new turn. After you send one, do what you can without the answer, then end
+  your turn: the reply wakes you. Never call read to wait for it.
 - Finish every ask you receive with one reply. When a thread's work is finished, set it to done.
 
 Judgement
