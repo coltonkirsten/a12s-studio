@@ -4,7 +4,7 @@
   "type": "module",
   "license": "MIT",
   "engines": {
-    "node": ">=24"
+    "node": ">=24.2"
   },
   "workspaces": [
     "packages/contract",

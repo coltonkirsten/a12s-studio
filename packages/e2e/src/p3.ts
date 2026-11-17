@@ -235,7 +235,8 @@ export async function p3(studio: Studio): Promise<void> {
       if (!dated) throw new Error("the backup made no folder");
       await studio.offline(async () => {
         for (const entry of STUDIO_DATA) rmSync(join(studio.home, entry), { recursive: true });
-        await script("restore.ts", [join(backups, dated)], studio.home);
+        // Forced, because the Fleet still has the agents' home drives, which the restore loads again.
+        await script("restore.ts", [join(backups, dated), "--force"], studio.home);
       });
       assert.deepEqual(await snapshot(studio), before);
       await studio.api("PATCH", "/settings", { paused: false });

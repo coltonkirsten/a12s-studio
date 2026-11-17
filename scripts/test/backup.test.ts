@@ -147,7 +147,7 @@ test("a backup of a data folder in use restores every row, the attachments and t
 
   const restored = temp("restored");
   const target = { "home-web-lead": drive({ "memory/notes.md": "Changed since.\n", "stray.txt": "x" }) };
-  const [, put] = await printed(t, () => restore(folder, restored, folderDrives(target), false));
+  const [, put] = await printed(t, () => restore(folder, restored, folderDrives(target), true));
 
   for (const db of ["app/studio.db", "broker/vault.db"]) assert.deepEqual(rows(join(restored, db)), before[db], db);
   assert.equal(readFileSync(join(restored, "app", "files", "m_attachment", "report.txt"), "utf8"), "the report");
@@ -165,16 +165,41 @@ test("a run keeps the newest 14 dated backups and removes unfinished ones", asyn
   assert.deepEqual(readdirSync(root).sort(), [...old.slice(2), "2026-11-16", "notes"]);
 });
 
-test("expired: dated folders after the newest 14, and unfinished ones", () => {
+test("a run stops at an unfinished backup of its date, and a run that fails leaves none and keeps the last", async (t) => {
+  const { home } = await liveHome(t);
+  const root = temp("backups");
+  const [folder] = await printed(t, () => backup(home, root, folderDrives({}), AT));
+  const kept = listing(folder);
+
+  mkdirSync(join(root, "2026-11-16.partial"));
+  await assert.rejects(
+    backup(home, root, folderDrives({}), AT),
+    /2026-11-16\.partial exists: another backup is running/,
+  );
+  assert.deepEqual(readdirSync(root).sort(), ["2026-11-16", "2026-11-16.partial"]);
+  rmSync(join(root, "2026-11-16.partial"), { recursive: true });
+
+  const failing: Drives = { ...folderDrives({}), list: () => Promise.reject(new Error("a12s is down")) };
+  await assert.rejects(
+    printed(t, () => backup(home, root, failing, AT)),
+    /a12s is down/,
+  );
+  assert.deepEqual(readdirSync(root), ["2026-11-16"]);
+  assert.deepEqual(listing(folder), kept);
+});
+
+test("expired: dated folders after the newest 14, never the one just made, and unfinished ones", () => {
   const days = (n: number) => Array.from({ length: n }, (_, i) => `2026-01-${String(i + 1).padStart(2, "0")}`);
-  const table: [string[], string[]][] = [
-    [[], []],
-    [days(14), []],
-    [days(16), ["2026-01-01", "2026-01-02"]],
-    [[...days(14).reverse(), "2025-12-31"], ["2025-12-31"]],
-    [["2026-01-01.partial", "2026-01-01", "readme.txt"], ["2026-01-01.partial"]],
+  const table: [string[], string, string[]][] = [
+    [["2026-01-01"], "2026-01-01", []],
+    [days(14), "2026-01-14", []],
+    [days(16), "2026-01-16", ["2026-01-01", "2026-01-02"]],
+    [[...days(14).reverse(), "2025-12-31"], "2026-01-14", ["2025-12-31"]],
+    // The clock was set back: the backup just made has the oldest date and stays.
+    [[...days(14), "2025-12-31"], "2025-12-31", ["2026-01-01"]],
+    [["2026-01-01.partial", "2026-01-01", "readme.txt"], "2026-01-01", ["2026-01-01.partial"]],
   ];
-  for (const [names, gone] of table) assert.deepEqual(expired(names), gone, names.join(" "));
+  for (const [names, made, gone] of table) assert.deepEqual(expired(names, made), gone, names.join(" "));
 });
 
 test("restore refuses a data folder that holds Studio data, unless forced, and then leaves nothing old", async (t) => {
@@ -193,6 +218,24 @@ test("restore refuses a data folder that holds Studio data, unless forced, and t
   assert.equal(readFileSync(join(target, "config.json"), "utf8"), readFileSync(join(home, "config.json"), "utf8"));
 });
 
+test("restore refuses to load a drive the Fleet has, unless forced, and has then changed nothing", async (t) => {
+  const { home } = await liveHome(t);
+  const saved = { "home-web-lead": drive({ "memory/notes.md": "Then.\n" }) };
+  const [folder] = await printed(t, () => backup(home, temp("backups"), folderDrives(saved), AT));
+  const target = temp("target");
+  const live = { "home-web-lead": drive({ "memory/notes.md": "Now.\n" }) };
+
+  await assert.rejects(
+    restore(folder, target, folderDrives(live), false),
+    /the Fleet already has the home drives home-web-lead\. To replace them, run this again with --force/,
+  );
+  assert.deepEqual(readdirSync(target), []);
+  assert.deepEqual(listing(live["home-web-lead"]), { "memory/notes.md": "Now.\n" });
+
+  await printed(t, () => restore(folder, target, folderDrives(live), true));
+  assert.deepEqual(listing(live["home-web-lead"]), { "memory/notes.md": "Then.\n" });
+});
+
 test("restore names a drive the Fleet does not have and refuses a folder that is not a whole backup", async (t) => {
   const { home } = await liveHome(t);
   const [folder] = await printed(t, () => backup(home, temp("backups"), folderDrives({ "home-gone": drive({}) }), AT));
@@ -201,6 +244,6 @@ test("restore names a drive the Fleet does not have and refuses a folder that is
 
   await assert.rejects(
     restore(temp("not-a-backup"), temp("target"), folderDrives({}), true),
-    /is not a whole backup: it has no config\.json, app\/studio\.db, broker\/vault\.db/,
+    /is not a whole backup: it has no config\.json, app\/studio\.db, broker\/vault\.db, drives/,
   );
 });

@@ -64,7 +64,7 @@ fleet/fleet.yaml       written once by setup; names the Fleet, nothing else
 
 `STUDIO_HOME` overrides the folder (tests use a temp dir). Ports are constants in code, not settings.
 
-**Install** (`scripts/setup.sh [--owner-login <login>]`, idempotent): checks Docker, a12s 0.11.2+ and Node 24+;
+**Install** (`scripts/setup.sh [--owner-login <login>]`, idempotent): checks Docker, a12s 0.11.2+ and Node 24.2+;
 when the Fleet `studio` has never been started, writes `fleet/fleet.yaml` (`metadata.name: studio`, no agent
 computers) and runs `a12s up` once to start the Controller; prints the `a12s creds set anthropic` command when the
 Controller has no `anthropic` credential; writes `config.json` (asking for the owner's Tailscale login unless given);
@@ -80,16 +80,18 @@ copies `app/studio.db` and `broker/vault.db` with SQLite's online backup (the ap
 `config.json` and `app/files/`, and each home drive the Fleet lists (M8) as a gzipped tar, made by a throwaway
 `busybox` container with the drive's volume mounted read-only and no network. It writes `<folder>/<date>.partial`
 (default folder `~/a12s-studio-backups`, date local) and renames it to `<date>` when whole, so a dated folder is
-always complete and a second run that day replaces it. It then removes the dated folders after the newest 14 and any
-`.partial` left by a failed run. The folder holds the teams' a12s tokens, so it is created for the owner alone. The
+always complete and a second run that day replaces it. A run that finds the `.partial` of its own date stops, so
+two runs never write one backup, and a run that fails removes its own. It then removes the dated folders after the
+newest 14, never the one it just wrote, and any `.partial` a killed run left. The folder holds the teams' a12s tokens, so it is created for the owner alone. The
 broker's credentials in it are encrypted with the vault key, which stays in the Keychain (section 9.2); the README
 gives the command to export it.
 
-**Restore** (`scripts/restore.ts <backup> [--force]`, with Studio stopped and every agent asleep): refuses a data
-folder that already holds any of what the backup would put back (`config.json`, `app/`, `broker/`) unless `--force`
-is given, and then removes each of those before copying it back, so no old write-ahead log stays beside a restored
-database. It loads each saved drive into the drive of the same name, emptied first, and names any drive the Fleet
-no longer has instead of creating it. It ends by naming the vault-key step for another Mac.
+**Restore** (`scripts/restore.ts <backup> [--force]`, with Studio stopped and every agent asleep): unless `--force`
+is given it refuses, before changing anything, when the data folder already holds any of what the backup would put
+back (`config.json`, `app/`, `broker/`) or the Fleet the backup names already has a home drive the backup would
+load. With `--force` it removes each of those entries before copying it back, so no old write-ahead log stays
+beside a restored database. It loads each saved drive into the drive of the same name, emptied first, and names
+any drive the Fleet no longer has instead of creating it. It ends by naming the vault-key step for another Mac.
 
 ## 2. Phase 0 measurements
 
@@ -1594,8 +1596,9 @@ from the README alone.
   rules, the web `logic/` folder.
 - **Backup and restore** (`scripts/test/`): a data folder in use by the real app and broker is backed up and
   restored with every row of both databases, the attachments and the drives equal; the drive step is the one
-  function a test replaces with a folder and the host's `tar`, so the test needs no Docker. Retention, the refusal
-  without `--force`, and that no secret is printed are tested too.
+  function a test replaces with a folder and the host's `tar`, so the test needs no Docker. Retention, the
+  unfinished folder as a lock, the refusal without `--force` (data folder and drives), and that no secret is
+  printed are tested too.
 - **`real.ts` against real a12s:** `node packages/app/scripts/a12s-smoke.ts <fleet>` runs every port call once against a
   running Fleet (one haiku agent, removed at the end). Manual, never in CI.
 - **End-to-end against real a12s is manual, never in CI.** `npm run e2e` (`packages/e2e`) is run before each phase

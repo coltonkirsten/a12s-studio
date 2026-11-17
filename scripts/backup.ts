@@ -11,24 +11,51 @@ const DATED = /^\d{4}-\d{2}-\d{2}$/;
 const PARTIAL = ".partial";
 // Copied with SQLite's backup, which reads a consistent copy while the app and the broker write.
 export const DATABASES = ["app/studio.db", "broker/vault.db"];
+// Each home drive is the file drives/<drive name>.tar.gz of a backup.
+export const DRIVES = "drives";
+export const TAR = ".tar.gz";
 
-// What a run removes from the backups folder: the dated backups after the newest KEEP, and any backup a run that
-// failed left unfinished.
-export function expired(names: string[]): string[] {
-  const dated = names.filter((name) => DATED.test(name)).sort();
-  return [...dated.slice(0, -KEEP), ...names.filter((name) => name.endsWith(PARTIAL))];
+// What the run that made the backup `made` removes from the backups folder: the dated backups after the newest
+// KEEP, and any backup a run that was killed left unfinished. `made` counts as the newest whatever its date, so a
+// clock that was set back never costs the backup just written.
+export function expired(names: string[], made: string): string[] {
+  const older = names.filter((name) => DATED.test(name) && name !== made).sort();
+  return [...older.slice(0, -(KEEP - 1)), ...names.filter((name) => name.endsWith(PARTIAL))];
 }
 
 const localDate = (at: Date) =>
   [at.getFullYear(), at.getMonth() + 1, at.getDate()].map((n) => String(n).padStart(2, "0")).join("-");
 
 // Answers the new backup's folder. It is written under another name and renamed when whole, so a dated folder is
-// always a complete backup; a second run on the same day replaces it.
+// always a complete backup; a second run on the same day replaces it. The unfinished folder is also the lock: a run
+// that finds it stops, so two runs never write one backup.
 export async function backup(home: string, root: string, drives: Drives, at: Date): Promise<string> {
-  const folder = join(root, localDate(at));
+  const date = localDate(at);
+  const folder = join(root, date);
   const partial = `${folder}${PARTIAL}`;
-  rmSync(partial, { recursive: true, force: true });
-  mkdirSync(join(partial, "drives"), { recursive: true });
+  mkdirSync(root, { recursive: true });
+  try {
+    mkdirSync(partial);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+    throw new Error(`${partial} exists: another backup is running, or one was killed. If none is running, remove it.`);
+  }
+  try {
+    await write(home, partial, drives);
+  } catch (error) {
+    rmSync(partial, { recursive: true, force: true });
+    throw error;
+  }
+  rmSync(folder, { recursive: true, force: true });
+  renameSync(partial, folder);
+  for (const name of expired(readdirSync(root), date)) {
+    rmSync(join(root, name), { recursive: true, force: true });
+    console.log(`removed ${name}`);
+  }
+  return folder;
+}
+
+async function write(home: string, partial: string, drives: Drives): Promise<void> {
   for (const db of DATABASES) {
     mkdirSync(dirname(join(partial, db)), { recursive: true });
     const source = new DatabaseSync(join(home, db), { readOnly: true });
@@ -46,17 +73,11 @@ export async function backup(home: string, root: string, drives: Drives, at: Dat
     cpSync(join(home, "app", "files"), join(partial, "app", "files"), { recursive: true });
     console.log("saved app/files");
   }
+  mkdirSync(join(partial, DRIVES));
   for (const drive of await drives.list()) {
-    await drives.save(drive, join(partial, "drives", `${drive}.tar.gz`));
+    await drives.save(drive, join(partial, DRIVES, `${drive}${TAR}`));
     console.log(`saved drive ${drive}`);
   }
-  rmSync(folder, { recursive: true, force: true });
-  renameSync(partial, folder);
-  for (const name of expired(readdirSync(root))) {
-    rmSync(join(root, name), { recursive: true, force: true });
-    console.log(`removed ${name}`);
-  }
-  return folder;
 }
 
 if (import.meta.main) {

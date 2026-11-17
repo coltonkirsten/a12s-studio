@@ -3,20 +3,28 @@
 import { cpSync, existsSync, mkdirSync, readdirSync, rmSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { DATABASES } from "./backup.ts";
+import { DATABASES, DRIVES, TAR } from "./backup.ts";
 import { type Drives, fleetDrives, fleetOf } from "./drives.ts";
 
-const DRIVES = "drives";
-const TAR = ".tar.gz";
-
-// Without `force` it refuses a data folder that already holds what the backup would replace.
+// Without `force` it refuses, before it changes anything, when the data folder or the Fleet already holds something
+// the backup would replace. The Fleet is the one the backup names, whatever the data folder: a restore into a spare
+// folder still loads the drives of that Fleet's agents.
 export async function restore(folder: string, home: string, drives: Drives, force: boolean): Promise<void> {
-  const lacking = ["config.json", ...DATABASES].filter((file) => !existsSync(join(folder, file)));
+  const lacking = ["config.json", ...DATABASES, DRIVES].filter((file) => !existsSync(join(folder, file)));
   if (lacking.length > 0) throw new Error(`${folder} is not a whole backup: it has no ${lacking.join(", ")}`);
   const data = readdirSync(folder).filter((entry) => entry !== DRIVES);
   const present = data.filter((entry) => existsSync(join(home, entry)));
-  if (present.length > 0 && !force) {
-    throw new Error(`${home} already holds ${present.join(", ")}. To replace them, run this again with --force.`);
+  const known = new Set(await drives.list());
+  const saved = readdirSync(join(folder, DRIVES))
+    .filter((file) => file.endsWith(TAR))
+    .map((file) => file.slice(0, -TAR.length));
+  const loaded = saved.filter((drive) => known.has(drive));
+  if (!force && present.length + loaded.length > 0) {
+    const held = [
+      ...(present.length > 0 ? [`${home} already holds ${present.join(", ")}`] : []),
+      ...(loaded.length > 0 ? [`the Fleet already has the home drives ${loaded.join(", ")}`] : []),
+    ];
+    throw new Error(`${held.join(", and ")}. To replace them, run this again with --force.`);
   }
   mkdirSync(home, { recursive: true, mode: 0o700 });
   for (const entry of data) {
@@ -25,14 +33,12 @@ export async function restore(folder: string, home: string, drives: Drives, forc
     cpSync(join(folder, entry), join(home, entry), { recursive: true });
     console.log(`restored ${entry}`);
   }
-  const known = new Set(await drives.list());
-  for (const file of readdirSync(join(folder, DRIVES))) {
-    const drive = file.slice(0, -TAR.length);
+  for (const drive of saved) {
     if (!known.has(drive)) {
       console.log(`skipped drive ${drive}: the Fleet has no such drive`);
       continue;
     }
-    await drives.load(drive, join(folder, DRIVES, file));
+    await drives.load(drive, join(folder, DRIVES, `${drive}${TAR}`));
     console.log(`restored drive ${drive}`);
   }
 }
