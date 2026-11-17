@@ -89,6 +89,19 @@ test("a team whose agents cannot all be created leaves nothing behind", async (t
   assert.equal(s.app.repo.forTeam("web").agents().length, 2);
 });
 
+test("two teams created at once with one name get different slugs and their own agents", async (t) => {
+  const s = await setup(t);
+  const teams = await Promise.all([s.app.teams.createTeam(body), s.app.teams.createTeam(body)]);
+  assert.deepEqual(
+    teams.map((team) => team.id),
+    ["web", "web2"],
+  );
+  for (const team of teams) {
+    const names = (await s.a12s.forTeam(team.a12sToken).status()).map((a) => a.name);
+    assert.deepEqual(names.sort(), [`${team.id}-dev`, `${team.id}-lead`]);
+  }
+});
+
 test("hiring checks the name and uses the hire defaults", async (t) => {
   const s = await setup(t);
   await s.app.teams.createTeam(body);

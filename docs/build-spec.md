@@ -607,8 +607,10 @@ removed, so the delete can be run again. A team's lead cannot be fired. Agent sl
 at hire.
 
 **Creating a team** does all a12s work first (the prefix token, then `putAgent` for each template agent, lead first)
-and then inserts the team and agent rows in one transaction. If an a12s step fails, the agent computers and the token
-made so far are removed and nothing is written, so the slug stays free.
+and then inserts the team and agent rows in one transaction. The slug is claimed in memory before the first a12s
+call and released once the rows are in or the create has failed, so two creates running at once get different
+slugs and neither can remove the other's token or agent computers. If an a12s step fails, the agent computers and the
+token made so far are removed and nothing is written, so the slug stays free.
 
 ## 7. Live state
 
