@@ -6,7 +6,7 @@ import { title } from "../logic/names.ts";
 import { Problem } from "../parts/problem.tsx";
 import { Sheet } from "../parts/sheet.tsx";
 
-const MODELS = ["haiku", "sonnet", "opus"] as const;
+export const MODELS = ["haiku", "sonnet", "opus"] as const;
 
 export function HireSheet({ team, settings, onClose }: { team: TeamView; settings: Settings; onClose: () => void }) {
   const [name, setName] = useState("");

@@ -73,7 +73,7 @@ async function viaA12s(url: string | URL, init?: RequestInit): Promise<Response>
   });
 }
 
-test("a real MCP client sees the five tools, and no tool takes a team or a sender", async () => {
+test("a real MCP client sees the six tools, and no tool takes a team or a sender", async () => {
   const { port } = s.app.agentServer.address() as { port: number };
   const client = new Client({ name: "test", version: "1.0.0" });
   await client.connect(
@@ -83,7 +83,7 @@ test("a real MCP client sees the five tools, and no tool takes a team or a sende
     }),
   );
   const { tools } = await client.listTools();
-  assert.deepEqual(tools.map((t) => t.name).sort(), ["access", "post", "read", "roster", "update_thread"]);
+  assert.deepEqual(tools.map((t) => t.name).sort(), ["access", "post", "read", "roster", "schedule", "update_thread"]);
   for (const t of tools) {
     const fields = Object.keys(t.inputSchema.properties ?? {});
     for (const forbidden of ["team", "teamId", "team_id", "from", "fromId", "caller", "agent", "agentId"]) {

@@ -10,6 +10,7 @@ import {
   type Phase,
   type TurnRecord,
 } from "./a12s/port.ts";
+import { turnCost } from "./cost.ts";
 import type { Dispatcher } from "./dispatcher.ts";
 import type { Repo, TeamRepo } from "./repo.ts";
 import { onTurnFinished, systemAsk } from "./router.ts";
@@ -211,6 +212,7 @@ export function createLive(deps: {
         finishedAt: t.finishedAt,
         tokens: t.tokens,
         modelCostsUsd: t.modelCostsUsd,
+        costUsd: turnCost(t, scoped.previousCosts(t.agent, t.finishedAt)),
       });
       if (postAgain) systemAsk(scoped, t.agent, POST_AGAIN);
     });
