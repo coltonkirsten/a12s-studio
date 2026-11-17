@@ -160,7 +160,7 @@ launchd/
 | HTTP servers | `node:http` with a small route table per listener. | About thirty routes; a framework is not needed. |
 | Validation | `zod` in the app (tool inputs, owner API bodies). Hand-written guards in the broker. | The MCP SDK already brings zod. |
 | App dependencies | `@coltonkirsten/a12s`, `@modelcontextprotocol/sdk`, `zod`, `ws` (terminal bridge, P3). | |
-| Web dependencies | `react`, `react-dom`, `vite`, `@xterm/xterm` (P3). Plain CSS files with custom properties. No router library (the URL is `/#/<team>/<thread>`, parsed by hand), no state library (the state is the server's), no component kit. | |
+| Web dependencies | `react`, `react-dom`, `vite`, `@xterm/xterm` (P3), `markdown-to-jsx` (message bodies, section 7.6: one package with no dependencies of its own, and it builds React elements, so the web never sets an HTML string). Plain CSS files with custom properties. No router library (the URL is `/#/<team>/<thread>`, parsed by hand), no state library (the state is the server's), no component kit. | |
 | Scripts | `npm run check` = biome + tsc + tests. `npm run dev` = app, broker and Vite (Vite proxies `/api` to 7400). `npm run build` = Vite build; the app serves `packages/web/dist`. `npm run e2e` = `node packages/e2e/src/run.ts`. | |
 | CI | One job: `npm ci`, `npm run check`, a secret scan. Nothing that needs Docker, a12s or a Claude login. | |
 
@@ -504,10 +504,11 @@ agent finds with `read` that nothing is missing.
 Pause is app-side: the flag (`settings.paused` or `teams.paused`) is written, a dispatcher run that was under way is
 left to finish (it may have read the old flag, and would wake an agent after its sleep), then every awake agent in
 scope gets a plain `sleep()`, which ends its Turn. No a12s inbox hold and no held sleep are used. Messages already
-`sent` stay in the a12s inbox; nothing wakes the agent, so they wait. Each agent that was `Busy` when it was put to
-sleep is queued one system ask (`from_id = 'system'`, no thread): `You were paused mid-turn. Continue where you
-stopped.` The pause holds it like any other message. Queuing it at pause time, when the app knows who was mid-Turn,
-needs no record of when the pause began.
+`sent` stay in the a12s inbox; nothing wakes the agent, so they wait. Sleep also ends an agent's background work
+(section 7.2). Each agent that was working when it was put to sleep (`Busy`, or with background work in its a12s
+status) is queued one system ask (`from_id = 'system'`, no thread): `You were paused while working, and any
+background work was stopped. Continue where you stopped.` The pause holds it like any other message. Queuing it at
+pause time, when the app knows who was working, needs no record of when the pause began.
 
 Resume clears the flag and runs the dispatcher. An asleep agent with pending a12s Messages is a candidate, so the
 agents put to sleep with work in their inbox are woken, and the queued messages follow in order.
@@ -699,7 +700,10 @@ type AgentView = { id, slug, roleLine, model,
                    waitingFor?: "cap" | "budget" | "paused" | "disk",
                    line: string | null,                              // what it is doing now
                    turn: { id, threadId, startedAt, text } | null,   // text: last 4000 chars so far
+                   work: WorkItem[],                                 // sub-agents and background tasks running now, oldest first
                    queued: number, error?: string };                 // queued: messages it has not received yet
+type WorkItem = { id, kind: "agent" | "task", description, threadId: ThreadId | null, startedAt,
+                  line: string | null };                             // line: what a sub-agent is doing now
 type ThreadSummary = { id, title, ownerId, status: "open" | "needs_you" | "done", updatedAt, preview, asksForYou };
 type ThreadView = { id, teamId, title, ownerId, status, messages: MessageView[], hasMore };  // newest 200
 ```
@@ -718,16 +722,36 @@ later; every feed that becomes ready is followed by a resync.
 
 | a12s event | Effect |
 |---|---|
-| `agent_computer.phase` | Presence: `Asleep` → asleep; `Busy` → working; `Error` → error (with its message); any other → awake; unknown until a12s has reported a phase. An agent with a queued ask or reply that `blockedReason` holds shows waiting. Recorded for any agent computer name, because a new agent reports its phases before its row is committed. Runs the dispatcher. |
-| `turn.started` | Marks each Studio message whose `a12s_message_id` is in `inbox.messages` as `delivered`. Sets the Turn's thread to that of the first one. Line: "Thinking". Clears text. |
+| `agent_computer.phase` | Presence: `Asleep` → asleep; `Busy` → working; `Ready` with at least one work item → working; `Error` → error (with its message); any other → awake; unknown until a12s has reported a phase. An agent with a queued ask or reply that `blockedReason` holds shows waiting. A phase other than `Busy` or `Ready` empties the agent's work items: no harness session lives through it. Recorded for any agent computer name, because a new agent reports its phases before its row is committed. Runs the dispatcher. |
+| `turn.started` | Marks each Studio message whose `a12s_message_id` is in `inbox.messages` as `delivered`. Sets the Turn's thread to that of the first one; a Turn with no Messages (the harness starts one by itself when background work ends) takes the thread of the work item that ended last, once. Line: "Working". Clears text. |
 | `text.delta` | Appends to the Turn's text and emits `live`. If no tool is running, line: "Writing". |
-| `tool.started` (no `parent`) | Sets the line from the table below. Calls with a `parent` (a sub-agent's) are ignored for the line. |
-| `tool.finished` | Nothing for the line; the inspector's log shows it. |
-| `turn.finished` | Writes the `turns` row (section 7.4), applies sections 5.5 and 5.6, clears the line and text, runs the dispatcher. A Turn followed whole (every event from `turn.started` on, no resync since) is stored from its events; any other is read from a12s `turns`, which has all its text, Messages and tool calls; a12s stores the Turn before it sends the event. |
+| `tool.started` | With no `parent`: sets the agent's line from the table below; an `Agent` or `Task` call also adds a work item of kind agent (id: the call's id; description: the call's `description`; thread: the Turn's). With a `parent` (a sub-agent's call): sets the line of the work item whose launching call is the `parent`, from the same table. A background sub-agent's calls arrive between Turns too, with no Turn. |
+| `tool.finished` | With no `parent`: removes the work item that call started, unless a12s has reported it as background work. Nothing for the lines; the inspector's log shows it. |
+| `task.started` | Work that runs on in the background: a sub-agent or a command the agent ran in the background, or a process it detached. Marks the work item whose launching call is `toolUseId` as background, or adds one: kind agent for the a12s kinds `local_agent` and `agent`, task for any other; a12s's `id` and `description`; the thread of the running Turn, if any. |
+| `task.finished` | Removes the work item, whatever its status, and keeps its thread for the Turn that follows. |
+| `turn.finished` | Writes the `turns` row (section 7.4), applies sections 5.5 and 5.6, clears the line and text, removes the work items that are not background work (their calls end with the Turn), runs the dispatcher. A Turn followed whole (every event from `turn.started` on, no resync since) is stored from its events; any other is read from a12s `turns`, which has all its text, Messages and tool calls; a12s stores the Turn before it sends the event. |
 | `service.phase` | For an add-on instance, its status: `Ready` → ready; `Error` or `Unhealthy` → error (with its message); any other → starting. Other Services are ignored. |
-| `gap`, or a new feed | Resync: `status()` for phases; for each agent, recent Turns not yet in `turns`, stored the same way; for each `sent` message, its a12s state; `services()` for add-on statuses. Running Turns are no longer whole. |
+| `gap`, or a new feed | Resync: `status()` for phases and background work (an item a12s no longer lists is removed; one it lists that is not known is added with a12s's id, kind, description, start time and launching call, and no thread; a known one keeps its thread and line; work that is not background is dropped); for each agent, recent Turns not yet in `turns`, stored the same way; for each `sent` message, its a12s state; `services()` for add-on statuses. Running Turns are no longer whole. |
 
 The same resync runs at app start, which is how state survives a restart.
+
+**Work that outlives a Turn.** a12s keeps an agent's harness session alive between Turns. A sub-agent or a command
+the agent runs in the background, and a process it detaches, run on after the Turn that started them has ended.
+While they run a12s reports the agent computer as `Ready`, not `Busy`, holds its automatic sleep, and lists them in
+its status; when one ends the agent gets a Turn of its own, with no Messages, to read the result. So an agent
+between two such Turns is not idle, and the state says so: presence is working, `turn` is null, `line` is "Working
+in the background", and `work` lists what runs. A work item is in the state from the event that starts it to the
+event that ends it. No clock in the app or the browser decides that an agent is working, or that it has stopped.
+
+- A sub-agent has a line of its own, made from its tool calls like the agent's. A background command and a
+  detached process have none: a12s reports only their start and their end.
+- A work item belongs to the thread of the Turn it started in. The Turn that follows its end has that thread, so
+  the agent's words about the result stream into the conversation the work was for.
+- a12s stops a background task at its time limit and tells the agent; the app sets no limit of its own. `stop()`
+  ends the Turn and the background work together, so Stop is offered whenever presence is working.
+- After an app restart a running item is known from `status()` alone. It is listed under its agent, a sub-agent
+  with its line, in no thread.
+- Background work spends: a sub-agent's cost is in the model totals of the agent's next Turn (section 7.4).
 
 | Tool | Line |
 |---|---|
@@ -812,6 +836,34 @@ with the new grant's `id`. A write that can change a Needs You card (all of them
 again before it answers, so the state at its `rev` shows the change. A credential's `secret` passes through the
 app's memory once and is never logged or stored by the app. Removing or clearing inbox Messages also marks the
 matching Studio messages `none`.
+
+### 7.6 Message bodies
+
+Agents write markdown. The web renders the body of every message from an agent, in the conversation and in folded
+talk, and a working agent's streaming text, as markdown. The owner's own messages and system notes are shown as
+written. A thread's preview in the list is plain text.
+
+One part, `parts/markdown.tsx`, does all of it, with the options in `logic/markdown.ts`. `markdown-to-jsx` parses
+the text into React elements, so no HTML string is set anywhere in the web. A body is untrusted text: an agent
+repeats what it read on the web or in a file.
+
+- **No HTML.** `disableParsingRawHTML` is on. A tag in the source is shown as the characters it is.
+- **Links.** `safeHref` is the only judge of an address, and it is the library's `sanitizer`: an absolute `http:`,
+  `https:` or `mailto:` URL passes; anything else, a relative address included, is dropped and the link's text
+  stays as text. A link opens in a new tab with `rel="noopener noreferrer"`.
+- **No images.** An image is drawn as a link to its address, labelled with its alt text. The browser never loads
+  an address an agent wrote, so a body cannot send data out, or report that it was read, through an image request.
+- **Streaming.** The streaming text goes through the same part with `optimizeForStreaming`, so a half-written mark
+  does not show as raw characters and the finished message looks like the text that streamed.
+
+It handles paragraphs, headings, emphasis, lists, task lists, block quotes, links, inline code, code blocks and
+tables. Code is not syntax-coloured. Headings inside a body are one size above body text at most; a wide table or
+code block scrolls sideways inside the message.
+
+`logic/markdown.test.ts` renders with the real options to static markup and holds the rules: a `script`, `iframe` or
+`img` tag, with or without an event attribute, comes out as text and never as an element; `javascript:`, `data:`
+and `vbscript:` links, in any letter case or with leading spaces, and relative links have no `href`; image syntax
+makes no `img`; a kept link has the `rel` and the new tab.
 
 ## 8. Templates
 
@@ -1221,6 +1273,7 @@ default-deny tests pass; an agent clones and pushes a repository and its contain
 |---|---|
 | P3-A Limits | Awake cap and queue order, the cost rule, budget hold with its card in Needs You, free-disk check, the `schedule` tool and scheduled wakes, the global settings sheet and Team settings → Budget, so that every global and team limit is edited in the UI. |
 | P3-B Inspector | The agent inspector: Now with the tool log, Inbox with Remove and Clear, Role and notes, Files, Terminal, Settings (model, sleep, compaction, size: every agent limit). The `file` field of `post` and attachment download. |
+| P3-D Live view | Background work under an agent: `task.started` and `task.finished` and a sub-agent's tool calls in the port, `real.ts`, `fake.ts` and `live.ts`; background work in `status()`; `work` in `AgentView`; presence working while work runs; the work list under an agent and in the conversation; the pause ask for an agent with background work. The first line of a Turn is "Working". Message bodies as markdown (section 7.6). |
 | P3-C Durability (merges last) | `scripts/backup.ts` (both databases with SQLite's backup, each home drive as a tar, to `~/a12s-studio-backups/<date>/`, 14 kept) with a nightly LaunchAgent; `scripts/restore.ts`; the documented command to export the vault key; the P3 exit script. |
 
 Exit: a team runs unattended inside its budget; a forced budget stop (budget set below today's spend) and a forced
@@ -1298,5 +1351,5 @@ from the README alone.
   |---|---|
   | `p1.ts` | Two teams are created and both leads answer the owner. A lead asks a second agent, ends its Turn after the ask, and the answer comes back in the thread. The app is stopped and started mid-conversation; the state is the same and still live. |
   | `p2.ts` | From inside an agent's container a call with no grant is a 403. The agent requests access with the `access` tool; the card appears; approving makes the same call succeed at once; a second request, denied, stays a 403; a grant with a short expiry is a 403 after it; the same call from another team's agent is a 403. The agent clones the repository, commits and pushes a branch, which GitHub then lists; the token is in neither the container's environment nor its home drive. |
-  | `p3.ts` | With the awake cap at 1 and asks for two agents, two are never awake together. A budget set below today's spend holds the team and shows its card; raising it delivers. A forced agent error shows its card. After a backup, the data folder is emptied and restored, and teams, threads, grants and an agent's notes are as before. |
+  | `p3.ts` | With the awake cap at 1 and asks for two agents, two are never awake together. A budget set below today's spend holds the team and shows its card; raising it delivers. A forced agent error shows its card. An agent asked to run a command in the background and end its Turn stays working, with the command listed under it and no Turn, until the command ends and the agent reports. After a backup, the data folder is emptied and restored, and teams, threads, grants and an agent's notes are as before. |
   | `p4.ts` | The example add-on is turned on for one team: its agent uses the tool, the broker's audit shows the call under the instance's name, the reported cost is in the team's spend and a budget below it holds the team; the instance's container holds no secret; another team's agent cannot reach it; turned off, the grants are revoked and the Service is gone. |

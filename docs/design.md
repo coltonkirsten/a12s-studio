@@ -269,6 +269,15 @@ invoice.
 - **Live.** Each agent has a presence dot: asleep, awake, working. Under a working agent there is one plain line of
   what it is doing right now ("Reading server.ts", "Running tests"), and its words stream in as written. Tool logs
   stay in the inspector.
+- **Never falsely idle.** An agent that hands work to a sub-agent, or leaves a command running in the background,
+  stays working until that work ends, even after its own turn has ended. Each piece of running work is listed under
+  it in one quiet line: what it is, since when, and for a sub-agent what it is doing now ("Research pricing · since
+  14:02 · Reading notes.md"). The same lines sit in the conversation the work is for. All of it is what a12s
+  reports; no timer guesses.
+- **Readable answers.** Agents write markdown, and their messages are drawn as it: headings, lists, code, tables,
+  links. Quietly: body type throughout, headings a little heavier, code on a soft tint. A message can never run
+  markup of its own, and never makes the browser load an address: no HTML is honoured, an image is shown as a
+  link, and a link opens only an ordinary web or mail address.
 - **Quiet threads.** Talk between agents folds into one line ("Lead asked Dev, 3 messages") that opens on click. You
   see your own words, the answers, and anything that needs you.
 - **Truthful.** A button finishes when the result is real on the server, never before. Nothing is drawn
