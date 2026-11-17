@@ -52,7 +52,7 @@ function agent(
 
 let turnSeq = 0;
 
-function msg(from: string, to: string | null, body: string, ago: number): MessageView {
+function msg(from: string, to: string, body: string, ago: number): MessageView {
   seq += 1;
   return {
     id: `m_fixture${seq}`,
@@ -184,7 +184,7 @@ turn(0.18, ...pick(format, 11));
 const threads: ThreadView[] = [
   thread("th_fixturemenu", "website", "Fix the menu on small screens", "open", [
     ...menu,
-    msg("website-lead", null, "Dev has a fix in review. Only the header changes.", 5),
+    msg("website-lead", "owner", "Dev has a fix in review. Only the header changes.", 5),
   ]),
   thread("th_fixtureformat", "website", "Agree the export format", "open", format),
   thread("th_fixturecopy", "website", "Landing page copy", "open", [

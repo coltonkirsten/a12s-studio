@@ -5,7 +5,7 @@ import type { Caller } from "./caller.ts";
 import { StudioError } from "./errors.ts";
 import type { Agent, BoardRow, NewMessage, TeamRepo, Thread } from "./repo.ts";
 
-type PostInput = { body: string; to?: string; thread?: string; title?: string };
+type PostInput = { body: string; to: string; thread?: string; title?: string };
 type Posted = { message: MessageId; thread: ThreadId };
 // A file to post with the message, stored by `store` inside the message's transaction, so a message never names a
 // file that is not there.
@@ -42,10 +42,10 @@ function notFound(message: string, fix: string): never {
   throw new StudioError(404, "not_found", message, fix);
 }
 
-// Only a current agent has an inbox to deliver to: a message to the owner, a record in the thread and a message to
-// an agent who has left the team are just recorded.
+// Only a current agent has an inbox to deliver to: a message to the owner and a message to an agent who has left the
+// team are just recorded.
 function insert(team: TeamRepo, m: NewMessage): MessageId {
-  const delivery = m.toId !== null && team.agent(m.toId) ? "queued" : "none";
+  const delivery = team.agent(m.toId) ? "queued" : "none";
   return team.insertMessage(m, delivery, Date.now());
 }
 
@@ -59,7 +59,7 @@ function agentReceiver(team: TeamRepo, caller: Caller, to: string): string {
     team.agentBySlug(to) ??
     notFound(`No agent named "${to}" on your team.`, 'Use roster to see who is on your team, or write to "owner".');
   if (agent.id === caller.agentId) {
-    refuse("self", "You cannot post to yourself.", "Keep it in your notes, or post to the thread without to.");
+    refuse("self", "You cannot post to yourself.", 'Write to a teammate or to "owner", or keep it in your notes.');
   }
   return agent.id;
 }
@@ -84,7 +84,7 @@ export function agentPost(
     refuse("thread_or_title", "A post takes thread or title, not both.", BOTH_FIX);
   }
   return team.tx(() => {
-    const toId = input.to === undefined ? null : agentReceiver(team, caller, input.to);
+    const toId = agentReceiver(team, caller, input.to);
     const thread =
       threadId !== undefined
         ? mustThread(team, threadId).id

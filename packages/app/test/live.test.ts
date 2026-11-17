@@ -52,7 +52,6 @@ test("doingNow: one plain line per tool", () => {
     ["Agent", {}, "Working with a sub-agent"],
     ["Task", {}, "Working with a sub-agent"],
     [`${TOOL_PREFIX}post`, { to: "dev", thread: "th_1" }, "Writing to dev"],
-    [`${TOOL_PREFIX}post`, { thread: "th_1" }, "Writing in the thread"],
     [`${TOOL_PREFIX}read`, {}, "Checking the board"],
     [`${TOOL_PREFIX}update_thread`, {}, "Checking the board"],
     [`${TOOL_PREFIX}roster`, {}, "Checking the roster"],

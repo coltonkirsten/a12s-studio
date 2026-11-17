@@ -251,7 +251,7 @@ CREATE TABLE messages (
   team_id TEXT NOT NULL REFERENCES teams(id),
   thread_id TEXT REFERENCES threads(id),               -- null only when from_id = 'system'
   from_id TEXT NOT NULL,                               -- agent id | 'owner' | 'system'
-  to_id TEXT,                                          -- agent id | 'owner' | null (a record in the thread)
+  to_id TEXT NOT NULL,                                 -- agent id | 'owner'
   body TEXT NOT NULL,
   file_name TEXT,                                      -- stored at app/files/<id>/<file_name>
   cause_id TEXT REFERENCES messages(id),               -- the message that set it off (section 5.9); null: none
@@ -386,7 +386,7 @@ a one-sentence fix. Tool inputs are strict: a field a tool does not name is refu
 ```ts
 post: {
   body: string,            // 1..32000 chars
-  to?: string,             // agent slug or "owner"; left out: a record in the thread, delivered to nobody
+  to: string,              // agent slug or "owner"
   thread?: string,         // thread id
   title?: string,          // 1..120 chars: starts a new thread owned by the caller
   file?: string            // absolute path under /home/agent
@@ -394,7 +394,8 @@ post: {
 ```
 
 Exactly one of `thread` and `title` is given. `to` is another current agent on the team, or `owner`; never the
-caller. There is one kind of message: no field says what a message is for, and none points at the message it
+caller. Every post names its receiver: one that reached nobody would leave whoever asked waiting, so a post without
+`to` is refused with who to name. There is one kind of message: no field says what a message is for, and none points at the message it
 answers. What a message does to its receiver is section 5.3.
 
 **A file** is copied when the post is made: the app reads it from the caller's home with `readFile` and stores it at
@@ -480,7 +481,7 @@ A message's `delivery`:
 
 | State | Meaning |
 |---|---|
-| `none` | Nothing to deliver: `to_id` is `owner` or null. |
+| `none` | Nothing to deliver: `to_id` is `owner`. |
 | `queued` | Waiting in the app. |
 | `sent` | In the agent's a12s inbox; `a12s_message_id` set. |
 | `delivered` | A `turn.started` or a `turn.steered` event listed that a12s Message id. `turn_id` is that Turn, and `steered` is 1 for `turn.steered`. |
@@ -488,7 +489,7 @@ A message's `delivery`:
 Rules when a message is committed (`router.ts`):
 
 - A message to a current agent: `queued`, then the dispatcher runs.
-- A message to `owner`, or with no receiver: `none`.
+- A message to `owner`: `none`.
 - A `post` returns only after its transaction has committed. The dispatcher runs after the commit, not inside it.
 
 No rule looks at what a message is for, at what it answers, or at how many came before it. Section 5.9 records
@@ -749,9 +750,9 @@ You are {agent}, a member of the team "{team}" in a12s Studio. One person, the o
 How work flows
 - All work lives in threads. Your studio tools are post, read, update_thread, roster, rules, schedule and access.
 - Nobody sees your plain output. The owner and your teammates see only what you send with post.
-- post writes one message in a thread. With to, it goes to that teammate or to the owner. A teammate who is
+- post writes one message in a thread, and to names who it is for: a teammate or the owner. A teammate who is
   working gets it inside the turn they are in, between two steps; one who is idle or asleep is woken by it.
-  Without to, it is only recorded in the thread and reaches nobody: use that for progress.
+  To answer a message, post to its sender.
 - Messages reach you the same way. One that arrives while you work belongs to the turn you are in: read it,
   adjust what you are doing, carry on. Not every message needs an answer.
 - After a message that needs an answer, do what you can without it, then end your turn. The answer comes to
@@ -762,7 +763,8 @@ Messaging teammates
 - A message to a teammate costs them a turn or interrupts their work. Send one only when it changes what they
   should do, or gives them something they asked for.
 - Never send a message only to acknowledge, thank, agree or say you are starting. Silence means received.
-- Batch. One message with everything, not several small ones. Progress goes in a post without to.
+- Batch. One message with everything, not several small ones. Post no progress reports: the owner can watch
+  your work as it happens.
 - Stop when an exchange has stopped producing decisions. After three rounds with the same teammate on the same
   question, decide yourself and say what you chose, or put the options to the owner once.
 - Every message to the owner asks for their attention. Write to them to hand over a result, or for a real gap.
@@ -965,7 +967,7 @@ event that ends it. No clock in the app or the browser decides that an agent is 
 | `Grep`, `Glob` | Searching |
 | `WebFetch`, `WebSearch` | Browsing `<host or query>` |
 | `Agent`, `Task` | Working with a sub-agent |
-| studio `post` | Writing to `<receiver>` (with no receiver: Writing in the thread) |
+| studio `post` | Writing to `<receiver>` |
 | other studio tools | Checking the board / the roster / the rules / access / its schedule |
 | anything else | Using `<tool name>` |
 
@@ -1116,7 +1118,7 @@ All of it is drawn from the open thread's `MessageView`s and `ThreadView.chain`;
   line: the names of the agents in it, senders and receivers, in the order they first appear, the number of
   messages, and, from a depth of 3, the
   greatest `depth` in the run (`Lead and Dev · 14 messages · 9 deep`). It opens on click. Messages from or to the
-  owner, messages from `system` and records with no receiver are never folded.
+  owner and messages from `system` are never folded.
 - **The delivery line.** Under every message to an agent is one quiet line made from `delivered`: `joined Dev's
   turn`, `woke Dev`, or `waiting for Dev` while it is null. It opens Dev's inspector, on its Now tab.
 - **The Chain view** (`logic/chain.ts`, `parts/chain.tsx`). A switch in the thread's header replaces the
@@ -1590,9 +1592,10 @@ from the README alone.
     missing one; `post` to another team's agent is refused; a property test runs random tool calls from two teams and
     asserts every row's `team_id` equals its caller's team and no read returns another team's row; run-time a12s
     calls for team A never name a team B agent (asserted by the fake).
-  - *Routing:* a message to an agent is sent, and wakes it if it sleeps; one to the owner or to nobody produces no
-    a12s send; a message for a working agent is delivered by `turn.steered` into the running Turn and starts none;
-    one that misses the Turn starts the next and is delivered once; no post is refused for what it answers or for how
+  - *Routing:* a message to an agent is sent, and wakes it if it sleeps; one to the owner produces no a12s send; a
+    post that names no receiver is refused and writes nothing; a message for a working agent is delivered by
+    `turn.steered` into the running Turn and starts none; one that misses the Turn starts the next and is delivered
+    once; no post is refused for what it answers or for how
     many came before it; cause and depth along a chain through three agents, and none for a post outside a Turn; a
     thread needs the owner from an agent's message to them until they post or mark it read, and never when done;
     owner messages jump the queue; pause holds and resume delivers in order;

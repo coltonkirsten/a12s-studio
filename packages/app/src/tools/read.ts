@@ -54,7 +54,7 @@ export const read: Tool<typeof input> = {
       messages: team.threadMessages(thread.id, limit, before).map((m) => ({
         id: m.id,
         from: nameOf(m.fromId),
-        to: m.toId && nameOf(m.toId),
+        to: nameOf(m.toId),
         body: m.body,
         file: attachmentUrl(m),
         at: iso(m.createdAt),

@@ -4,7 +4,7 @@ import type { MessageView } from "@a12s-studio/contract/state";
 import { fold } from "./fold.ts";
 
 let n = 0;
-function msg(from: string, to: string | null, depth = 0): MessageView {
+function msg(from: string, to: string, depth = 0): MessageView {
   n += 1;
   return { id: `m_${n}`, from, to, body: "", file: null, at: n, cause: null, depth, delivered: null };
 }
@@ -33,8 +33,8 @@ test("fold keeps the owner's talk and folds runs between agents, naming them in 
       ["Lead, Ux writer and Dev · 3 messages"],
     ],
     [
-      [msg("web-lead", "web-dev"), msg("web-lead", null), msg("web-dev", "web-lead")],
-      ["Lead and Dev · 1 message", "web-lead>null", "Dev and Lead · 1 message"],
+      [msg("web-lead", "web-dev"), msg("web-lead", "owner"), msg("web-dev", "web-lead")],
+      ["Lead and Dev · 1 message", "web-lead>owner", "Dev and Lead · 1 message"],
     ],
     [[msg("system", "web-lead")], ["system>web-lead"]],
   ];

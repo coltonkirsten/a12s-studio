@@ -82,13 +82,12 @@ test("a message is sent, then its asleep receiver is woken", async (t) => {
   assert.deepEqual(row(s, posted.message), { delivery: "sent", a12s: sent?.id });
 });
 
-test("a message to the owner or to nobody reaches no a12s inbox and wakes nobody", async (t) => {
+test("a message to the owner reaches no a12s inbox and wakes nobody", async (t) => {
   const s = await setup(t);
   sleepAll(s.a12s);
   const owner = await s.tool("web-lead", "post", { to: "owner", title: "Plan", body: "Blue or green?" });
-  const record = await s.tool("web-lead", "post", { thread: owner.thread, body: "Staging is rebuilt." });
   await s.app.dispatcher.run();
-  for (const id of [owner.message, record.message]) assert.deepEqual(row(s, id), { delivery: "none", a12s: null });
+  assert.deepEqual(row(s, owner.message), { delivery: "none", a12s: null });
   for (const agent of s.a12s.agents.values()) {
     assert.equal(agent.inbox.length, 0);
     assert.equal(agent.phase, "Asleep");
@@ -209,7 +208,7 @@ test("cause and depth follow a chain through three senders, and a post outside a
 
   s.a12s.finishTurn("web-lead");
   await until(() => s.app.live.agent("web-lead")?.turn === null);
-  const outside = await s.tool("web-lead", "post", { thread: owner.thread, body: "Progress: done." });
+  const outside = await s.tool("web-lead", "post", { to: "owner", thread: owner.thread, body: "Progress: done." });
   assert.deepEqual(chain(s, outside.message), { cause: null, depth: 0, turn: null, steered: 0 });
 });
 
@@ -240,8 +239,35 @@ test("post takes thread or title, refuses itself as receiver and any field it do
   ] as const) {
     assert.equal((await s.tool("web-lead", "post", args)).error?.code, code, JSON.stringify(args));
   }
-  assert.ok((await s.tool("web-lead", "post", { thread, body: "" })).error, "an empty body is refused");
+  assert.ok((await s.tool("web-lead", "post", { to: "dev", thread, body: "" })).error, "an empty body is refused");
   assert.equal(s.app.repo.forTeam("web").threadMessages(String(thread), 10).length, 1, "nothing refused was written");
+});
+
+test("an answer that names no receiver is refused with who to name; named, it reaches whoever asked", async (t) => {
+  const s = await setup(t);
+  const asked = await s.tool("web-lead", "post", { to: "dev", title: "Format", body: "JSON lines or CSV?" });
+  const { thread } = ownerThread(s.app.repo.forTeam("web"), { body: "Which colour?", to: "dev" });
+  await s.app.dispatcher.run();
+  sleepAll(s.a12s);
+  const cards = () => deriveState(s.app, null).needsYou.filter((n) => n.kind === "message").length;
+  const written = () => s.db.prepare("SELECT count(*) AS n FROM messages").get()?.n;
+  const before = written();
+
+  for (const args of [
+    { thread: asked.thread, body: "JSON lines." },
+    { thread, body: "Green." },
+  ]) {
+    const refused = await s.tool("web-dev", "post", args);
+    assert.match(refused.error?.message ?? "", /A post needs to: a teammate's name from roster, or "owner"\./);
+  }
+  assert.equal(written(), before, "nothing refused was written");
+
+  await s.tool("web-dev", "post", { to: "lead", thread: asked.thread, body: "JSON lines." });
+  await s.tool("web-dev", "post", { to: "owner", thread, body: "Green." });
+  await s.app.dispatcher.run();
+  assert.match(pending(s.a12s, "web-lead").at(-1)?.body ?? "", /from dev\n---\nJSON lines\./);
+  assert.notEqual(s.a12s.agents.get("web-lead")?.phase, "Asleep", "the asker is woken by the answer");
+  assert.equal(cards(), 1, "the owner's question shows its answer");
 });
 
 test("the owner's messages are sent first", async (t) => {

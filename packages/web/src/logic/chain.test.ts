@@ -4,7 +4,7 @@ import type { Delivered, MessageView, ThreadView } from "@a12s-studio/contract/s
 import { chainRows, chainTotals, deliveryLine } from "./chain.ts";
 
 let n = 0;
-function msg(from: string, to: string | null, delivered: Delivered | null = null, body = "b"): MessageView {
+function msg(from: string, to: string, delivered: Delivered | null = null, body = "b"): MessageView {
   n += 1;
   return { id: `m_${n}`, from, to, body, file: null, at: n, cause: null, depth: 0, delivered };
 }
@@ -17,7 +17,6 @@ test("the delivery line says how a message reached its agent", () => {
     [msg("web-lead", "web-dev", started("t1")), "woke Dev"],
     [msg("web-lead", "web-ux-writer", joined("t1")), "joined Ux writer's turn"],
     [msg("web-lead", "owner"), null],
-    [msg("web-lead", null), null],
   ];
   for (const [m, line] of rows) assert.equal(deliveryLine(m), line, `${m.from}>${m.to}`);
 });
@@ -44,7 +43,7 @@ test("chain rows keep order, cause and depth, and show a Turn's cost on its firs
 test("a row's start is the body on one line, cut", () => {
   const [short, long] = chainRows([
     msg("owner", "web-lead", null, "Two\n  lines."),
-    msg("owner", null, null, "x".repeat(200)),
+    msg("owner", "web-lead", null, "x".repeat(200)),
   ]);
   assert.equal(short?.start, "Two lines.");
   assert.equal(long?.start.length, 80);

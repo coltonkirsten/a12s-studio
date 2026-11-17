@@ -9,7 +9,7 @@ export type ChainRow = {
   id: MessageId;
   depth: number;
   from: string;
-  to: string | null;
+  to: string;
   start: string;
   delivery: string | null;
   cause: MessageId | null;
@@ -18,9 +18,9 @@ export type ChainRow = {
 
 export type ChainTotals = { messages: number; depth: number; turns: number; costUsd: number };
 
-/** How a message reached its agent: "joined Dev's turn", "woke Dev", or "waiting for Dev"; null with no agent. */
+/** How a message reached its agent: "joined Dev's turn", "woke Dev", or "waiting for Dev"; null for the owner. */
 export function deliveryLine(m: MessageView): string | null {
-  if (m.to === null || m.to === "owner") return null;
+  if (m.to === "owner") return null;
   const name = displayName(m.to);
   if (!m.delivered) return `waiting for ${name}`;
   return m.delivered.steered ? `joined ${name}'s turn` : `woke ${name}`;

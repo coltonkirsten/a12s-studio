@@ -38,8 +38,7 @@ export function ChainView({ thread }: { thread: ThreadView }) {
             >
               <span className="chain-depth">{row.depth}</span>
               <span className="chain-who">
-                {displayName(row.from)}
-                {row.to !== null && ` → ${displayName(row.to)}`}
+                {displayName(row.from)} → {displayName(row.to)}
               </span>
               <span className="chain-start">{row.start}</span>
               <span className="chain-delivery">{row.delivery}</span>

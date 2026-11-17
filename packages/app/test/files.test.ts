@@ -21,6 +21,7 @@ before(async () => {
   s.a12s.agents.get("web-dev")?.files.set("/home/agent/out/data/rows.csv", new TextEncoder().encode("a,b\n"));
   thread = String((await s.tool("web-lead", "post", { to: "dev", title: "Report", body: "Go." })).thread);
   const posted = await s.tool("web-dev", "post", {
+    to: "lead",
     thread,
     body: "The report.",
     file: "/home/agent/out/report.md",
@@ -106,7 +107,7 @@ test("post with a file outside the home, a folder or a missing file is refused a
     ["/home/agent/out/missing.md", "not_found"],
   ];
   for (const [file, code] of cases) {
-    const answer = await s.tool("web-dev", "post", { thread, body: "x", file });
+    const answer = await s.tool("web-dev", "post", { to: "lead", thread, body: "x", file });
     assert.equal(answer.error?.code, code, file);
   }
   const after = (await s.tool("web-lead", "read", { thread })).messages as unknown[];

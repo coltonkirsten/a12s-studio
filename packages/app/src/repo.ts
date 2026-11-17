@@ -46,7 +46,7 @@ export type Message = {
   teamId: string;
   threadId: ThreadId | null;
   fromId: string;
-  toId: string | null;
+  toId: string;
   body: string;
   fileName: string | null;
   causeId: MessageId | null;

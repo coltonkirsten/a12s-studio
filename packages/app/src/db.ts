@@ -144,6 +144,41 @@ export const migrations: string[] = [
     SELECT team_id, id, role, 'owner', created_at FROM agents ORDER BY created_at, rowid;
   ALTER TABLE agents DROP COLUMN role;
   `,
+  // Every message names its receiver. One written to nobody was there for the owner to read, so it becomes a message
+  // to them, counted as read in a thread that did not need them. messages is rebuilt: ALTER cannot add NOT NULL.
+  `
+  UPDATE threads SET owner_seen_at = max(owner_seen_at,
+      (SELECT max(r.created_at) FROM messages r WHERE r.thread_id = threads.id AND r.to_id IS NULL))
+    WHERE EXISTS (SELECT 1 FROM messages r WHERE r.thread_id = threads.id AND r.to_id IS NULL)
+      AND NOT EXISTS (SELECT 1 FROM messages m WHERE m.thread_id = threads.id AND m.to_id = 'owner'
+        AND m.created_at > threads.owner_seen_at);
+
+  CREATE TABLE messages_new (
+    id TEXT PRIMARY KEY,
+    team_id TEXT NOT NULL REFERENCES teams(id),
+    thread_id TEXT REFERENCES threads(id),
+    from_id TEXT NOT NULL,
+    to_id TEXT NOT NULL,
+    body TEXT NOT NULL,
+    file_name TEXT,
+    cause_id TEXT REFERENCES messages(id),
+    depth INTEGER NOT NULL DEFAULT 0,
+    delivery TEXT NOT NULL CHECK (delivery IN ('none','queued','sent','delivered')),
+    a12s_message_id TEXT,
+    turn_id TEXT,
+    steered INTEGER NOT NULL DEFAULT 0,
+    created_at INTEGER NOT NULL, delivered_at INTEGER
+  ) STRICT;
+  INSERT INTO messages_new
+    SELECT id, team_id, thread_id, from_id, coalesce(to_id, 'owner'), body, file_name, cause_id, depth, delivery,
+      a12s_message_id, turn_id, steered, created_at, delivered_at FROM messages ORDER BY rowid;
+  DROP TABLE messages;
+  ALTER TABLE messages_new RENAME TO messages;
+  CREATE INDEX messages_thread ON messages (thread_id, created_at);
+  CREATE INDEX messages_queue ON messages (to_id, delivery, created_at);
+  CREATE INDEX messages_a12s ON messages (a12s_message_id);
+  CREATE INDEX messages_turn ON messages (turn_id);
+  `,
 ];
 
 // Migrations run with foreign keys off, as SQLite's procedure for rebuilding a table requires (dropping the old table

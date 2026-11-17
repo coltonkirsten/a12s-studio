@@ -93,14 +93,9 @@ export async function p3(studio: Studio): Promise<void> {
   await step("With the awake cap at 1 and messages for two agents, two are never awake together", async () => {
     const { awakeCap } = studio.state().settings;
     await studio.api("PATCH", "/settings", { awakeCap: 1, paused: false });
-    const first = await ownerMessage(
-      studio,
-      team,
-      "Two answers",
-      "Answer me with a post to owner holding the single word: one",
-    );
+    const first = await ownerMessage(studio, team, "Two answers", "Answer me with the single word: one");
     const second = await studio.api<WriteResult>("POST", `/threads/${first.thread}/messages`, {
-      body: "Answer me with a post to owner holding the single word: two",
+      body: "Answer me with the single word: two",
       to: "dev",
     });
     await studio.open(first.thread);
@@ -123,12 +118,7 @@ export async function p3(studio: Studio): Promise<void> {
     const { spentTodayUsd, dailyUsd } = budget(studio.state(), team);
     assert.ok(spentTodayUsd > 0, "the team has spent nothing today");
     await studio.api("PATCH", `/teams/${team}`, { dailyBudgetUsd: spentTodayUsd / 2 });
-    const held = await ownerMessage(
-      studio,
-      team,
-      "Held",
-      "Answer me with a post to owner holding the single word: three",
-    );
+    const held = await ownerMessage(studio, team, "Held", "Answer me with the single word: three");
     await studio.until(
       `${lead} waiting for the budget, and the budget card`,
       (s) => agent(s, lead)?.waitingFor === "budget" && hasCard(s, "budget", (card) => card.teamId === team),
@@ -203,9 +193,8 @@ export async function p3(studio: Studio): Promise<void> {
       team,
       "Later",
       "Use schedule to wake yourself in this thread one minute from now, then end your turn. " +
-        "When that wake arrives, ask dev, with a post to dev, to write the word hello into ~/hello.txt and to " +
-        "answer with a post to lead. When dev has answered, send me a post to owner holding the single word: " +
-        "finished",
+        "When that wake arrives, ask dev to write the word hello into ~/hello.txt. " +
+        "When dev has answered, send me the single word: finished",
     );
     await studio.open(asked.thread);
     // The word itself: the lead's first Turn may also leave a message for the owner (build-spec 5.5).

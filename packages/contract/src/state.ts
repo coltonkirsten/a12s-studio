@@ -71,7 +71,7 @@ export type Delivered = { turn: string | null; steered: boolean; at: number; cos
 export type MessageView = {
   id: MessageId;
   from: string;
-  to: string | null;
+  to: string;
   body: string;
   file: string | null;
   at: number;
