@@ -69,7 +69,8 @@ console.log(`a12s Studio: Fleet ${config.fleet}, database ${dbFile}`);
 console.log(`a12s Studio: owner UI on http://127.0.0.1:${OWNER_PORT}, agent API on 127.0.0.1:${STUDIO_PORT}`);
 
 // Agents reach both listeners through these Services. a12s may still be starting (Docker after a reboot), so this
-// retries until it answers; the UI is up meanwhile and shows a12s as down.
+// retries until it answers; the UI is up meanwhile and shows a12s as down. Once a12s answers, every agent's spec is
+// put again.
 const services: ExternalService[] = [
   { name: "studio", host: "host.docker.internal", port: STUDIO_PORT, mcpPath: "/mcp", healthPath: "/healthz" },
   { name: "broker", host: "host.docker.internal", port: BROKER_PORT },
@@ -77,12 +78,14 @@ const services: ExternalService[] = [
 void (async () => {
   for (;;) {
     try {
-      return await a12s.ensureServices(services);
+      await a12s.ensureServices(services);
+      break;
     } catch (error) {
       console.error("a12s Studio: cannot set the studio and broker Services yet:", String(error));
       await new Promise((resolve) => setTimeout(resolve, 5000));
     }
   }
+  await app.teams.putSpecs();
 })();
 
 // Its first resync stores what happened while the app was stopped and runs the dispatcher, which delivers whatever

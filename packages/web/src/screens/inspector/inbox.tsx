@@ -2,7 +2,6 @@ import type { InboxItem } from "@a12s-studio/contract/api";
 import type { AgentView, TeamView } from "@a12s-studio/contract/state";
 import { useContext, useState } from "react";
 import { api, Rev, useAction, useRead } from "../../api.ts";
-import { inboxGroups } from "../../logic/inbox.ts";
 import { displayName } from "../../logic/names.ts";
 import { shortTime } from "../../logic/time.ts";
 import { Problem } from "../../parts/problem.tsx";
@@ -43,41 +42,33 @@ export function Inbox({ team, agent }: { team: TeamView; agent: AgentView }) {
       </div>
       <Problem problem={inbox.problem ?? clear.problem} />
       <ul className="inbox">
-        {inboxGroups(items).map((group) => (
-          <Group key={group[0]?.id} team={team} agent={agent} group={group} />
+        {items.map((item) => (
+          <Item key={item.id} team={team} agent={agent} item={item} />
         ))}
       </ul>
     </section>
   );
 }
 
-function Group({ team, agent, group }: { team: TeamView; agent: AgentView; group: InboxItem[] }) {
+function Item({ team, agent, item }: { team: TeamView; agent: AgentView; item: InboxItem }) {
   const remove = useAction();
   const now = Date.now();
-  const first = group[0];
-  if (!first) return null;
-  const where = first.sentAs === null ? "Waiting in Studio" : "In its a12s inbox";
   return (
-    <li className="inbox-group">
-      {group.map((m) => (
-        <div key={m.id} className="inbox-message">
-          <header>
-            <b>{displayName(m.from)}</b>
-            <span>
-              {m.kind}
-              {m.thread && ` in ${team.threads.find((t) => t.id === m.thread)?.title ?? "a thread"}`}
-            </span>
-            <time>{shortTime(m.at, now)}</time>
-          </header>
-          <p className="inbox-body">{m.body}</p>
-        </div>
-      ))}
+    <li className="inbox-item">
+      <div className="inbox-message">
+        <header>
+          <b>{displayName(item.from)}</b>
+          {item.thread && <span>in {team.threads.find((t) => t.id === item.thread)?.title ?? "a thread"}</span>}
+          <time>{shortTime(item.at, now)}</time>
+        </header>
+        <p className="inbox-body">{item.body}</p>
+      </div>
       <footer>
-        <span>{group.length > 1 ? `${where}, sent together` : where}</span>
+        <span>{item.sentAs === null ? "Waiting in Studio" : "In its a12s inbox"}</span>
         <button
           type="button"
           className={remove.pending ? "button quiet pending" : "button quiet"}
-          onClick={() => remove.run(() => api.removeInbox(agent.id, first.id))}
+          onClick={() => remove.run(() => api.removeInbox(agent.id, item.id))}
         >
           Remove
         </button>

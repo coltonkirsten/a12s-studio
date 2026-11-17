@@ -1,4 +1,5 @@
 import type { ServerResponse } from "node:http";
+import type { MessagesPage } from "@a12s-studio/contract/api";
 import type {
   LiveText,
   MessageView,
@@ -23,19 +24,22 @@ const PREVIEW = 140;
 export function messageView(m: Message): MessageView {
   return {
     id: m.id,
-    kind: m.kind,
     from: m.fromId,
     to: m.toId,
-    ask: m.askId,
     body: m.body,
     file: m.fileName,
-    implicit: m.implicit,
     at: m.createdAt,
+    cause: m.causeId,
+    depth: m.depth,
+    delivered:
+      m.delivery === "delivered"
+        ? { turn: m.turnId, steered: m.steered, at: m.deliveredAt ?? m.createdAt, costUsd: m.turnCostUsd }
+        : null,
   };
 }
 
 // The newest `MESSAGES` before `before`, and whether older ones exist.
-export function messagesPage(team: TeamRepo, threadId: string, before?: string) {
+export function messagesPage(team: TeamRepo, threadId: string, before?: string): MessagesPage {
   const rows = team.threadMessages(threadId, MESSAGES + 1, before);
   return { messages: rows.slice(-MESSAGES).map(messageView), hasMore: rows.length > MESSAGES };
 }
@@ -63,9 +67,16 @@ export function deriveState(
   const teams: TeamView[] = repo.teams().map((team) => {
     const scoped = repo.forTeam(team.id);
     const waiting = scoped.undelivered();
-    for (const m of scoped.ownerQuestions()) {
-      if (m.threadId)
-        needsYou.push({ kind: "question", teamId: team.id, threadId: m.threadId, message: messageView(m) });
+    for (const { message, more } of scoped.forOwner()) {
+      if (message.threadId) {
+        needsYou.push({
+          kind: "message",
+          teamId: team.id,
+          threadId: message.threadId,
+          message: messageView(message),
+          more,
+        });
+      }
     }
     for (const t of scoped.failedTurns()) {
       needsYou.push({
@@ -112,7 +123,7 @@ export function deriveState(
           needsYou.push({ kind: "agent_error", teamId: team.id, agentId: agent.id, error: rec.error ?? "" });
         }
         const waitingFor =
-          queue?.dispatchable === true && (presence === "asleep" || presence === "awake")
+          queue?.inApp === true && (presence === "asleep" || presence === "awake")
             ? blocked(presence === "asleep")
             : null;
         if (waitingFor) presence = "waiting";
@@ -146,14 +157,14 @@ export function deriveState(
           ...(rec?.phase === "Error" && rec.error ? { error: rec.error } : {}),
         };
       }),
-      threads: scoped.board({ status: "all", limit: THREADS, viewer: "owner" }).map((t) => ({
+      threads: scoped.board({ status: "all", limit: THREADS }).map((t) => ({
         id: t.id,
         title: t.title,
         ownerId: t.ownerAgentId,
         status: boardStatus(t),
         updatedAt: t.updatedAt,
         preview: (t.last?.body ?? "").slice(0, PREVIEW),
-        asksForYou: t.asksForOwner,
+        forYou: t.forOwner,
       })),
     };
   });
@@ -162,13 +173,15 @@ export function deriveState(
   const teamId = thread ? repo.threadTeam(thread) : undefined;
   const summary = teams.find((t) => t.id === teamId)?.threads.find((t) => t.id === thread);
   if (teamId && thread && summary) {
+    const scoped = repo.forTeam(teamId);
     open = {
       id: summary.id,
       teamId,
       title: summary.title,
       ownerId: summary.ownerId,
       status: summary.status,
-      ...messagesPage(repo.forTeam(teamId), thread),
+      ...messagesPage(scoped, thread),
+      chain: scoped.chain(thread),
     };
   }
   return {

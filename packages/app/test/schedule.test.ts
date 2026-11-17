@@ -34,7 +34,7 @@ function makeDue(s: S, id: unknown, at: number): void {
 
 test("set, list and cancel an agent's own wakes", async (t) => {
   const s = await setup(t);
-  const thread = (await s.tool("web-lead", "post", { kind: "ask", to: "dev", title: "Launch", body: "Go." })).thread;
+  const thread = (await s.tool("web-lead", "post", { to: "dev", title: "Launch", body: "Go." })).thread;
   const before = Date.now();
   const once = await schedule(s, "web-lead", { action: "set", in_minutes: 30, note: "Check the build.", thread });
   const at = new Date(before + 2 * HOUR).toISOString();
@@ -71,7 +71,7 @@ test("an agent sees and cancels only its own wakes; another team's wake id is mi
       other,
     );
   }
-  const theirs = await s.tool("notes-lead", "post", { kind: "ask", to: "owner", title: "Notes", body: "Hi." });
+  const theirs = await s.tool("notes-lead", "post", { to: "owner", title: "Notes", body: "Hi." });
   const crossed = await schedule(s, "web-lead", { action: "set", in_minutes: 5, note: "x", thread: theirs.thread });
   assert.equal(crossed.error?.code, "not_found");
   assert.equal(((await schedule(s, "web-lead", { action: "list" })).wakes as unknown[]).length, 1);
@@ -110,7 +110,7 @@ test("the schedule tool's limits: 20 wakes, hourly repeats, a time in the future
 test("a due wake becomes exactly one system ask in its thread, across a restart between ticks", async (t) => {
   const first = await studio();
   await first.twoTeams();
-  const thread = (await first.tool("web-lead", "post", { kind: "ask", to: "owner", title: "Ops", body: "?" })).thread;
+  const thread = (await first.tool("web-lead", "post", { to: "owner", title: "Ops", body: "?" })).thread;
   first.a12s.setPhase("web-lead", "Asleep");
   const wake = await schedule(first, "web-lead", { action: "set", in_minutes: 1, note: "Check the deploy.", thread });
   makeDue(first, wake.wake, Date.now() - 1000);
@@ -127,7 +127,7 @@ test("a due wake becomes exactly one system ask in its thread, across a restart 
   ]);
   assert.equal(s.db.prepare("SELECT count(*) AS n FROM wakes").get()?.n, 0);
   assert.notEqual(s.a12s.agents.get("web-lead")?.phase, "Asleep", "the ask woke the agent");
-  assert.match(pending(s.a12s, "web-lead")[0]?.body ?? "", /^thread th_\w+ "Ops"\nask m_\w+ from system\n---\n/);
+  assert.match(pending(s.a12s, "web-lead")[0]?.body ?? "", /^thread th_\w+ "Ops"\nmessage m_\w+ from system\n---\n/);
 });
 
 test("a repeating wake fires once and moves forward past now, keeping its time of day", async (t) => {

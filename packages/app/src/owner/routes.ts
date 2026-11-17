@@ -3,6 +3,7 @@ import type { Duplex } from "node:stream";
 import type {
   AgentSettings,
   InboxResponse,
+  SteeredMessage,
   ToolCall,
   TurnEventsResponse,
   TurnsResponse,
@@ -18,7 +19,7 @@ import { StudioError } from "../errors.ts";
 import { homePath, sendAttachment } from "../files.ts";
 import { doingNow, type Live } from "../live.ts";
 import type { Repo, Team, TeamRepo } from "../repo.ts";
-import { BODY_MAX, changeThread, ownerPost, ownerThread, systemNote, TITLE_MAX } from "../router.ts";
+import { BODY_MAX, changeThread, markSeen, ownerPost, ownerThread, systemMessage, TITLE_MAX } from "../router.ts";
 import type { Scheduler } from "../scheduler.ts";
 import { deriveState, messagesPage, messageView, type Stream } from "../state.ts";
 import type { createTeams } from "../teams.ts";
@@ -88,7 +89,7 @@ const schemas = {
     body: TEXT.max(BODY_MAX),
     to: SLUG.optional(),
   }),
-  post: z.strictObject({ body: TEXT.max(BODY_MAX), to: SLUG.optional(), ask: z.string().optional() }),
+  post: z.strictObject({ body: TEXT.max(BODY_MAX), to: SLUG.optional() }),
   patchThread: z.strictObject({
     status: z.enum(["open", "done"]).optional(),
     title: TEXT.max(TITLE_MAX).optional(),
@@ -119,8 +120,8 @@ const schemas = {
   approve: z.strictObject({ expiresAt: z.int().optional() }),
 };
 
-// Section 9.4: the requesting agent hears the decision with its next message.
-function decisionNote(request: AccessRequest, expiresAt: number | undefined): string {
+// Section 9.4: the decision is a message to the agent that asked, which wakes it.
+function decision(request: AccessRequest, expiresAt: number | undefined): string {
   const reach = `${request.methods.join(", ")} ${request.host} ${request.paths.join(", ")}`;
   if (request.status === "denied") return `Access denied: ${reach}.`;
   return `Access approved: ${reach}${expiresAt === undefined ? "" : `, until ${new Date(expiresAt).toISOString()}`}.`;
@@ -154,6 +155,20 @@ function toolLog(events: A12sEvent[]): ToolCall[] {
     }
   }
   return [...calls.values()];
+}
+
+// The messages steered into a Turn, from its turn.steered events, as the team's messages they were sent for.
+function steeredLog(team: TeamRepo, events: A12sEvent[]): SteeredMessage[] {
+  return events.flatMap((event) =>
+    event.type === "turn.steered"
+      ? team.messagesByA12sIds(event.messageIds).map((m) => ({
+          id: m.id,
+          from: m.fromId,
+          body: callText(m.body),
+          at: event.at,
+        }))
+      : [],
+  );
 }
 
 function parse<S extends z.ZodType>(schema: S, body: unknown): z.output<S> {
@@ -319,11 +334,11 @@ export function ownerRoutes(deps: OwnerDeps): Route[] {
       method: "GET",
       path: /^\/agents\/([^/]+)\/turns\/([^/]+)\/events$/,
       async run({ params }): Promise<TurnEventsResponse> {
-        const { client, id } = agentOf(params[0]);
+        const { scoped, client, id } = agentOf(params[0]);
         // a12s answers only for this agent computer's own Turns, so another agent's Turn id finds no events.
         const events: A12sEvent[] = [];
         for await (const event of client.turnEvents(id, params[1] ?? "")) events.push(event);
-        return { calls: toolLog(events) };
+        return { calls: toolLog(events), steered: steeredLog(scoped, events) };
       },
     },
     {
@@ -349,7 +364,6 @@ export function ownerRoutes(deps: OwnerDeps): Route[] {
         if (!message) throw new StudioError(404, "not_found", `No message ${params[1]} in this inbox.`);
         if (message.a12sMessageId === null) scoped.unqueue(id, message.id);
         else {
-          // Notes that rode along share the a12s Message, so they leave the inbox with it.
           await client.withdraw(id, message.a12sMessageId);
           scoped.markUndelivered([message.a12sMessageId]);
         }
@@ -414,6 +428,15 @@ export function ownerRoutes(deps: OwnerDeps): Route[] {
         const posted = ownerPost(threadTeam(id), id, parse(schemas.post, body));
         void dispatcher.run();
         return written(posted.message);
+      },
+    },
+    {
+      method: "POST",
+      path: /^\/threads\/([^/]+)\/seen$/,
+      run({ params }) {
+        const id = params[0] ?? "";
+        markSeen(threadTeam(id), id);
+        return written();
       },
     },
     {
@@ -514,7 +537,8 @@ export function ownerRoutes(deps: OwnerDeps): Route[] {
         const { expiresAt } = parse(schemas.approve, body);
         const { team: found, scoped } = team(params[0]);
         const request = await broker.forTeam(found.id).approve(params[1] ?? "", { expiresAt });
-        systemNote(scoped, request.agentId, decisionNote(request, expiresAt));
+        systemMessage(scoped, request.agentId, decision(request, expiresAt));
+        void dispatcher.run();
         return relayed();
       },
     },
@@ -524,7 +548,8 @@ export function ownerRoutes(deps: OwnerDeps): Route[] {
       async run({ params }) {
         const { team: found, scoped } = team(params[0]);
         const request = await broker.forTeam(found.id).deny(params[1] ?? "");
-        systemNote(scoped, request.agentId, decisionNote(request, undefined));
+        systemMessage(scoped, request.agentId, decision(request, undefined));
+        void dispatcher.run();
         return relayed();
       },
     },

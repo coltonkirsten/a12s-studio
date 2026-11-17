@@ -58,8 +58,12 @@ export async function step<T>(title: string, run: () => Promise<T>): Promise<T> 
 
 export const messages = (state: StudioState): MessageView[] => state.open?.messages ?? [];
 
-export const replyTo = (state: StudioState, ask: string, from: string) =>
-  messages(state).find((m) => m.kind === "reply" && m.ask === ask && m.from === from);
+// The first message from `from` to `to` (by default the owner) after the message `after`, in the open thread.
+export function answerFrom(state: StudioState, from: string, after: string, to = "owner"): MessageView | undefined {
+  const all = messages(state);
+  const start = all.findIndex((m) => m.id === after);
+  return start < 0 ? undefined : all.slice(start + 1).find((m) => m.from === from && m.to === to);
+}
 
 export async function createTeam(studio: Studio, name: string, template: string, purpose: string): Promise<string> {
   const { id } = await studio.api<WriteResult>("POST", "/teams", { name, purpose, accent: "#4f6bed", template });
@@ -67,14 +71,15 @@ export async function createTeam(studio: Studio, name: string, template: string,
   return id;
 }
 
-// Starts a thread with an ask to one of the team's agents, by default its lead; answers the thread and the ask's ids.
-export async function ownerAsk(studio: Studio, team: string, title: string, body: string, to?: string) {
+// Starts a thread with a message to one of the team's agents, by default its lead; answers the thread's and the
+// message's ids.
+export async function ownerMessage(studio: Studio, team: string, title: string, body: string, to?: string) {
   const { id: thread } = await studio.api<WriteResult>("POST", `/teams/${team}/threads`, { title, body, to });
   if (!thread) throw new Error(`the new thread in ${team} answered no id`);
   const { messages: first } = await studio.api<MessagesPage>("GET", `/threads/${thread}/messages`);
-  const ask = first.find((m) => m.kind === "ask" && m.from === "owner");
-  if (!ask) throw new Error(`thread ${thread} has no ask from the owner`);
-  return { thread, ask: ask.id };
+  const message = first.find((m) => m.from === "owner");
+  if (!message) throw new Error(`thread ${thread} has no message from the owner`);
+  return { thread, message: message.id };
 }
 
 export function connectStudio(app: HostProcess, broker: HostProcess, a12s: A12s, atEnd: AtEnd, home: string): Studio {

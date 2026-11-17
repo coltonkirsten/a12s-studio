@@ -148,6 +148,22 @@ test("a12s events become port events", () => {
   for (const [name, input, want] of cases) assert.deepEqual(toEvent(input), want, name);
 });
 
+test("turn.steered lists the Messages that joined the running Turn", () => {
+  const steered = {
+    ...envelope,
+    type: "turn.steered" as const,
+    data: {
+      requestId: "r1",
+      inbox: {
+        batch: "b2",
+        pendingAfter: 0,
+        messages: [{ id: "m_C", seq: 3, sender: "studio", via: "token:web", createdAt: envelope.ts, bytes: 3 }],
+      },
+    },
+  };
+  assert.deepEqual(toEvent(steered), { type: "turn.steered", agent: "web-lead", at, turn: "t1", messageIds: ["m_C"] });
+});
+
 test("a Turn's cost is each model's running total", () => {
   const cases: [unknown, Record<string, number>][] = [
     [null, {}],

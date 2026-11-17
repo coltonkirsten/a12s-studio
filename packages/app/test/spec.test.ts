@@ -53,6 +53,7 @@ test("the spec pins the harness, keeps the agent's own settings and adds nothing
     image: "slim",
     credentials: ["anthropic"],
     power: { sleepAfterIdle: "15m", compactBeforeSleep: { minTokens: 100000 } },
+    inbox: { duringTurn: "steer" },
     grants: { send: [] },
     uses: ["studio", { name: "broker", mcp: false }],
     egress: { allow: ["*"] },

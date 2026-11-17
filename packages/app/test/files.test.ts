@@ -19,9 +19,8 @@ before(async () => {
   await s.twoTeams();
   s.a12s.agents.get("web-dev")?.files.set("/home/agent/out/report.md", new TextEncoder().encode(REPORT));
   s.a12s.agents.get("web-dev")?.files.set("/home/agent/out/data/rows.csv", new TextEncoder().encode("a,b\n"));
-  thread = String((await s.tool("web-lead", "post", { kind: "ask", to: "dev", title: "Report", body: "Go." })).thread);
+  thread = String((await s.tool("web-lead", "post", { to: "dev", title: "Report", body: "Go." })).thread);
   const posted = await s.tool("web-dev", "post", {
-    kind: "note",
     thread,
     body: "The report.",
     file: "/home/agent/out/report.md",
@@ -86,16 +85,15 @@ test("post with a file: copied from the agent's home into the message's folder",
 });
 
 test("post with a file: the receiver's a12s Message names its address", async () => {
-  const asked = await s.tool("web-dev", "post", {
-    kind: "ask",
+  const posted = await s.tool("web-dev", "post", {
     to: "lead",
     thread,
     body: "Please check the rows.",
     file: "/home/agent/out/data/rows.csv",
   });
-  await until(() => pending(s.a12s, "web-lead").some((m) => m.metadata.message === asked.message));
-  const sent = pending(s.a12s, "web-lead").find((m) => m.metadata.message === asked.message);
-  assert.match(sent?.body ?? "", new RegExp(`^file: ${STUDIO_URL}/files/${asked.message}/rows\\.csv$`, "m"));
+  await until(() => pending(s.a12s, "web-lead").some((m) => m.metadata.message === posted.message));
+  const sent = pending(s.a12s, "web-lead").find((m) => m.metadata.message === posted.message);
+  assert.match(sent?.body ?? "", new RegExp(`^file: ${STUDIO_URL}/files/${posted.message}/rows\\.csv$`, "m"));
 });
 
 test("post with a file outside the home, a folder or a missing file is refused and writes nothing", async () => {
@@ -108,7 +106,7 @@ test("post with a file outside the home, a folder or a missing file is refused a
     ["/home/agent/out/missing.md", "not_found"],
   ];
   for (const [file, code] of cases) {
-    const answer = await s.tool("web-dev", "post", { kind: "note", thread, body: "x", file });
+    const answer = await s.tool("web-dev", "post", { thread, body: "x", file });
     assert.equal(answer.error?.code, code, file);
   }
   const after = (await s.tool("web-lead", "read", { thread })).messages as unknown[];

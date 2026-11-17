@@ -93,19 +93,60 @@ const migrations: string[] = [
   CREATE INDEX turns_spend ON turns (team_id, finished_at);
   CREATE INDEX turns_agent ON turns (agent_id, finished_at DESC);
   `,
+  // One kind of message, and the chain record. A thread still needs the owner where an ask to them had no reply.
+  // messages is rebuilt, not altered: kind has a CHECK and ask_id a reference, which DROP COLUMN cannot remove.
+  `
+  ALTER TABLE threads ADD COLUMN owner_seen_at INTEGER NOT NULL DEFAULT 0;
+  UPDATE threads SET owner_seen_at = coalesce(
+    (SELECT min(a.created_at) - 1 FROM messages a WHERE a.thread_id = threads.id AND a.to_id = 'owner'
+       AND a.kind = 'ask' AND NOT EXISTS (SELECT 1 FROM messages r WHERE r.ask_id = a.id AND r.kind = 'reply')),
+    CAST(unixepoch('subsec') * 1000 AS INTEGER));
+
+  CREATE TABLE messages_new (
+    id TEXT PRIMARY KEY,
+    team_id TEXT NOT NULL REFERENCES teams(id),
+    thread_id TEXT REFERENCES threads(id),
+    from_id TEXT NOT NULL,
+    to_id TEXT,
+    body TEXT NOT NULL,
+    file_name TEXT,
+    cause_id TEXT REFERENCES messages(id),
+    depth INTEGER NOT NULL DEFAULT 0,
+    delivery TEXT NOT NULL CHECK (delivery IN ('none','queued','sent','delivered')),
+    a12s_message_id TEXT,
+    turn_id TEXT,
+    steered INTEGER NOT NULL DEFAULT 0,
+    created_at INTEGER NOT NULL, delivered_at INTEGER
+  ) STRICT;
+  INSERT INTO messages_new (id, team_id, thread_id, from_id, to_id, body, file_name, cause_id, depth, delivery,
+      a12s_message_id, created_at, delivered_at)
+    SELECT id, team_id, thread_id, from_id, to_id, body, file_name, ask_id, ask_id IS NOT NULL, delivery,
+      a12s_message_id, created_at, delivered_at FROM messages;
+  DROP TABLE messages;
+  ALTER TABLE messages_new RENAME TO messages;
+  CREATE INDEX messages_thread ON messages (thread_id, created_at);
+  CREATE INDEX messages_queue ON messages (to_id, delivery, created_at);
+  CREATE INDEX messages_a12s ON messages (a12s_message_id);
+  CREATE INDEX messages_turn ON messages (turn_id);
+  `,
 ];
 
+// Migrations run with foreign keys off, as SQLite's procedure for rebuilding a table requires (dropping the old table
+// would otherwise delete through its references); each checks them before it commits.
 export function openDb(file: string): DatabaseSync {
   const db = new DatabaseSync(file);
-  db.exec("PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON; PRAGMA busy_timeout = 5000;");
+  db.exec("PRAGMA journal_mode = WAL; PRAGMA busy_timeout = 5000; PRAGMA foreign_keys = OFF;");
   const row = db.prepare("PRAGMA user_version").get();
   const applied = Number(row?.user_version ?? 0);
   migrations.slice(applied).forEach((sql, i) => {
     tx(db, () => {
       db.exec(sql);
+      const broken = db.prepare("PRAGMA foreign_key_check").get();
+      if (broken) throw new Error(`migration ${applied + i + 1} breaks a reference: ${JSON.stringify(broken)}`);
       db.exec(`PRAGMA user_version = ${applied + i + 1}`);
     });
   });
+  db.exec("PRAGMA foreign_keys = ON");
   return db;
 }
 

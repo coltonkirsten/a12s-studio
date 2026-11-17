@@ -1,27 +1,23 @@
 import assert from "node:assert/strict";
 import { after, before, test } from "node:test";
-import { ownerThread } from "../src/router.ts";
+import { markSeen, ownerThread } from "../src/router.ts";
 import { pending, type Studio, studio, type ToolAnswer } from "./studio.ts";
 
 let s: Studio;
 // Ids that exist on team notes; from team web they must behave exactly like ids that do not exist.
-let notes: { thread: string; ask: string; reply: string };
+let notes: { thread: string; message: string; answer: string };
 // A thread of team web older than those: a paging cursor that leaked across teams would return it.
 let early: string;
 
 before(async () => {
   s = await studio();
   await s.twoTeams();
-  early = String((await s.tool("web-lead", "post", { kind: "ask", to: "dev", title: "Early", body: "First." })).thread);
+  early = String((await s.tool("web-lead", "post", { to: "dev", title: "Early", body: "First." })).thread);
   await new Promise((resolve) => setTimeout(resolve, 5));
-  const asked = await s.tool("notes-lead", "post", {
-    kind: "ask",
-    to: "researcher",
-    title: "Sources",
-    body: "Find three.",
-  });
-  const replied = await s.tool("notes-researcher", "post", { kind: "reply", ask: asked.message, body: "Found them." });
-  notes = { thread: String(asked.thread), ask: String(asked.message), reply: String(replied.message) };
+  const asked = await s.tool("notes-lead", "post", { to: "researcher", title: "Sources", body: "Find three." });
+  const thread = String(asked.thread);
+  const answered = await s.tool("notes-researcher", "post", { to: "lead", thread, body: "Found them." });
+  notes = { thread, message: String(asked.message), answer: String(answered.message) };
 });
 after(() => s.close());
 
@@ -35,12 +31,11 @@ function sameRefusal(theirs: ToolAnswer, missing: ToolAnswer, theirId: string, m
 const MISSING_THREAD = "th_000000000000";
 const MISSING_MESSAGE = "m_000000000000";
 
-const cases: [string, (id: string) => [string, Record<string, unknown>], "thread" | "ask" | "reply"][] = [
-  ["post ask into a thread", (id) => ["post", { kind: "ask", to: "dev", thread: id, body: "x" }], "thread"],
-  ["post note into a thread", (id) => ["post", { kind: "note", thread: id, body: "x" }], "thread"],
-  ["post reply to an ask", (id) => ["post", { kind: "reply", ask: id, body: "x" }], "ask"],
-  ["post reply to a reply", (id) => ["post", { kind: "reply", ask: id, body: "x" }], "reply"],
+const cases: [string, (id: string) => [string, Record<string, unknown>], "thread" | "message"][] = [
+  ["post to a teammate in a thread", (id) => ["post", { to: "dev", thread: id, body: "x" }], "thread"],
+  ["post a record in a thread", (id) => ["post", { thread: id, body: "x" }], "thread"],
   ["read a thread", (id) => ["read", { thread: id }], "thread"],
+  ["read a thread before a message", (id) => ["read", { thread: id, before: id }], "thread"],
   ["update_thread", (id) => ["update_thread", { thread: id, status: "done" }], "thread"],
 ];
 
@@ -62,7 +57,7 @@ test("read: another team's id as a paging cursor reads like a missing one", asyn
   const board = (before: string) => s.tool("web-lead", "read", { before, status: "all" });
   assert.deepEqual(await board(notes.thread), await board(MISSING_THREAD));
   const thread = (before: string) => s.tool("web-lead", "read", { thread: early, before });
-  assert.deepEqual(await thread(notes.ask), await thread(MISSING_MESSAGE));
+  assert.deepEqual(await thread(notes.message), await thread(MISSING_MESSAGE));
 });
 
 test("a scoped repo finds and changes nothing of another team's", () => {
@@ -70,18 +65,19 @@ test("a scoped repo finds and changes nothing of another team's", () => {
   const theirs = s.app.repo.forTeam("notes");
   assert.equal(web.agent("notes-lead"), undefined);
   assert.equal(web.thread(notes.thread), undefined);
-  assert.equal(web.message(notes.ask), undefined);
+  assert.equal(web.message(notes.message), undefined);
   assert.deepEqual(web.threadMessages(notes.thread, 10), []);
-  assert.equal(web.hasReply(notes.ask), false);
   assert.deepEqual(web.queuedFor("notes-lead"), []);
+  assert.equal(web.lastDelivered("notes-researcher", "t_any"), undefined);
 
   const thread = theirs.thread(notes.thread);
-  const message = theirs.message(notes.ask);
+  const message = theirs.message(notes.message);
   web.updateThread(notes.thread, { status: "done", title: "Taken", ownerAgentId: "web-lead" }, Date.now());
-  web.markSent([notes.ask as `m_${string}`], "m_forged");
+  web.markSeen(notes.thread, Date.now());
+  web.markSent(notes.message as `m_${string}`, "m_forged");
   web.removeAgent("notes-lead", Date.now());
   assert.deepEqual(theirs.thread(notes.thread), thread);
-  assert.deepEqual(theirs.message(notes.ask), message);
+  assert.deepEqual(theirs.message(notes.message), message);
   assert.ok(theirs.agent("notes-lead"));
 });
 
@@ -95,12 +91,11 @@ test("post to another team's agent is refused and writes nothing", async () => {
   const before = count();
   const inbox = pending(s.a12s, "notes-researcher").length;
   for (const to of ["notes-lead", "researcher", "notes-researcher"]) {
-    const answer = await s.tool("web-lead", "post", { kind: "ask", to, title: "Across", body: "Hello, other team." });
+    const answer = await s.tool("web-lead", "post", { to, title: "Across", body: "Hello, other team." });
     assert.equal(answer.error?.code, "not_found", to);
   }
   const thread = (await s.tool("web-lead", "read", {})).threads as { id: string }[];
   const note = await s.tool("web-lead", "post", {
-    kind: "note",
     to: "researcher",
     thread: thread[0]?.id,
     body: "psst",
@@ -127,6 +122,20 @@ test("roster and the board show only the caller's team", async () => {
   const board = (await s.tool("web-dev", "read", { status: "all" })).threads as { id: string }[];
   assert.ok(board.length > 0);
   assert.ok(board.every((t) => t.id !== notes.thread));
+});
+
+test("Mark read through one team's repo cannot reach another team's thread", () => {
+  assert.throws(() => markSeen(s.app.repo.forTeam("web"), notes.thread), { code: "not_found" });
+});
+
+test("a cause from another team is never recorded", () => {
+  const web = s.app.repo.forTeam("web");
+  const id = web.insertMessage(
+    { threadId: null, fromId: "system", toId: "web-lead", body: "x", causeId: notes.message as `m_${string}` },
+    "none",
+    Date.now(),
+  );
+  assert.deepEqual([web.message(id)?.causeId, web.message(id)?.depth], [null, 0]);
 });
 
 test("the owner's scoped repo cannot start a thread for another team's agent", () => {

@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { teamOf } from "@a12s-studio/contract/names";
-import { studio } from "./studio.ts";
+import { studio, until } from "./studio.ts";
 
 // A small seeded generator, so a failure names a seed that reproduces it.
 function random(seed: number) {
@@ -21,11 +21,23 @@ const OTHER_SLUGS = ["researcher", "dev", "notes-lead", "web-dev", "nobody"];
 
 for (const seed of [1, 2, 3]) {
   test(`random tool calls from two teams keep every row and every read inside the caller's team (seed ${seed})`, async (t) => {
-    const s = await studio();
+    const s = await studio({ live: true });
     t.after(() => s.close());
     await s.twoTeams();
     const pick = random(seed);
     const owner = new Map<string, string>(); // thread or message id -> team
+    // Turns start and end at random, and every few calls the dispatcher delivers, so posts made from a Turn get a
+    // cause and messages are steered into running Turns.
+    const turns = async (agent: string) => {
+      await s.app.dispatcher.run();
+      if (s.a12s.agents.get(agent)?.current) {
+        s.a12s.finishTurn(agent);
+        await until(() => s.app.live.agent(agent)?.turn === null);
+      } else {
+        const turn = s.a12s.startTurn(agent);
+        await until(() => s.app.live.agent(agent)?.turn?.id === turn);
+      }
+    };
     // Own-team ids and names are picked more often, so most calls succeed and the rest probe the wall.
     const ids = (team: string) => {
       const own = [...owner].filter(([, t]) => t === team).map(([id]) => id);
@@ -35,14 +47,14 @@ for (const seed of [1, 2, 3]) {
 
     for (let i = 0; i < 300; i++) {
       const agent = pick(AGENTS);
+      if (i % 2 === 0) await turns(agent);
       const team = teamOf(agent);
       const id = pick(ids(team));
       const slugs = [...(OWN_SLUGS[team] ?? []), ...(OWN_SLUGS[team] ?? []), ...OTHER_SLUGS];
       const [name, args] = pick([
-        ["post", { kind: "ask", to: pick(slugs), title: `t${i}`, body: `b${i}` }],
-        ["post", { kind: "ask", to: pick(slugs), thread: id, body: `b${i}` }],
-        ["post", { kind: "reply", ask: id, body: `r${i}` }],
-        ["post", { kind: "note", thread: id, body: `n${i}`, ...(i % 2 ? { to: pick(slugs) } : {}) }],
+        ["post", { to: pick(slugs), title: `t${i}`, body: `b${i}` }],
+        ["post", { to: pick(slugs), thread: id, body: `b${i}` }],
+        ["post", { thread: id, body: `n${i}`, ...(i % 2 ? { to: pick(slugs) } : {}) }],
         ["read", {}],
         ["read", { status: "all", before: id }],
         ["read", { thread: id }],
@@ -58,12 +70,10 @@ for (const seed of [1, 2, 3]) {
       if (typeof answer.thread === "string") owner.set(answer.thread, team);
       const seen = [
         ...((answer.threads as { id: string }[] | undefined) ?? []).map((t) => t.id),
-        ...((answer.messages as { id: string; ask: string | null }[] | undefined) ?? []).flatMap((m) => [m.id, m.ask]),
+        ...((answer.messages as { id: string }[] | undefined) ?? []).map((m) => m.id),
         ...(answer.thread && typeof answer.thread === "object" ? [(answer.thread as { id: string }).id] : []),
       ];
-      for (const seenId of seen) {
-        if (seenId !== null) assert.equal(owner.get(seenId), team, `${agent} saw ${seenId} in ${name}`);
-      }
+      for (const seenId of seen) assert.equal(owner.get(seenId), team, `${agent} saw ${seenId} in ${name}`);
     }
     assert.ok((codes.get("ok") ?? 0) > 100 && owner.size > 10, `too few calls succeeded: ${[...codes]}`);
     await s.app.dispatcher.run();
@@ -71,10 +81,14 @@ for (const seed of [1, 2, 3]) {
     const rows = (sql: string) => s.db.prepare(sql).all();
     assert.deepEqual(
       rows(`SELECT m.id FROM messages m LEFT JOIN threads t ON t.id = m.thread_id
-            LEFT JOIN messages a ON a.id = m.ask_id
+            LEFT JOIN messages c ON c.id = m.cause_id
             WHERE (m.thread_id IS NOT NULL AND t.team_id IS NOT m.team_id)
-               OR (m.ask_id IS NOT NULL AND a.team_id IS NOT m.team_id)`),
+               OR (m.cause_id IS NOT NULL AND (c.team_id IS NOT m.team_id OR m.depth <> c.depth + 1))`),
       [],
+    );
+    assert.ok(
+      Number(rows("SELECT count(*) AS n FROM messages WHERE cause_id IS NOT NULL")[0]?.n) > 0,
+      "some posts should have had a cause",
     );
     for (const m of rows("SELECT id, team_id, from_id, to_id FROM messages")) {
       for (const who of [m.from_id, m.to_id]) {

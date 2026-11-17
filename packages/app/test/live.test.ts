@@ -25,7 +25,7 @@ const agentView = (s: S, id: string) =>
     .teams.flatMap((t) => t.agents)
     .find((a) => a.id === id);
 
-const systemAsks = (s: S) => s.db.prepare("SELECT count(*) AS n FROM messages WHERE from_id = 'system'").get()?.n;
+const fromSystem = (s: S) => s.db.prepare("SELECT count(*) AS n FROM messages WHERE from_id = 'system'").get()?.n;
 const failedPost = (agent: string, turn: string): A12sEvent => ({
   type: "tool.finished",
   agent,
@@ -51,9 +51,8 @@ test("doingNow: one plain line per tool", () => {
     ["WebSearch", { query: "static site generators" }, "Browsing static site generators"],
     ["Agent", {}, "Working with a sub-agent"],
     ["Task", {}, "Working with a sub-agent"],
-    [`${TOOL_PREFIX}post`, { kind: "ask", to: "dev" }, "Writing to dev"],
-    [`${TOOL_PREFIX}post`, { kind: "reply", ask: "m_1" }, "Writing a reply"],
-    [`${TOOL_PREFIX}post`, { kind: "note", thread: "th_1" }, "Writing to the thread"],
+    [`${TOOL_PREFIX}post`, { to: "dev", thread: "th_1" }, "Writing to dev"],
+    [`${TOOL_PREFIX}post`, { thread: "th_1" }, "Writing in the thread"],
     [`${TOOL_PREFIX}read`, {}, "Checking the board"],
     [`${TOOL_PREFIX}update_thread`, {}, "Checking the board"],
     [`${TOOL_PREFIX}roster`, {}, "Checking the roster"],
@@ -115,7 +114,7 @@ test("phases become presence, tools the line, text.delta a live event", async (t
   assert.equal(agentView(s, "web-lead")?.presence, "awake");
 });
 
-test("turn.finished writes the turns row and the implicit answer", async (t) => {
+test("turn.finished writes the turns row and the implicit answer, set off by the owner's message", async (t) => {
   const s = await setup(t);
   const posted = ownerThread(s.app.repo.forTeam("web"), { body: "What is 2 + 2?" });
   await s.app.dispatcher.run();
@@ -129,12 +128,12 @@ test("turn.finished writes the turns row and the implicit answer", async (t) => 
   assert.equal(row.thread_id, posted.thread);
   assert.equal(row.status, "completed");
   assert.deepEqual(JSON.parse(String(row.model_costs)), { "claude-haiku-4-5": 0.01 });
-  const notes = s.app.repo.forTeam("web").threadMessages(posted.thread, 10);
+  const messages = s.app.repo.forTeam("web").threadMessages(posted.thread, 10);
   assert.deepEqual(
-    notes.map((m) => [m.kind, m.fromId, m.toId, m.body, m.implicit]),
+    messages.map((m) => [m.fromId, m.toId, m.body, m.causeId, m.depth]),
     [
-      ["ask", "owner", "web-lead", "What is 2 + 2?", false],
-      ["note", "web-lead", "owner", "It is 4.", true],
+      ["owner", "web-lead", "What is 2 + 2?", null, 0],
+      ["web-lead", "owner", "It is 4.", posted.message, 1],
     ],
   );
 });
@@ -149,7 +148,7 @@ test("a lost feed shows a12s down, and the next feed resyncs what was missed", a
   await until(() => !s.app.live.up());
   assert.equal(deriveState(s.app, null).a12s, "down");
 
-  // While the feed is down the lead takes the ask and finishes; no event reaches the app.
+  // While the feed is down the lead takes the message and finishes; no event reaches the app.
   s.a12s.startTurn("web-lead");
   s.a12s.finishTurn("web-lead");
   s.a12s.setPhase("web-dev", "Asleep");
@@ -161,7 +160,7 @@ test("a lost feed shows a12s down, and the next feed resyncs what was missed", a
   assert.equal(s.db.prepare("SELECT count(*) AS n FROM turns").get()?.n, 1);
   assert.equal(agentView(s, "web-dev")?.presence, "asleep");
   // No Studio call failed in that Turn, so nobody is asked to post again.
-  assert.equal(systemAsks(s), 0);
+  assert.equal(fromSystem(s), 0);
 });
 
 test("presence is unknown until a12s has reported a phase", async (t) => {
@@ -171,7 +170,7 @@ test("presence is unknown until a12s has reported a phase", async (t) => {
   await until(() => agentView(s, "web-lead")?.presence === "awake");
 });
 
-test("a Turn that lost a Studio call while the app was stopped gets one ask to post again", async (t) => {
+test("a Turn that lost a Studio call while the app was stopped gets one message to post again", async (t) => {
   const a12s = fakeA12s();
   const first = await studio({ a12s, live: true });
   await first.twoTeams();
@@ -190,11 +189,11 @@ test("a Turn that lost a Studio call while the app was stopped gets one ask to p
   await until(() => pending(a12s, "web-lead").length === 1);
   assert.match(
     pending(a12s, "web-lead")[0]?.body ?? "",
-    /^ask m_\w+ from system\n---\na12s Studio could not be reached/,
+    /^message m_\w+ from system\n---\na12s Studio could not be reached/,
   );
-  assert.equal(systemAsks(s), 1);
+  assert.equal(fromSystem(s), 1);
 
-  // The Turn that takes the ask is followed whole: a failed call in it is a refusal the lead has read.
+  // The Turn that takes the message is followed whole: a failed call in it is a refusal the lead has read.
   const next = a12s.startTurn("web-lead");
   a12s.emit(failedPost("web-lead", next));
   a12s.finishTurn("web-lead");
@@ -203,7 +202,7 @@ test("a Turn that lost a Studio call while the app was stopped gets one ask to p
   a12s.setPhase("web-dev", "Asleep");
   a12s.emit({ type: "gap" });
   await until(() => agentView(s, "web-dev")?.presence === "asleep");
-  assert.equal(systemAsks(s), 1);
+  assert.equal(fromSystem(s), 1);
 });
 
 test("a Turn already running when the app starts is stored whole, from a12s", async (t) => {
@@ -226,8 +225,8 @@ test("a Turn already running when the app starts is stored whole, from a12s", as
   await until(() => s.app.repo.turnTeam(turn) === "web");
   assert.equal(s.db.prepare("SELECT thread_id FROM turns WHERE id = ?").get(turn)?.thread_id, posted.thread);
   const last = s.app.repo.forTeam("web").threadMessages(posted.thread, 10).at(-1);
-  assert.deepEqual([last?.fromId, last?.body, last?.implicit], ["web-lead", "It is 4.", true]);
-  assert.equal(systemAsks(s), 0);
+  assert.deepEqual([last?.fromId, last?.toId, last?.body], ["web-lead", "owner", "It is 4."]);
+  assert.equal(fromSystem(s), 0);
 });
 
 test("a gap resyncs", async (t) => {

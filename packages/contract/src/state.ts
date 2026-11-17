@@ -15,7 +15,6 @@ export type Presence = "unknown" | "asleep" | "awake" | "working" | "waiting" | 
 export type WaitingFor = "cap" | "budget" | "paused" | "disk";
 export type ThreadStatus = "open" | "done";
 export type BoardStatus = "open" | "needs_you" | "done";
-export type MessageKind = "ask" | "reply" | "note";
 
 export type AgentView = {
   id: string;
@@ -49,7 +48,8 @@ export type ThreadSummary = {
   status: BoardStatus;
   updatedAt: number;
   preview: string;
-  asksForYou: number;
+  // Messages to the owner since the owner last wrote in the thread or marked it read.
+  forYou: number;
 };
 
 export type TeamView = {
@@ -64,17 +64,27 @@ export type TeamView = {
   threads: ThreadSummary[];
 };
 
+// How a message reached its agent: the Turn that received it (null where the record does not name one), whether it
+// joined that Turn while it ran or started it, and the Turn's cost once it has finished.
+export type Delivered = { turn: string | null; steered: boolean; at: number; costUsd: number | null };
+
 export type MessageView = {
   id: MessageId;
-  kind: MessageKind;
   from: string;
   to: string | null;
-  ask: MessageId | null;
   body: string;
   file: string | null;
-  implicit: boolean;
   at: number;
+  // The chain record: the message that set this one off, and how many messages deep that chain is.
+  cause: MessageId | null;
+  depth: number;
+  // null: it has no agent to reach, or has not reached it yet.
+  delivered: Delivered | null;
 };
+
+// A thread's totals: its deepest chain, and the finished Turns that belong to it (a Turn belongs to the thread of
+// the first message it took) with their summed cost.
+export type Chain = { depth: number; turns: number; costUsd: number };
 
 export type ThreadView = {
   id: ThreadId;
@@ -84,10 +94,12 @@ export type ThreadView = {
   status: BoardStatus;
   messages: MessageView[];
   hasMore: boolean;
+  chain: Chain;
 };
 
 export type NeedsYouItem =
-  | { kind: "question"; teamId: string; threadId: ThreadId; message: MessageView }
+  // A thread that needs you: its newest message to you, and how many more wait.
+  | { kind: "message"; teamId: string; threadId: ThreadId; message: MessageView; more: number }
   | { kind: "access_request"; teamId: string; request: AccessRequest; hostHasCredential: boolean }
   | { kind: "agent_error"; teamId: string; agentId: string; error: string }
   | { kind: "failed_turn"; teamId: string; agentId: string; turnId: string; error: string | null; at: number }

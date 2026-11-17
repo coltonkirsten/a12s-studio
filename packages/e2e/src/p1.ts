@@ -1,8 +1,8 @@
 // The Phase 1 exit (build-spec section 12): two teams answer the owner, a lead hands work to a second agent and
-// ends its Turn after the ask, and a restart of the app mid-conversation loses nothing.
+// ends its Turn after its message, and a restart of the app mid-conversation loses nothing.
 import assert from "node:assert/strict";
 import type { StudioState } from "@a12s-studio/contract/state";
-import { ANSWER_MS, createTeam, messages, ownerAsk, replyTo, type Studio, step } from "./studio.ts";
+import { ANSWER_MS, answerFrom, createTeam, messages, ownerMessage, type Studio, step } from "./studio.ts";
 
 const presence = (state: StudioState, agent: string) =>
   state.teams.flatMap((t) => t.agents).find((a) => a.id === agent)?.presence;
@@ -12,7 +12,7 @@ function snapshot(state: StudioState) {
   return {
     teams: state.teams.map((t) => ({ id: t.id, name: t.name, agents: t.agents.map((a) => a.id) })),
     threads: state.teams.flatMap((t) => t.threads.map((th) => `${th.id} ${th.title}`)),
-    messages: messages(state).map(({ id, kind, from, to, ask, body }) => ({ id, kind, from, to, ask, body })),
+    messages: messages(state).map(({ id, from, to, body }) => ({ id, from, to, body })),
   };
 }
 
@@ -28,28 +28,29 @@ export async function p1(studio: Studio): Promise<void> {
     const asked = await Promise.all(
       [web, notes].map(async (team) => ({
         team,
-        ...(await ownerAsk(studio, team, "Say hello", "Reply to this ask with the single word: hello")),
+        ...(await ownerMessage(studio, team, "Say hello", "Answer me with the single word: hello")),
       })),
     );
-    for (const { team, thread, ask } of asked) {
+    for (const { team, thread, message } of asked) {
       await studio.open(thread);
-      await studio.until(`a reply from ${team}-lead`, (s) => replyTo(s, ask, `${team}-lead`) !== undefined, ANSWER_MS);
+      const lead = `${team}-lead`;
+      await studio.until(`an answer from ${lead}`, (s) => answerFrom(s, lead, message) !== undefined, ANSWER_MS);
     }
   });
 
   const lead = `${web}-lead`;
   const dev = `${web}-dev`;
   const { work, devAsk } = await step("The lead asks dev in the thread", async () => {
-    const work = await ownerAsk(
+    const work = await ownerMessage(
       studio,
       web,
       "Heading element",
-      "Ask dev, with an ask in this thread, which HTML element marks the main heading of a page. " +
-        "Do not answer it yourself. When dev has replied, reply to this ask with dev's answer.",
+      "Ask dev, with a message in this thread, which HTML element marks the main heading of a page. " +
+        "Do not answer it yourself. When dev has answered, send me dev's answer.",
     );
     await studio.open(work.thread);
-    const fromLead = (s: StudioState) => messages(s).find((m) => m.kind === "ask" && m.from === lead && m.to === dev);
-    const state = await studio.until(`an ask from ${lead} to ${dev}`, (s) => fromLead(s) !== undefined, ANSWER_MS);
+    const fromLead = (s: StudioState) => answerFrom(s, lead, work.message, dev);
+    const state = await studio.until(`a message from ${lead} to ${dev}`, (s) => fromLead(s) !== undefined, ANSWER_MS);
     return { work, devAsk: fromLead(state)?.id ?? "" };
   });
 
@@ -57,7 +58,7 @@ export async function p1(studio: Studio): Promise<void> {
     studio.until(
       `${lead} no longer working`,
       (s) => {
-        if (replyTo(s, devAsk, dev)) throw new Error(`${lead} was still working when dev's reply arrived`);
+        if (answerFrom(s, dev, devAsk, lead)) throw new Error(`${lead} was still working when dev's answer arrived`);
         return presence(s, lead) !== "working";
       },
       ANSWER_MS,
@@ -77,8 +78,8 @@ export async function p1(studio: Studio): Promise<void> {
     assert.deepEqual(after.messages.slice(0, before.messages.length), before.messages, "messages changed");
   });
 
-  await step("Still live: dev's answer comes back and the lead replies to the owner", async () => {
-    await studio.until(`a reply from ${dev}`, (s) => replyTo(s, devAsk, dev) !== undefined, ANSWER_MS);
-    await studio.until(`a reply from ${lead} to the owner`, (s) => replyTo(s, work.ask, lead) !== undefined, ANSWER_MS);
+  await step("Still live: dev's answer comes back and the lead answers the owner", async () => {
+    await studio.until(`an answer from ${dev}`, (s) => answerFrom(s, dev, devAsk, lead) !== undefined, ANSWER_MS);
+    await studio.until(`an answer from ${lead}`, (s) => answerFrom(s, lead, devAsk) !== undefined, ANSWER_MS);
   });
 }

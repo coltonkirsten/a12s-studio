@@ -122,7 +122,18 @@ const sessionOf = (session: string | null): string | null => session || null;
 // a12s marks an event outside any Turn with an empty one.
 const turnOf = (turn: string): { turn?: string } => (turn ? { turn } : {});
 
-export function toEvent(ev: SdkEvent): A12sEvent | null {
+// The event a12s 0.12 journals when the harness takes a Batch into the running Turn, and the mark its stored Turns
+// put on such a Message. The SDK this package depends on does not have them.
+type SteeredEvent = {
+  type: "turn.steered";
+  agentComputer?: string;
+  ts: string;
+  turn: string;
+  data: { inbox?: { messages: { id: string }[] } };
+};
+type StoredMessage = TurnsResponse["turns"][number]["messages"][number] & { steered?: boolean };
+
+export function toEvent(ev: SdkEvent | SteeredEvent): A12sEvent | null {
   const agent = ev.agentComputer ?? "";
   const at = ms(ev.ts);
   switch (ev.type) {
@@ -131,6 +142,7 @@ export function toEvent(ev: SdkEvent): A12sEvent | null {
       return { type: ev.type, agent, at, phase: phaseOf(ev.data.phase), ...(error ? { error } : {}) };
     }
     case "turn.started":
+    case "turn.steered":
       return { type: ev.type, agent, at, turn: ev.turn, messageIds: (ev.data.inbox?.messages ?? []).map((m) => m.id) };
     case "text.delta":
       return { type: ev.type, agent, at, turn: ev.turn, text: ev.data.text };
@@ -184,7 +196,7 @@ function toTurn(t: TurnsResponse["turns"][number]): TurnRecord {
     status: t.status,
     ...(t.error ? { error: t.error } : {}),
     text: t.text,
-    messageIds: t.messages.map((m) => m.id),
+    messages: t.messages.map((m: StoredMessage) => ({ id: m.id, steered: m.steered === true })),
     tools: t.tools.map((call) => ({ name: call.name, isError: call.isError === true })),
     ...(t.startedAt ? { startedAt: ms(t.startedAt) } : {}),
     finishedAt: ms(t.finishedAt),
@@ -342,6 +354,7 @@ export function realA12s(owner: Controller): A12s {
           metadata: m.metadata ?? {},
           ...(m.replaceKey ? { replaceKey: m.replaceKey } : {}),
           createdAt: ms(m.createdAt),
+          ...(m.turn ? { turn: m.turn } : {}),
         }));
       },
       async withdraw(name, messageId) {

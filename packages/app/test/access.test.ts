@@ -70,12 +70,30 @@ test("exit path: request, credential, approve, deny, expiry and another team, ag
 
   assert.equal((await broker.call(items, { caller: "notes-lead" })).status, 403);
 
-  // Both decisions ride along with the next message the agent receives.
-  await s.owner("POST", "/api/teams/web/threads", { body: "Carry on.", to: "dev" });
-  await until(() => pending(s.a12s, "web-dev").length > 0);
-  const delivered = pending(s.a12s, "web-dev")[0]?.body ?? "";
-  assert.match(delivered, /- system: Access approved: GET api\.example\.com \/v1\/items, until 2030-01-08T/);
-  assert.match(delivered, /- system: Access denied: GET api\.example\.com \/v1\/orders\./);
+  // Each decision is a message of its own to the agent that asked.
+  await until(() => pending(s.a12s, "web-dev").length === 2);
+  assert.deepEqual(
+    pending(s.a12s, "web-dev").map((m) => m.body.split("\n")[2]),
+    [
+      "Access approved: GET api.example.com /v1/items, until 2030-01-08T00:00:00.000Z.",
+      "Access denied: GET api.example.com /v1/orders.",
+    ],
+  );
+});
+
+test("an approval and a denial each wake the agent that asked", async (t) => {
+  const { broker, s } = await withBroker(t);
+  await broker.credential("web");
+  for (const [agent, decision] of [
+    ["web-dev", "approve"],
+    ["web-lead", "deny"],
+  ] as const) {
+    s.a12s.setPhase(agent, "Asleep");
+    const asked = await s.tool(agent, "access", wish);
+    assert.equal((await s.owner("POST", `/api/teams/web/requests/${asked.request}/${decision}`, {})).status, 200);
+    await until(() => s.a12s.agents.get(agent)?.phase !== "Asleep");
+    assert.match(pending(s.a12s, agent)[0]?.body ?? "", /from system\n---\nAccess (approved|denied): /);
+  }
 });
 
 test("access list: live grants and pending requests of the caller's team only", async (t) => {

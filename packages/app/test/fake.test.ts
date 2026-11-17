@@ -59,3 +59,44 @@ test("a sleeping agent keeps its Turn history but refuses its Turn events and fi
   await assert.rejects(web.readFile("web-lead", "/home/agent"), { code: "asleep" });
   await assert.rejects(Array.fromAsync(web.turnEvents("web-lead", turn)), { code: "asleep" });
 });
+
+test("a Message for a working agent computer that steers joins its Turn; without the policy it waits", async () => {
+  const a12s = fakeA12s();
+  await a12s.putAgent("web-lead", { inbox: { duringTurn: "steer" } } as AgentSpec, "create");
+  await a12s.putAgent("web-dev", spec, "create");
+  const web = a12s.forTeam(await a12s.createToken("web"));
+  const feed = a12s.events();
+  await feed.ready();
+  const turns = ["web-lead", "web-dev"].map((name) => a12s.startTurn(name));
+  const steered = await web.send("web-lead", { body: "also this", metadata: {}, replaceKey: "m_a" });
+  const waiting = await web.send("web-dev", { body: "also this", metadata: {}, replaceKey: "m_b" });
+  await new Promise((resolve) => setImmediate(resolve));
+  feed.close();
+
+  const seen: A12sEvent[] = [];
+  for await (const event of feed) seen.push(event);
+  const steers = seen.flatMap((e) => (e.type === "turn.steered" ? [[e.agent, e.turn, e.messageIds]] : []));
+  assert.deepEqual(steers, [["web-lead", turns[0], [steered.id]]]);
+  assert.equal(a12s.agents.get("web-dev")?.inbox.find((m) => m.id === waiting.id)?.state, "pending");
+  a12s.finishTurn("web-lead");
+  const [record] = await web.turns("web-lead", 1);
+  assert.deepEqual(record?.messages, [{ id: steered.id, steered: true }]);
+});
+
+test("missTurn: the Batch misses the running Turn and starts the next one", async () => {
+  const a12s = fakeA12s();
+  await a12s.putAgent("web-lead", { inbox: { duringTurn: "steer" } } as AgentSpec, "create");
+  const web = a12s.forTeam(await a12s.createToken("web"));
+  const first = a12s.startTurn("web-lead");
+  a12s.missTurn("web-lead");
+  const sent = await web.send("web-lead", { body: "late", metadata: {}, replaceKey: "m_a" });
+  await new Promise((resolve) => setImmediate(resolve));
+  const lead = a12s.agents.get("web-lead");
+  assert.equal(lead?.turns[0]?.id, first);
+  assert.deepEqual(lead?.turns[0]?.messages, []);
+  assert.deepEqual(lead?.current?.messages, [{ id: sent.id, steered: false }]);
+  assert.equal(
+    lead?.journal.some((e) => e.type === "turn.steered"),
+    false,
+  );
+});

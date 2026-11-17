@@ -1,10 +1,12 @@
 import type { BoardStatus, MessageView, TeamView, ThreadView } from "@a12s-studio/contract/state";
 import { useLayoutEffect, useRef, useState } from "react";
 import { api, useAction } from "../api.ts";
+import { deliveryLine } from "../logic/chain.ts";
 import { type Entry, fold } from "../logic/fold.ts";
 import { displayName } from "../logic/names.ts";
-import { href } from "../logic/route.ts";
+import { href, inspectHref, type Route } from "../logic/route.ts";
 import { shortTime } from "../logic/time.ts";
+import { ChainView } from "./chain.tsx";
 import { Composer } from "./composer.tsx";
 import { Icon } from "./icons.tsx";
 import { Markdown } from "./markdown.tsx";
@@ -17,10 +19,11 @@ export function StatusChip({ status }: { status: BoardStatus }) {
   return <span className={`chip chip-${status}`}>{STATUS[status]}</span>;
 }
 
-type Props = { team: TeamView; thread: ThreadView; questions: MessageView[] };
+type Props = { team: TeamView; thread: ThreadView; route: Route };
 
-export function Conversation({ team, thread, questions }: Props) {
+export function Conversation({ team, thread, route }: Props) {
   const action = useAction();
+  const [chain, setChain] = useState(false);
   const scroller = useRef<HTMLDivElement>(null);
   const pinned = useRef(true);
   const working = team.agents.filter(
@@ -49,6 +52,9 @@ export function Conversation({ team, thread, questions }: Props) {
             <StatusChip status={thread.status} /> {displayName(thread.ownerId)} owns this thread
           </span>
         </div>
+        <button type="button" className="button quiet" aria-pressed={chain} onClick={() => setChain(!chain)}>
+          Chain
+        </button>
         <button
           type="button"
           className={action.pending ? "button quiet pending" : "button quiet"}
@@ -58,56 +64,70 @@ export function Conversation({ team, thread, questions }: Props) {
         </button>
         <Problem problem={action.problem} />
       </header>
-      <div
-        className="messages"
-        ref={scroller}
-        onScroll={(event) => {
-          const el = event.currentTarget;
-          pinned.current = el.scrollHeight - el.scrollTop - el.clientHeight < 40;
-        }}
-      >
-        {fold(thread.messages).map((entry) => (
-          <EntryView
-            key={entry.kind === "talk" ? entry.id : entry.message.id}
-            entry={entry}
-            now={now}
-            questions={questions}
-          />
-        ))}
-        {working.map((agent) => {
-          // The agent's line and words are about its Turn; when that runs in another thread, only its work here shows.
-          const turn = agent.turn?.threadId === thread.id ? agent.turn : null;
-          return (
-            <div key={agent.id} className="msg theirs live">
-              <header>
-                <Dot presence={agent.presence} />
-                <b>{displayName(agent.id)}</b>
-                {(turn || !agent.turn) && <span className="doing">{doing(agent)}</span>}
-              </header>
-              <WorkList items={agent.work.filter((w) => w.threadId === thread.id)} />
-              {turn?.text && (
-                <div className="body streaming">
-                  <Markdown text={turn.text} streaming />
-                </div>
-              )}
-            </div>
-          );
-        })}
-      </div>
+      {chain ? (
+        <ChainView thread={thread} />
+      ) : (
+        <div
+          className="messages"
+          ref={scroller}
+          onScroll={(event) => {
+            const el = event.currentTarget;
+            pinned.current = el.scrollHeight - el.scrollTop - el.clientHeight < 40;
+          }}
+        >
+          {fold(thread.messages).map((entry) => (
+            <EntryView
+              key={entry.kind === "talk" ? entry.id : entry.message.id}
+              entry={entry}
+              now={now}
+              route={route}
+            />
+          ))}
+          {working.map((agent) => {
+            // The agent's line and words are about its Turn; when that runs in another thread, only its work here shows.
+            const turn = agent.turn?.threadId === thread.id ? agent.turn : null;
+            return (
+              <div key={agent.id} className="msg theirs live">
+                <header>
+                  <Dot presence={agent.presence} />
+                  <b>{displayName(agent.id)}</b>
+                  {(turn || !agent.turn) && <span className="doing">{doing(agent)}</span>}
+                </header>
+                <WorkList items={agent.work.filter((w) => w.threadId === thread.id)} />
+                {turn?.text && (
+                  <div className="body streaming">
+                    <Markdown text={turn.text} streaming />
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
       <Composer
         key={thread.id}
         team={team}
         placeholder="Reply in this thread"
-        question={questions[0] ?? null}
-        send={(body, to, ask) => api.post(thread.id, ask ? { body, ask: ask.id } : { body, to })}
+        send={(body, to) => api.post(thread.id, { body, to })}
       />
     </div>
   );
 }
 
-function EntryView({ entry, now, questions }: { entry: Entry; now: number; questions: MessageView[] }) {
+// Under a message to an agent: how it reached that agent. It opens the agent's inspector.
+function Delivery({ message, route }: { message: MessageView; route: Route }) {
+  const line = deliveryLine(message);
+  if (line === null || message.to === null) return null;
+  return (
+    <a className="delivery" href={inspectHref(message.to, route)}>
+      {line}
+    </a>
+  );
+}
+
+function EntryView({ entry, now, route }: { entry: Entry; now: number; route: Route }) {
   const [open, setOpen] = useState(false);
-  if (entry.kind === "message") return <Message message={entry.message} now={now} questions={questions} />;
+  if (entry.kind === "message") return <Message message={entry.message} now={now} route={route} />;
   return (
     <div className={open ? "talk open" : "talk"}>
       <button type="button" className="talk-line" aria-expanded={open} onClick={() => setOpen(!open)}>
@@ -126,6 +146,7 @@ function EntryView({ entry, now, questions }: { entry: Entry; now: number; quest
               <div className="body">
                 <Markdown text={m.body} />
               </div>
+              <Delivery message={m} route={route} />
             </div>
           ))}
         </div>
@@ -134,7 +155,7 @@ function EntryView({ entry, now, questions }: { entry: Entry; now: number; quest
   );
 }
 
-function Message({ message, now, questions }: { message: MessageView; now: number; questions: MessageView[] }) {
+function Message({ message, now, route }: { message: MessageView; now: number; route: Route }) {
   if (message.from === "system") return <p className="msg system">{message.body}</p>;
   const file = message.file && (
     <a className="file" href={api.attachment(message.id, message.file)} download>
@@ -150,21 +171,22 @@ function Message({ message, now, questions }: { message: MessageView; now: numbe
           {file}
         </div>
         <time>{shortTime(message.at, now)}</time>
+        <Delivery message={message} route={route} />
       </div>
     );
   }
-  const asksYou = questions.some((q) => q.id === message.id);
   return (
-    <div className={asksYou ? "msg theirs asks-you" : "msg theirs"}>
+    <div className="msg theirs">
       <header>
         <b>{displayName(message.from)}</b>
-        {asksYou && <span className="asks">asks you</span>}
+        {message.to !== null && <span>to {displayName(message.to)}</span>}
         <time>{shortTime(message.at, now)}</time>
       </header>
       <div className="body">
         <Markdown text={message.body} />
         {file}
       </div>
+      <Delivery message={message} route={route} />
     </div>
   );
 }

@@ -8,7 +8,7 @@ import type { BrokerClient } from "./broker-client.ts";
 import type { Dispatcher } from "./dispatcher.ts";
 import { StudioError } from "./errors.ts";
 import type { Agent, Repo, Team, TeamRepo } from "./repo.ts";
-import { systemAsk } from "./router.ts";
+import { systemMessage } from "./router.ts";
 
 // Names that mean something else wherever an agent can be addressed.
 const RESERVED_AGENT_SLUGS = ["owner", "system"];
@@ -104,7 +104,8 @@ export function createTeams(deps: {
         for (const { name, phase, background } of await client.status()) {
           if (phase === "Asleep") continue;
           // Queued now, held by the pause, delivered first thing on resume.
-          if (phase === "Busy" || background.length > 0) systemAsk(repo.forTeam(team.id), name, PAUSED_WHILE_WORKING);
+          if (phase === "Busy" || background.length > 0)
+            systemMessage(repo.forTeam(team.id), name, PAUSED_WHILE_WORKING);
           await client.sleep(name);
         }
       } catch (error) {
@@ -229,6 +230,20 @@ export function createTeams(deps: {
       const next = { ...agent, ...patch };
       await a12s.putAgent(id, agentSpec(team, next), "replace");
       scoped.updateAgent(next);
+    },
+
+    // Section 6: every agent's spec, put again at each start so that a spec a release of Studio has changed reaches
+    // every agent. a12s compares a spec's hash with what runs and leaves an unchanged agent computer alone.
+    async putSpecs(): Promise<void> {
+      for (const team of repo.teams()) {
+        for (const agent of repo.forTeam(team.id).agents()) {
+          try {
+            await a12s.putAgent(agent.id, agentSpec(team, agent), "replace");
+          } catch (error) {
+            console.error(`teams: putting the spec of ${agent.id} again failed:`, error);
+          }
+        }
+      }
     },
 
     pause: (teamId: string | null) => setPaused(teamId, true),

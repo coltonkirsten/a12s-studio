@@ -1,6 +1,6 @@
 import type { DatabaseSync, SQLInputValue } from "node:sqlite";
 import { agentId, type MessageId, newId, type ThreadId, type WakeId } from "@a12s-studio/contract/names";
-import type { MessageKind, Settings, ThreadStatus } from "@a12s-studio/contract/state";
+import type { Settings, ThreadStatus } from "@a12s-studio/contract/state";
 import type { Tokens, TurnStatus } from "./a12s/port.ts";
 import type { SessionCosts } from "./cost.ts";
 import { tx } from "./db.ts";
@@ -36,6 +36,7 @@ export type Thread = {
   title: string;
   ownerAgentId: string;
   status: ThreadStatus;
+  ownerSeenAt: number;
   createdAt: number;
   updatedAt: number;
 };
@@ -46,21 +47,25 @@ export type Message = {
   id: MessageId;
   teamId: string;
   threadId: ThreadId | null;
-  kind: MessageKind;
   fromId: string;
   toId: string | null;
-  askId: MessageId | null;
   body: string;
   fileName: string | null;
-  implicit: boolean;
+  causeId: MessageId | null;
+  depth: number;
   delivery: Delivery;
   a12sMessageId: string | null;
+  turnId: string | null;
+  steered: boolean;
   createdAt: number;
   deliveredAt: number | null;
+  // The cost of the Turn that received it, once that Turn is stored.
+  turnCostUsd: number | null;
 };
 
-export type NewMessage = Pick<Message, "threadId" | "kind" | "fromId" | "toId" | "askId" | "body"> & {
-  implicit?: boolean;
+// The depth follows from the cause, so it is never given.
+export type NewMessage = Pick<Message, "threadId" | "fromId" | "toId" | "body"> & {
+  causeId?: MessageId | null;
   fileName?: string;
 };
 
@@ -88,8 +93,8 @@ export type Wake = {
 };
 
 export type BoardRow = Thread & {
-  asksForOwner: number;
-  asksForViewer: number;
+  // Messages to the owner since owner_seen_at.
+  forOwner: number;
   last: { fromId: string; body: string } | null;
 };
 
@@ -107,16 +112,16 @@ const TEAM = `id, name, purpose, accent, lead_agent_id AS leadAgentId, daily_bud
   paused, a12s_token AS a12sToken, created_at AS createdAt`;
 const AGENT = `id, team_id AS teamId, slug, role, model, sleep_after_idle AS sleepAfterIdle,
   compact_min_tokens AS compactMinTokens, cpu, memory, created_at AS createdAt`;
-const THREAD = `id, team_id AS teamId, title, owner_agent_id AS ownerAgentId, status, created_at AS createdAt,
-  updated_at AS updatedAt`;
+const THREAD = `id, team_id AS teamId, title, owner_agent_id AS ownerAgentId, status, owner_seen_at AS ownerSeenAt,
+  created_at AS createdAt, updated_at AS updatedAt`;
 const WAKE = `id, team_id AS teamId, agent_id AS agentId, thread_id AS threadId, note, due_at AS dueAt,
   repeat_seconds AS repeatSeconds`;
-const MESSAGE = `id, team_id AS teamId, thread_id AS threadId, kind, from_id AS fromId, to_id AS toId,
-  ask_id AS askId, body, file_name AS fileName, implicit, delivery, a12s_message_id AS a12sMessageId,
-  created_at AS createdAt, delivered_at AS deliveredAt`;
-// An ask with no reply yet; `a` is the ask's alias.
-const UNANSWERED =
-  "a.kind = 'ask' AND NOT EXISTS (SELECT 1 FROM messages r WHERE r.ask_id = a.id AND r.kind = 'reply')";
+const MESSAGE = `id, team_id AS teamId, thread_id AS threadId, from_id AS fromId, to_id AS toId, body,
+  file_name AS fileName, cause_id AS causeId, depth, delivery, a12s_message_id AS a12sMessageId, turn_id AS turnId,
+  steered, created_at AS createdAt, delivered_at AS deliveredAt,
+  (SELECT cost_usd FROM turns WHERE turns.team_id = messages.team_id AND turns.id = messages.turn_id) AS turnCostUsd`;
+// A message to the owner that the owner has not seen; `m` is the message's alias and `t` its thread's.
+const FOR_OWNER = "m.to_id = 'owner' AND m.created_at > t.owner_seen_at";
 
 type Row = Record<string, unknown>;
 
@@ -128,7 +133,7 @@ function localMidnight(now: number): number {
 }
 
 const toTeam = (row: Row): Team => ({ ...(row as Team), paused: row.paused === 1 });
-const toMessage = (row: Row): Message => ({ ...(row as Message), implicit: row.implicit === 1 });
+const toMessage = (row: Row): Message => ({ ...(row as Message), steered: row.steered === 1 });
 
 export type Repo = ReturnType<typeof createRepo>;
 export type TeamRepo = ReturnType<Repo["forTeam"]>;
@@ -264,19 +269,20 @@ export function createRepo(db: DatabaseSync, onWrite: () => void = () => {}) {
           id,
         );
       },
+      // When the owner wrote in the thread or marked it read; messages to the owner after it need them.
+      markSeen(id: string, at: number): void {
+        run("UPDATE threads SET owner_seen_at = ? WHERE team_id = ? AND id = ?", at, teamId, id);
+      },
       // `before` is a thread id: the page continues after it in board order.
-      board(q: { status: ThreadStatus | "all"; limit: number; before?: string; viewer: string }): BoardRow[] {
-        const asks = (to: string) =>
-          `(SELECT count(*) FROM messages a WHERE a.thread_id = t.id AND a.to_id = ${to} AND ${UNANSWERED})`;
+      board(q: { status: ThreadStatus | "all"; limit: number; before?: string }): BoardRow[] {
         const last = (column: string) =>
           `(SELECT ${column} FROM messages m WHERE m.thread_id = t.id ORDER BY m.created_at DESC, m.rowid DESC LIMIT 1)`;
         const rows = all(
-          `SELECT ${THREAD}, ${asks("'owner'")} AS asksForOwner, ${asks("?")} AS asksForViewer,
+          `SELECT ${THREAD}, (SELECT count(*) FROM messages m WHERE m.thread_id = t.id AND ${FOR_OWNER}) AS forOwner,
              ${last("from_id")} AS lastFrom, ${last("body")} AS lastBody
            FROM threads t WHERE team_id = ? AND (? = 'all' OR status = ?)
              AND (? IS NULL OR (updated_at, id) < (SELECT updated_at, id FROM threads WHERE team_id = ? AND id = ?))
            ORDER BY updated_at DESC, id DESC LIMIT ?`,
-          q.viewer,
           teamId,
           q.status,
           q.status,
@@ -309,26 +315,25 @@ export function createRepo(db: DatabaseSync, onWrite: () => void = () => {}) {
           limit,
         ).map(({ seq: _, ...row }) => toMessage(row));
       },
-      hasReply(askId: string): boolean {
-        return (
-          one("SELECT 1 FROM messages WHERE team_id = ? AND ask_id = ? AND kind = 'reply'", teamId, askId) !== undefined
-        );
-      },
+      // A cause is one row of the same team, so its depth is read here and a chain cannot cross teams or loop.
       insertMessage(m: NewMessage, delivery: Delivery, at: number): MessageId {
         const id = newId("m_");
+        const cause = m.causeId ?? null;
         run(
-          `INSERT INTO messages (id, team_id, thread_id, kind, from_id, to_id, ask_id, body, file_name, implicit,
-             delivery, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          `INSERT INTO messages (id, team_id, thread_id, from_id, to_id, body, file_name, cause_id, depth, delivery,
+             created_at) VALUES (?, ?, ?, ?, ?, ?, ?, (SELECT id FROM messages WHERE team_id = ? AND id = ?),
+             coalesce((SELECT depth + 1 FROM messages WHERE team_id = ? AND id = ?), 0), ?, ?)`,
           id,
           teamId,
           m.threadId,
-          m.kind,
           m.fromId,
           m.toId,
-          m.askId,
           m.body,
           m.fileName ?? null,
-          m.implicit ? 1 : 0,
+          teamId,
+          cause,
+          teamId,
+          cause,
           delivery,
           at,
         );
@@ -346,6 +351,17 @@ export function createRepo(db: DatabaseSync, onWrite: () => void = () => {}) {
           ) !== undefined
         );
       },
+      // What set off a post the agent makes from this Turn: the message most recently delivered to it in the Turn.
+      lastDelivered(agentId: string, turnId: string): MessageId | undefined {
+        const row = one(
+          `SELECT id FROM messages WHERE team_id = ? AND to_id = ? AND turn_id = ?
+           ORDER BY delivered_at DESC, created_at DESC, rowid DESC LIMIT 1`,
+          teamId,
+          agentId,
+          turnId,
+        );
+        return row && (String(row.id) as MessageId);
+      },
       messagesByA12sIds(ids: string[]): Message[] {
         return all(
           `SELECT ${MESSAGE} FROM messages WHERE team_id = ? AND a12s_message_id IN (SELECT value FROM json_each(?))
@@ -355,14 +371,25 @@ export function createRepo(db: DatabaseSync, onWrite: () => void = () => {}) {
         ).map(toMessage);
       },
 
-      markDelivered(a12sIds: string[], at: number): void {
-        run(
-          `UPDATE messages SET delivery = 'delivered', delivered_at = ? WHERE team_id = ? AND delivery = 'sent'
-             AND a12s_message_id IN (SELECT value FROM json_each(?))`,
+      // The Turn that received them. A Turn's own record is the truth for its Messages, so it may correct how an
+      // earlier report said they arrived. Answers the rows it changed.
+      markDelivered(a12sIds: string[], turnId: string, steered: boolean, at: number): Message[] {
+        const rows = all(
+          `UPDATE messages SET delivery = 'delivered', turn_id = ?, steered = ?,
+             delivered_at = CASE WHEN delivery = 'sent' THEN ? ELSE delivered_at END
+           WHERE team_id = ? AND a12s_message_id IN (SELECT value FROM json_each(?))
+             AND (delivery = 'sent' OR (delivery = 'delivered' AND turn_id = ? AND steered <> ?))
+           RETURNING ${MESSAGE}`,
+          turnId,
+          steered ? 1 : 0,
           at,
           teamId,
           JSON.stringify(a12sIds),
+          turnId,
+          steered ? 1 : 0,
         );
+        if (rows.length > 0) onWrite();
+        return rows.map(toMessage);
       },
       // A Message a12s dropped without delivering it (withdrawn, discarded, expired) will never arrive.
       markUndelivered(a12sIds: string[]): void {
@@ -400,22 +427,40 @@ export function createRepo(db: DatabaseSync, onWrite: () => void = () => {}) {
           teamId,
         ).map((r) => String(r.id));
       },
-      // Per agent: messages it has not received yet, and whether an ask or reply is among them.
-      undelivered(): Map<string, { count: number; dispatchable: boolean }> {
+      // Per agent: messages it has not received yet, and whether some of them are still queued in the app.
+      undelivered(): Map<string, { count: number; inApp: boolean }> {
         const rows = all(
-          `SELECT to_id AS id, count(*) AS n, max(delivery = 'queued' AND kind IN ('ask', 'reply')) AS d
+          `SELECT to_id AS id, count(*) AS n, max(delivery = 'queued') AS q
            FROM messages WHERE team_id = ? AND delivery IN ('queued', 'sent') GROUP BY to_id`,
           teamId,
         );
-        return new Map(rows.map((r) => [String(r.id), { count: Number(r.n), dispatchable: r.d === 1 }]));
+        return new Map(rows.map((r) => [String(r.id), { count: Number(r.n), inApp: r.q === 1 }]));
       },
-      // Asks to the owner with no reply, oldest first.
-      ownerQuestions(): Message[] {
+      // Each open thread that needs the owner (section 5.4), oldest first: its newest message to them, and how many
+      // more wait.
+      forOwner(): { message: Message; more: number }[] {
         return all(
-          `SELECT ${MESSAGE}
-           FROM messages a WHERE a.team_id = ? AND a.to_id = 'owner' AND ${UNANSWERED} ORDER BY a.created_at, a.rowid`,
+          `SELECT ${MESSAGE}, (SELECT count(*) - 1 FROM messages m JOIN threads t ON t.id = m.thread_id
+             WHERE m.thread_id = messages.thread_id AND ${FOR_OWNER}) AS more
+           FROM messages WHERE team_id = ? AND rowid IN (SELECT (SELECT m.rowid FROM messages m
+             WHERE m.thread_id = t.id AND ${FOR_OWNER} ORDER BY m.created_at DESC, m.rowid DESC LIMIT 1)
+             FROM threads t WHERE t.team_id = ? AND t.status = 'open')
+           ORDER BY created_at, rowid`,
           teamId,
-        ).map(toMessage);
+          teamId,
+        ).map(({ more, ...row }) => ({ message: toMessage(row), more: Number(more) }));
+      },
+      // A thread's totals for the chain view (section 5.9).
+      chain(threadId: string): { depth: number; turns: number; costUsd: number } {
+        const row = one(
+          `SELECT (SELECT coalesce(max(depth), 0) FROM messages WHERE team_id = ? AND thread_id = ?) AS depth,
+             count(*) AS turns, coalesce(sum(cost_usd), 0) AS costUsd FROM turns WHERE team_id = ? AND thread_id = ?`,
+          teamId,
+          threadId,
+          teamId,
+          threadId,
+        );
+        return { depth: Number(row?.depth ?? 0), turns: Number(row?.turns ?? 0), costUsd: Number(row?.costUsd ?? 0) };
       },
 
       turnStored(id: string): boolean {
@@ -510,11 +555,11 @@ export function createRepo(db: DatabaseSync, onWrite: () => void = () => {}) {
         else run("UPDATE wakes SET due_at = ? WHERE team_id = ? AND id = ?", next, teamId, id);
       },
 
-      // Agents with a queued ask or reply, with what orders them: an owner message first, then the oldest.
+      // Agents with a queued message, with what orders them: an owner message first, then the oldest.
       dispatchable(): Map<string, { fromOwner: boolean; oldest: number }> {
         const rows = all(
           `SELECT to_id AS agentId, max(from_id = 'owner') AS fromOwner, min(created_at) AS oldest FROM messages
-           WHERE team_id = ? AND delivery = 'queued' AND kind IN ('ask', 'reply') GROUP BY to_id`,
+           WHERE team_id = ? AND delivery = 'queued' GROUP BY to_id`,
           teamId,
         );
         return new Map(
@@ -529,15 +574,13 @@ export function createRepo(db: DatabaseSync, onWrite: () => void = () => {}) {
           agentId,
         ).map(toMessage);
       },
-      markSent(ids: MessageId[], a12sMessageId: string): void {
-        for (const id of ids) {
-          run(
-            "UPDATE messages SET delivery = 'sent', a12s_message_id = ? WHERE team_id = ? AND id = ?",
-            a12sMessageId,
-            teamId,
-            id,
-          );
-        }
+      markSent(id: MessageId, a12sMessageId: string): void {
+        run(
+          "UPDATE messages SET delivery = 'sent', a12s_message_id = ? WHERE team_id = ? AND id = ?",
+          a12sMessageId,
+          teamId,
+          id,
+        );
       },
     };
   }

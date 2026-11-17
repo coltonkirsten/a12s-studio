@@ -36,7 +36,7 @@ export type PowerBody = { state: "awake" | "asleep" };
 
 export type NewThreadBody = { title?: string; body: string; to?: string };
 
-export type PostMessageBody = { body: string; to?: string; ask?: MessageId };
+export type PostMessageBody = { body: string; to?: string };
 
 export type PatchThreadBody = { status?: ThreadStatus; title?: string; owner?: string };
 
@@ -67,11 +67,12 @@ export type ToolCall = {
   startedAt: number;
   finishedAt: number | null;
 };
-export type TurnEventsResponse = { calls: ToolCall[] };
+// A message that joined the Turn while it ran, at the moment the harness took it in.
+export type SteeredMessage = { id: MessageId; from: string; body: string; at: number };
+export type TurnEventsResponse = { calls: ToolCall[]; steered: SteeredMessage[] };
 
 // A message the agent has not received yet: queued in Studio (sentAs null), or in its a12s inbox as the a12s Message
-// sentAs and not yet taken by a Turn. Messages sent as one a12s Message (an ask and the notes riding on it) are
-// removed together.
+// sentAs and not yet taken by a Turn.
 export type InboxItem = MessageView & { thread: ThreadId | null; sentAs: string | null };
 export type InboxResponse = { messages: InboxItem[] };
 
