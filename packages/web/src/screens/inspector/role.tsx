@@ -2,8 +2,8 @@ import type { AgentView } from "@a12s-studio/contract/state";
 import { useState } from "react";
 import { api, useRead } from "../../api.ts";
 import { HOME } from "../../logic/files.ts";
+import { Editor } from "../../parts/editor.tsx";
 import { Versions } from "../../parts/versions.tsx";
-import { Editor } from "./editor.tsx";
 import { Refusal } from "./refusal.tsx";
 
 const NOTES = `${HOME}/memory/notes.md`;

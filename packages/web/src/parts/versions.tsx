@@ -4,7 +4,7 @@ import { Rev, useAction, useRead } from "../api.ts";
 import { changes, type DiffRow, diff } from "../logic/diff.ts";
 import { displayName } from "../logic/names.ts";
 import { shortTime } from "../logic/time.ts";
-import { Editor } from "../screens/inspector/editor.tsx";
+import { Editor } from "./editor.tsx";
 import { Problem } from "./problem.tsx";
 
 type Props = {
