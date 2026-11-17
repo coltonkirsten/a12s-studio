@@ -7,7 +7,7 @@ import type {
   WriteResult,
 } from "@a12s-studio/contract/api";
 import { OWNER_PORT } from "@a12s-studio/contract/names";
-import type { MessageView, StudioState } from "@a12s-studio/contract/state";
+import type { AgentView, MessageView, StudioState } from "@a12s-studio/contract/state";
 
 const BASE = `http://127.0.0.1:${OWNER_PORT}/api`;
 const RECONNECT_MS = 250;
@@ -67,8 +67,8 @@ export async function step<T>(title: string, run: () => Promise<T>): Promise<T> 
 
 export const messages = (state: StudioState): MessageView[] => state.open?.messages ?? [];
 
-export const presence = (state: StudioState, agent: string) =>
-  state.teams.flatMap((t) => t.agents).find((a) => a.id === agent)?.presence;
+export const agentOf = (state: StudioState, id: string): AgentView | undefined =>
+  state.teams.flatMap((t) => t.agents).find((a) => a.id === id);
 
 // The first message from `from` to `to` (by default the owner) after the message `after`, in the open thread.
 export function answerFrom(state: StudioState, from: string, after: string, to = "owner"): MessageView | undefined {

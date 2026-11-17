@@ -5,11 +5,11 @@ import { TOOL_PREFIX } from "@a12s-studio/contract/names";
 import type { StudioState } from "@a12s-studio/contract/state";
 import {
   ANSWER_MS,
+  agentOf,
   answerFrom,
   createTeam,
   messages,
   ownerMessage,
-  presence,
   type Studio,
   step,
   toolCalls,
@@ -36,12 +36,7 @@ export async function p1(studio: Studio): Promise<void> {
     const asked = await Promise.all(
       [web, notes].map(async (team) => ({
         team,
-        ...(await ownerMessage(
-          studio,
-          team,
-          "Say hello",
-          "Answer me with a post to owner holding the single word: hello",
-        )),
+        ...(await ownerMessage(studio, team, "Say hello", "Answer me with the single word: hello")),
       })),
     );
     for (const { team, thread, message } of asked) {
@@ -58,9 +53,8 @@ export async function p1(studio: Studio): Promise<void> {
       studio,
       web,
       "Heading element",
-      "Ask dev, with a post to dev in this thread, which HTML element marks the main heading of a page, and ask " +
-        "dev to answer with a post to lead. Do not answer it yourself. When dev has answered, send me dev's " +
-        "answer with a post to owner.",
+      "Ask dev, with a message in this thread, which HTML element marks the main heading of a page. " +
+        "Do not answer it yourself. When dev has answered, send me dev's answer.",
     );
     await studio.open(work.thread);
     const fromLead = (s: StudioState) => answerFrom(s, lead, work.message, dev);
@@ -93,7 +87,11 @@ export async function p1(studio: Studio): Promise<void> {
 
   // Under steering the lead may still be working when dev's answer arrives; what it must not do is wait for it.
   await step("Between its message to dev and dev's answer, the lead's Turns call no read", async () => {
-    const state = await studio.until(`${lead} no longer working`, (s) => presence(s, lead) !== "working", ANSWER_MS);
+    const state = await studio.until(
+      `${lead} no longer working`,
+      (s) => agentOf(s, lead)?.presence !== "working",
+      ANSWER_MS,
+    );
     const sent = messages(state).find((m) => m.id === devAsk);
     const first = messages(state).find((m) => m.id === work.message)?.delivered?.turn ?? null;
     if (!sent || !devAnswer) throw new Error("the thread lost the lead's message to dev or dev's answer");

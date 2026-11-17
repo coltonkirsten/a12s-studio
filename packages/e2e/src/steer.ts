@@ -4,14 +4,14 @@
 import assert from "node:assert/strict";
 import type { MessagesPage, RulesPage, ToolCall, WriteResult } from "@a12s-studio/contract/api";
 import { TOOL_PREFIX } from "@a12s-studio/contract/names";
-import type { AgentView, Delivered, MessageView, StudioState } from "@a12s-studio/contract/state";
+import type { Delivered, MessageView, StudioState } from "@a12s-studio/contract/state";
 import {
   ANSWER_MS,
+  agentOf,
   answerFrom,
   createTeam,
   messages,
   ownerMessage,
-  presence,
   type Studio,
   step,
   toolCalls,
@@ -35,9 +35,9 @@ const TASK = [
   "Build a small record codec together with dev. A record has a name (text), an id (integer) and tags (a list of",
   "text). You write encode.py in your home: it reads one record as JSON on stdin and prints one encoded line. Dev",
   "writes decode.py in theirs: it reads one encoded line and prints the record as JSON. Neither of you can see the",
-  "other's files. Agree the wire format with dev in this thread, with posts to dev. Then exchange three test",
-  "records each, as pairs of record and encoded line, and each of you runs the other's three against your own",
-  "program. When all six pass, send me the format in one post to owner and set this thread to done.",
+  "other's files. Agree the wire format with dev in this thread. Then exchange three test records each, as pairs",
+  "of record and encoded line, and each of you runs the other's three against your own program. When all six",
+  "pass, send me the format in one message and set this thread to done.",
 ].join(" ");
 
 type Row = {
@@ -53,8 +53,6 @@ type Row = {
   failure: string | null;
 };
 
-const agentOf = (state: StudioState, id: string): AgentView | undefined =>
-  state.teams.flatMap((t) => t.agents).find((a) => a.id === id);
 const threadStatus = (state: StudioState, team: string, thread: string) =>
   state.teams.find((t) => t.id === team)?.threads.find((t) => t.id === thread)?.status;
 const pause = (studio: Studio, team: string) => studio.api("PATCH", `/teams/${team}`, { paused: true });
@@ -88,7 +86,7 @@ export function idleRun(exchanged: MessageView[], start: number, calls: Map<stri
 async function pairRun(studio: Studio, n: number): Promise<Row> {
   const { team, lead, dev } = await pairTeam(studio, `Pair ${n}`);
   const pair = new Set([lead, dev]);
-  const between = (all: MessageView[]) => all.filter((m) => pair.has(m.from) && pair.has(m.to ?? ""));
+  const between = (all: MessageView[]) => all.filter((m) => pair.has(m.from) && pair.has(m.to));
   const started = Date.now();
   const { thread, message } = await ownerMessage(studio, team, "Record codec", TASK);
   await studio.open(thread);
@@ -105,7 +103,7 @@ async function pairRun(studio: Studio, n: number): Promise<Row> {
     );
     // The Turn that set the thread to done finishes before the numbers are read.
     await studio
-      .until("neither agent working", (s) => [...pair].every((a) => presence(s, a) !== "working"), ANSWER_MS)
+      .until("neither agent working", (s) => [...pair].every((a) => agentOf(s, a)?.presence !== "working"), ANSWER_MS)
       .catch(() => {});
   } catch (error) {
     failure = error instanceof Error ? error.message : String(error);
@@ -272,18 +270,17 @@ export async function steer(studio: Studio): Promise<void> {
       team,
       "Team rules",
       `Use the rules tool with action set and layer team to set the team rules to: ${marker()}. ` +
-        "Then answer me with a post to owner holding what the tool answered.",
+        "Then tell me what the tool answered.",
       DEV,
     );
     await studio.open(asked.thread);
     const state = await studio.until(
       `${dev} done with the request`,
-      (s) => answerFrom(s, dev, asked.message) !== undefined && presence(s, dev) !== "working",
+      (s) => answerFrom(s, dev, asked.message) !== undefined && agentOf(s, dev)?.presence !== "working",
       ANSWER_MS,
     );
-    const first = messages(state).find((m) => m.id === asked.message)?.delivered?.turn ?? null;
     const sent = messages(state).find((m) => m.id === asked.message);
-    const calls = await toolCalls(studio, dev, first, sent?.at ?? 0, Date.now());
+    const calls = await toolCalls(studio, dev, sent?.delivered?.turn ?? null, sent?.at ?? 0, Date.now());
     const sets = calls.filter((c) => c.name === `${TOOL_PREFIX}rules` && /"set"/.test(c.input));
     assert.ok(sets.length > 0, `${dev} made no rules set call`);
     assert.ok(
