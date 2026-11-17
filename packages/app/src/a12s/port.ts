@@ -135,6 +135,8 @@ export type TurnRecord = {
   error?: string;
   text: string;
   messageIds: string[];
+  // Every tool call of the Turn, a sub-agent's included.
+  tools: { name: string; isError: boolean }[];
   startedAt?: number;
   finishedAt: number;
   modelCostsUsd: ModelCosts;

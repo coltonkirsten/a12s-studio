@@ -4,14 +4,22 @@ import type { LiveText, Presence } from "@a12s-studio/contract/state";
 import { type A12s, A12sError, type A12sEvent, type EventFeed, type Phase, type TurnRecord } from "./a12s/port.ts";
 import type { Dispatcher } from "./dispatcher.ts";
 import type { Repo, TeamRepo } from "./repo.ts";
-import { onTurnFinished } from "./router.ts";
+import { onTurnFinished, systemAsk } from "./router.ts";
 
 // What an agent is doing, known only from a12s events; never stored.
 export type AgentLive = {
   phase?: Phase;
   error?: string;
   line: string | null;
-  turn: { id: string; threadId: ThreadId | null; startedAt: number; text: string; messageIds: string[] } | null;
+  // whole: every event of the Turn so far was seen, so its text and Messages are complete.
+  turn: {
+    id: string;
+    threadId: ThreadId | null;
+    startedAt: number;
+    text: string;
+    messageIds: string[];
+    whole: boolean;
+  } | null;
   tools: Set<string>;
 };
 
@@ -19,6 +27,11 @@ export type Live = ReturnType<typeof createLive>;
 
 const RETRY_MS = 1000;
 const RESYNC_TURNS = 20;
+const FETCH_TRIES = 5;
+const FETCH_WAIT_MS = 200;
+const POST_AGAIN =
+  "a12s Studio could not be reached during part of your last Turn, and a Studio tool call in it failed. " +
+  "What you posted then was not received. Use read to see what did arrive, and post again what is missing.";
 const STUDIO_LINES: Record<string, string> = {
   read: "Checking the board",
   update_thread: "Checking the board",
@@ -27,11 +40,18 @@ const STUDIO_LINES: Record<string, string> = {
   schedule: "Checking its schedule",
 };
 
+// No phase: a12s has not reported one, as before the first resync or while a12s is down at start.
 export function presenceOf(phase: Phase | undefined): Presence {
+  if (phase === undefined) return "unknown";
   if (phase === "Asleep") return "asleep";
   if (phase === "Busy") return "working";
-  if (phase === "Error" || phase === undefined) return "error";
+  if (phase === "Error") return "error";
   return "awake";
+}
+
+// Section 5.6: a Studio tool call fails for an agent only when the app refuses it or cannot be reached.
+function lostCalls(turn: TurnRecord): boolean {
+  return turn.tools.some((call) => call.isError && call.name.startsWith(TOOL_PREFIX));
 }
 
 // The "doing now" line for a tool call that is not a sub-agent's.
@@ -111,9 +131,10 @@ export function createLive(deps: {
     return scoped.agent(agent) ? scoped : null;
   }
 
-  // One path for every finished Turn, whether its event was seen or it was found by a resync. Section 5.5 first:
-  // it skips a thread the agent already posted in, so running it again after a crash adds nothing.
-  function recordTurn(scoped: TeamRepo, t: TurnRecord): void {
+  // One path for every finished Turn, whether its events were seen or it was read from a12s. Section 5.5 first:
+  // it skips a thread the agent already posted in, so running it again after a crash adds nothing. `postAgain`
+  // (section 5.6) is written with the turns row, so it is asked once.
+  function recordTurn(scoped: TeamRepo, t: Omit<TurnRecord, "tools">, postAgain: boolean): void {
     if (scoped.turnStored(t.id)) return;
     const startedAt = t.startedAt ?? t.finishedAt;
     onTurnFinished(scoped, { agentId: t.agent, status: t.status, text: t.text, startedAt, messageIds: t.messageIds });
@@ -132,6 +153,7 @@ export function createLive(deps: {
         tokens: t.tokens,
         modelCostsUsd: t.modelCostsUsd,
       });
+      if (postAgain) systemAsk(scoped, t.agent, POST_AGAIN);
     });
   }
 
@@ -150,7 +172,7 @@ export function createLive(deps: {
       case "turn.started": {
         scoped.markDelivered(ev.messageIds, ev.at);
         const threadId = scoped.messagesByA12sIds(ev.messageIds)[0]?.threadId ?? null;
-        rec.turn = { id: ev.turn, threadId, startedAt: ev.at, text: "", messageIds: ev.messageIds };
+        rec.turn = { id: ev.turn, threadId, startedAt: ev.at, text: "", messageIds: ev.messageIds, whole: true };
         rec.line = "Thinking";
         rec.tools.clear();
         changed();
@@ -159,7 +181,7 @@ export function createLive(deps: {
       case "text.delta": {
         // A Turn already running when the app started: its start was missed, so it has no thread.
         if (rec.turn?.id !== ev.turn)
-          rec.turn = { id: ev.turn, threadId: null, startedAt: ev.at, text: "", messageIds: [] };
+          rec.turn = { id: ev.turn, threadId: null, startedAt: ev.at, text: "", messageIds: [], whole: false };
         rec.turn.text += ev.text;
         deps.text({ agent: ev.agent, turn: ev.turn, text: ev.text });
         if (rec.tools.size === 0 && rec.line !== "Writing") {
@@ -178,23 +200,27 @@ export function createLive(deps: {
         if (!ev.parent) rec.tools.delete(ev.id);
         return;
       case "turn.finished": {
-        const seen = rec.turn?.id === ev.turn ? rec.turn : null;
-        const turn: TurnRecord | undefined = seen
-          ? {
-              id: ev.turn,
-              agent: ev.agent,
-              session: ev.session,
-              status: ev.status,
-              ...(ev.error ? { error: ev.error } : {}),
-              text: seen.text,
-              messageIds: seen.messageIds,
-              startedAt: seen.startedAt,
-              finishedAt: ev.at,
-              modelCostsUsd: ev.modelCostsUsd,
-              ...(ev.tokens ? { tokens: ev.tokens } : {}),
-            }
-          : await fetchTurn(scoped, ev.agent, ev.turn);
-        if (turn) recordTurn(scoped, turn);
+        const seen = rec.turn?.id === ev.turn && rec.turn.whole ? rec.turn : null;
+        if (seen) {
+          const turn = {
+            id: ev.turn,
+            agent: ev.agent,
+            session: ev.session,
+            status: ev.status,
+            ...(ev.error ? { error: ev.error } : {}),
+            text: seen.text,
+            messageIds: seen.messageIds,
+            startedAt: seen.startedAt,
+            finishedAt: ev.at,
+            modelCostsUsd: ev.modelCostsUsd,
+            ...(ev.tokens ? { tokens: ev.tokens } : {}),
+          };
+          // The app answered every Studio call of a Turn it followed whole, so a failed one was a refusal.
+          recordTurn(scoped, turn, false);
+        } else {
+          const turn = await fetchTurn(scoped, ev.agent, ev.turn);
+          if (turn) recordTurn(scoped, turn, lostCalls(turn));
+        }
         rec.turn = null;
         rec.line = null;
         rec.tools.clear();
@@ -205,17 +231,24 @@ export function createLive(deps: {
     }
   }
 
-  // A Turn whose start this app did not see: a12s has its text and the Messages it delivered.
+  // A Turn this app did not follow whole: a12s has its text, the Messages it delivered and its tool calls. a12s
+  // sends turn.finished just before it stores the Turn, so the first read can come too early.
   async function fetchTurn(scoped: TeamRepo, agent: string, turn: string): Promise<TurnRecord | undefined> {
     const token = scoped.team()?.a12sToken;
     if (!token) return undefined;
-    const found = (await a12s.forTeam(token).turns(agent, RESYNC_TURNS)).find((t) => t.id === turn);
-    if (!found) console.error(`live: Turn ${turn} of ${agent} is not in its history yet; the next resync stores it.`);
-    return found;
+    for (let attempt = 1; ; attempt++) {
+      const found = (await a12s.forTeam(token).turns(agent, RESYNC_TURNS)).find((t) => t.id === turn);
+      if (found) return found;
+      if (attempt === FETCH_TRIES) break;
+      await new Promise((resolve) => setTimeout(resolve, FETCH_WAIT_MS));
+    }
+    console.error(`live: Turn ${turn} of ${agent} is not in its history; the next resync stores it.`);
+    return undefined;
   }
 
   // Everything an event could have told us, asked for directly: after a gap, and on every new feed (app start).
   async function resync(): Promise<void> {
+    for (const rec of agents.values()) if (rec.turn) rec.turn.whole = false;
     for (const team of repo.teams()) {
       const scoped = repo.forTeam(team.id);
       const client = a12s.forTeam(team.a12sToken);
@@ -225,7 +258,9 @@ export function createLive(deps: {
           if (current.has(s.name)) setPhase(record(s.name), s.phase, s.error);
         }
         for (const agent of current) {
-          for (const turn of (await client.turns(agent, RESYNC_TURNS)).reverse()) recordTurn(scoped, turn);
+          for (const turn of (await client.turns(agent, RESYNC_TURNS)).reverse()) {
+            recordTurn(scoped, turn, lostCalls(turn));
+          }
         }
         for (const agent of scoped.agentsWithSent()) {
           const inbox = await client.inbox(agent);

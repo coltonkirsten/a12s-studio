@@ -80,7 +80,7 @@ export function deriveState(repo: Repo, live: Live, thread: string | null): Omit
         const rec = live.agent(agent.id);
         const queue = waiting.get(agent.id);
         let presence = presenceOf(rec?.phase);
-        if (presence === "error" && rec?.phase === "Error") {
+        if (rec?.phase === "Error") {
           needsYou.push({ kind: "agent_error", teamId: team.id, agentId: agent.id, error: rec.error ?? "" });
         }
         const held =

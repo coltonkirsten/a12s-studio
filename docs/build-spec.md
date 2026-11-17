@@ -83,7 +83,7 @@ Throwaway code. Each has one decision hanging on it.
 | M3 | `git clone` and `git push` of a real repository from an agent container through a 30-line forwarder that adds the token. Then check the container's environment and disk for the token. | Confirms section 9's forward design (streaming bodies, headers). |
 | M4 | A `SessionStart` hook given through `harness.settings` prints text: does it reach the model at session start and after `/compact` (both the compact-before-sleep one and an automatic one)? | The notes hook (section 6). If not: the hook becomes a line in the core instructions telling the agent to read its notes first. |
 | M5 | `turn.finished.usage.modelUsage[*].costUSD` across: two Turns in one session, a sleep and wake, a compaction, a `fresh` session, a Turn with a sub-agent. | The cost delta rule (section 7.4). **Measured:** each model's `costUSD` is its running total for the session, sub-agents and `/compact` Turns included; it starts again from zero only in a fresh session. So the rule works per model, per session. |
-| M6 | Does `tailscale serve` set `Tailscale-User-Login` and `X-Forwarded-For`, and strip client-sent `Tailscale-*` headers? | `ownerGate` as written. |
+| M6 | Does `tailscale serve` set `Tailscale-User-Login` and `X-Forwarded-For`, strip client-sent `Tailscale-*` headers, and pass on the `Host` the browser used? | `ownerGate` as written. A write's `Origin` is compared with `Host`, so if `tailscale serve` rewrites `Host`, every change through it is refused (reads still work). |
 | M7 | An agent asleep with a pending Message and no `wakeOnMessage`: does it stay asleep until `wake()`? Does `wake()` on a prefix token work and stay outside `maxWakesPerHour`? | The wake design (section 5.3). **Measured:** `POST …/power {"state":"awake"}` on a prefix token wakes it. |
 | M8 | How a Docker volume name maps to an agent computer's home drive (`GET /v1/drives`). | The backup script. |
 
@@ -290,8 +290,8 @@ function resolveCaller(headers): Caller   // throws Refused(403)
 ```
 
 It refuses when the `Host` is not exactly `STUDIO_HOST`, or the header is missing, appears more than once, or is not
-the id of an agent with `removed_at IS NULL` whose team has `deleted_at IS NULL`. `teamId` comes from the agents row. Every agent-listener request goes through it
-before anything else runs. Tool inputs never carry a team, and a "from" is never accepted.
+the id of an agent with `removed_at IS NULL` whose team has `deleted_at IS NULL`. `teamId` comes from the agents
+row. Every agent-listener request goes through it before anything else runs. Tool inputs never carry a team, and a "from" is never accepted.
 
 ### 5.2 The six tools
 
@@ -444,7 +444,20 @@ An agent's plain output is not a message. If a completed Turn delivered an ask f
 `owner` with `implicit = 1`. The ask stays open for a real reply. This is the only message the app writes on an
 agent's behalf.
 
-### 5.6 Pause
+### 5.6 When a post could not reach the app
+
+An agent's Studio tool call fails without the app hearing of it when the app is stopped or a12s cannot reach it. The
+agent ends its Turn, and nothing would wake it to try again. So when `live.ts` stores a finished Turn that it did not
+follow whole (it read the Turn from a12s: the Turn started or ran while the app was stopped or the feed was down, or
+a `gap` fell in it) and a12s lists a failed call to a Studio tool in that Turn, it writes one ask from `system` to
+that agent in the same transaction as the `turns` row: Studio could not be reached, use `read` to see what arrived,
+post again what is missing. The dispatcher delivers it and wakes the agent like any ask.
+
+The app answers every Studio call of a Turn it followed whole, so a failed call there is a refusal the agent has
+already read, and nothing is written. A refusal inside a Turn the app did not follow whole also draws the ask; the
+agent finds with `read` that nothing is missing.
+
+### 5.7 Pause
 
 Pause is app-side: the flag (`settings.paused` or `teams.paused`) is written, a dispatcher run that was under way is
 left to finish (it may have read the old flag, and would wake an agent after its sleep), then every awake agent in
@@ -457,7 +470,7 @@ needs no record of when the pause began.
 Resume clears the flag and runs the dispatcher. An asleep agent with pending a12s Messages is a candidate, so the
 agents put to sleep with work in their inbox are woken, and the queued messages follow in order.
 
-### 5.7 Awake cap, budget, scheduled wakes
+### 5.8 Awake cap, budget, scheduled wakes
 
 - **Awake cap** and **queue order**: the dispatcher above. Lowering the cap never forces a sleep; it only stops new
   wakes.
@@ -621,7 +634,7 @@ type TeamView = { id, name, purpose, accent, paused, leadId,
                   budget: { dailyUsd, spentTodayUsd, held },
                   agents: AgentView[], threads: ThreadSummary[] };   // newest 200 threads
 type AgentView = { id, slug, roleLine, model,
-                   presence: "asleep" | "awake" | "working" | "waiting" | "error",
+                   presence: "unknown" | "asleep" | "awake" | "working" | "waiting" | "error",
                    waitingFor?: "cap" | "budget" | "paused" | "disk",
                    line: string | null,                              // what it is doing now
                    turn: { id, threadId, startedAt, text } | null,   // text: last 4000 chars so far
@@ -644,13 +657,13 @@ later; every feed that becomes ready is followed by a resync.
 
 | a12s event | Effect |
 |---|---|
-| `agent_computer.phase` | Presence: `Asleep` → asleep; `Busy` → working; `Error` → error (with its message); any other → awake. An agent with a queued ask or reply that `blockedReason` holds shows waiting. Recorded for any agent computer name, because a new agent reports its phases before its row is committed. Runs the dispatcher. |
+| `agent_computer.phase` | Presence: `Asleep` → asleep; `Busy` → working; `Error` → error (with its message); any other → awake; unknown until a12s has reported a phase. An agent with a queued ask or reply that `blockedReason` holds shows waiting. Recorded for any agent computer name, because a new agent reports its phases before its row is committed. Runs the dispatcher. |
 | `turn.started` | Marks each Studio message whose `a12s_message_id` is in `inbox.messages` as `delivered`. Sets the Turn's thread to that of the first one. Line: "Thinking". Clears text. |
 | `text.delta` | Appends to the Turn's text and emits `live`. If no tool is running, line: "Writing". |
 | `tool.started` (no `parent`) | Sets the line from the table below. Calls with a `parent` (a sub-agent's) are ignored for the line. |
 | `tool.finished` | Nothing for the line; the inspector's log shows it. |
-| `turn.finished` | Writes the `turns` row (section 7.4), applies section 5.5, clears the line and text, runs the dispatcher. |
-| `gap`, or a new feed | Resync: `status()` for phases; for each agent, recent Turns not yet in `turns`; for each `sent` message, its a12s state. |
+| `turn.finished` | Writes the `turns` row (section 7.4), applies sections 5.5 and 5.6, clears the line and text, runs the dispatcher. A Turn followed whole (every event from `turn.started` on, no resync since) is stored from its events; any other is read from a12s `turns`, which has all its text, Messages and tool calls (read again for up to a second: a12s sends the event just before it stores the Turn). |
+| `gap`, or a new feed | Resync: `status()` for phases; for each agent, recent Turns not yet in `turns`, stored the same way; for each `sent` message, its a12s state. Running Turns are no longer whole. |
 
 The same resync runs at app start, which is how state survives a restart.
 

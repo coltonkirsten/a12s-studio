@@ -3,10 +3,11 @@ import { test } from "node:test";
 import { TOOL_PREFIX } from "@a12s-studio/contract/names";
 import type { LiveText } from "@a12s-studio/contract/state";
 import { fakeA12s } from "../src/a12s/fake.ts";
+import type { A12sEvent } from "../src/a12s/port.ts";
 import { doingNow } from "../src/live.ts";
 import { ownerThread } from "../src/router.ts";
 import { deriveState } from "../src/state.ts";
-import { studio, until } from "./studio.ts";
+import { pending, studio, until } from "./studio.ts";
 
 type S = Awaited<ReturnType<typeof studio>>;
 
@@ -23,6 +24,18 @@ const agentView = (s: S, id: string) =>
   deriveState(s.app.repo, s.app.live, null)
     .teams.flatMap((t) => t.agents)
     .find((a) => a.id === id);
+
+const systemAsks = (s: S) => s.db.prepare("SELECT count(*) AS n FROM messages WHERE from_id = 'system'").get()?.n;
+const failedPost = (agent: string, turn: string): A12sEvent => ({
+  type: "tool.finished",
+  agent,
+  at: Date.now(),
+  turn,
+  id: `call-${turn}`,
+  name: `${TOOL_PREFIX}post`,
+  isError: true,
+  output: "studio is Unhealthy",
+});
 
 test("doingNow: one plain line per tool", () => {
   const cases: [string, unknown, string][] = [
@@ -147,6 +160,93 @@ test("a lost feed shows a12s down, and the next feed resyncs what was missed", a
   await until(() => delivery(s, posted.message) === "delivered");
   assert.equal(s.db.prepare("SELECT count(*) AS n FROM turns").get()?.n, 1);
   assert.equal(agentView(s, "web-dev")?.presence, "asleep");
+  // No Studio call failed in that Turn, so nobody is asked to post again.
+  assert.equal(systemAsks(s), 0);
+});
+
+test("presence is unknown until a12s has reported a phase", async (t) => {
+  const s = await setup(t, { live: false });
+  assert.equal(agentView(s, "web-lead")?.presence, "unknown");
+  s.app.live.start();
+  await until(() => agentView(s, "web-lead")?.presence === "awake");
+});
+
+test("a Turn that lost a Studio call while the app was stopped gets one ask to post again", async (t) => {
+  const a12s = fakeA12s();
+  const first = await studio({ a12s, live: true });
+  await first.twoTeams();
+  ownerThread(first.app.repo.forTeam("web"), { body: "Report when the build is green." });
+  await first.app.dispatcher.run();
+  const turn = a12s.startTurn("web-lead");
+  await until(() => first.app.live.agent("web-lead")?.turn?.id === turn);
+  await first.close();
+
+  // The app is stopped: the lead's post fails in a12s, and it ends its Turn.
+  a12s.emit(failedPost("web-lead", turn));
+  a12s.finishTurn("web-lead");
+
+  const s = await studio({ a12s, dbFile: first.dbFile, live: true });
+  t.after(() => s.close());
+  await until(() => pending(a12s, "web-lead").length === 1);
+  assert.match(
+    pending(a12s, "web-lead")[0]?.body ?? "",
+    /^ask m_\w+ from system\n---\na12s Studio could not be reached/,
+  );
+  assert.equal(systemAsks(s), 1);
+
+  // The Turn that takes the ask is followed whole: a failed call in it is a refusal the lead has read.
+  const next = a12s.startTurn("web-lead");
+  a12s.emit(failedPost("web-lead", next));
+  a12s.finishTurn("web-lead");
+  await until(() => s.app.repo.turnTeam(next) === "web");
+  // A resync finds both Turns stored and asks nothing again.
+  a12s.setPhase("web-dev", "Asleep");
+  a12s.emit({ type: "gap" });
+  await until(() => agentView(s, "web-dev")?.presence === "asleep");
+  assert.equal(systemAsks(s), 1);
+});
+
+test("a Turn already running when the app starts is stored whole, from a12s", async (t) => {
+  const a12s = fakeA12s();
+  const first = await studio({ a12s, live: true });
+  await first.twoTeams();
+  const posted = ownerThread(first.app.repo.forTeam("web"), { body: "What is 2 + 2?" });
+  await first.app.dispatcher.run();
+  await first.close();
+  const turn = a12s.startTurn("web-lead");
+  a12s.emit({ type: "text.delta", agent: "web-lead", at: Date.now(), turn, text: "It is " });
+
+  // Like real a12s, the Turn is not in the agent's history the moment its turn.finished goes out.
+  let early = false;
+  const s = await studio({
+    a12s,
+    dbFile: first.dbFile,
+    live: true,
+    wrap: (fake) => ({
+      ...fake,
+      forTeam: (token) => ({
+        ...fake.forTeam(token),
+        async turns(name, limit) {
+          const turns = await fake.forTeam(token).turns(name, limit);
+          if (!early) return turns;
+          early = false;
+          return turns.filter((found) => found.id !== turn);
+        },
+      }),
+    }),
+  });
+  t.after(() => s.close());
+  await until(() => s.app.live.agent("web-lead")?.phase === "Busy");
+  a12s.emit({ type: "text.delta", agent: "web-lead", at: Date.now(), turn, text: "4." });
+  await until(() => agentView(s, "web-lead")?.turn?.text === "4.");
+  early = true;
+  a12s.finishTurn("web-lead");
+
+  await until(() => s.app.repo.turnTeam(turn) === "web");
+  assert.equal(s.db.prepare("SELECT thread_id FROM turns WHERE id = ?").get(turn)?.thread_id, posted.thread);
+  const last = s.app.repo.forTeam("web").threadMessages(posted.thread, 10).at(-1);
+  assert.deepEqual([last?.fromId, last?.body, last?.implicit], ["web-lead", "It is 4.", true]);
+  assert.equal(systemAsks(s), 0);
 });
 
 test("a gap resyncs", async (t) => {

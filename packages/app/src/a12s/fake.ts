@@ -26,7 +26,13 @@ export type FakeAgent = {
   turns: TurnRecord[];
   journal: A12sEvent[];
   files: Map<string, Uint8Array>;
-  current: { turn: string; startedAt: number; messageIds: string[]; text: string } | null;
+  current: {
+    turn: string;
+    startedAt: number;
+    messageIds: string[];
+    text: string;
+    tools: TurnRecord["tools"];
+  } | null;
 };
 
 export type TurnResult = { status?: TurnStatus; error?: string; modelCostsUsd?: ModelCosts };
@@ -62,6 +68,9 @@ export function fakeA12s(): FakeA12s {
       const agent = mustGet(event.agent);
       agent.journal.push(event);
       if (event.type === "text.delta" && agent.current?.turn === event.turn) agent.current.text += event.text;
+      if (event.type === "tool.finished" && agent.current?.turn === event.turn) {
+        agent.current.tools.push({ name: event.name, isError: event.isError });
+      }
     }
     for (const push of subscribers) push(event);
   }
@@ -84,7 +93,7 @@ export function fakeA12s(): FakeA12s {
       messageIds.push(message.id);
     }
     const at = Date.now();
-    agent.current = { turn, startedAt: at, messageIds, text: "" };
+    agent.current = { turn, startedAt: at, messageIds, text: "", tools: [] };
     setPhase(name, "Busy");
     emit({ type: "turn.started", agent: name, at, turn, messageIds });
     return turn;
@@ -107,6 +116,7 @@ export function fakeA12s(): FakeA12s {
       ...error,
       text: current.text,
       messageIds: current.messageIds,
+      tools: current.tools,
       startedAt: current.startedAt,
       finishedAt: at,
       modelCostsUsd,

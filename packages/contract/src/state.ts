@@ -11,7 +11,7 @@ export type Settings = {
   defaultCompactMinTokens: number;
 };
 
-export type Presence = "asleep" | "awake" | "working" | "waiting" | "error";
+export type Presence = "unknown" | "asleep" | "awake" | "working" | "waiting" | "error";
 export type WaitingFor = "cap" | "budget" | "paused" | "disk";
 export type ThreadStatus = "open" | "done";
 export type BoardStatus = "open" | "needs_you" | "done";
