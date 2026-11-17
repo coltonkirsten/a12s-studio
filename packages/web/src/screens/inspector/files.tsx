@@ -3,7 +3,7 @@ import type { AgentView } from "@a12s-studio/contract/state";
 import { useState } from "react";
 import { api, useRead } from "../../api.ts";
 import { crumbs, fileSize, HOME } from "../../logic/files.ts";
-import { Editor } from "./editor.tsx";
+import { Editor } from "../../parts/editor.tsx";
 import { Refusal } from "./refusal.tsx";
 
 /** The agent's home drive: folders to open, text files to read and edit. */

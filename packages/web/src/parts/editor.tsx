@@ -1,7 +1,7 @@
 import type { WriteResult } from "@a12s-studio/contract/api";
 import { useState } from "react";
-import { useAction } from "../../api.ts";
-import { Problem } from "../../parts/problem.tsx";
+import { useAction } from "../api.ts";
+import { Problem } from "./problem.tsx";
 
 type Props = {
   label: string;
