@@ -8,6 +8,7 @@ const WAITING = {
 } as const;
 
 const LABEL: Record<Presence, string> = {
+  unknown: "Not known yet",
   asleep: "Asleep",
   awake: "Awake",
   working: "Working",

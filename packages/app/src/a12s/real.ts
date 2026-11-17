@@ -167,6 +167,7 @@ function toTurn(t: TurnsResponse["turns"][number]): TurnRecord {
     ...(t.error ? { error: t.error } : {}),
     text: t.text,
     messageIds: t.messages.map((m) => m.id),
+    tools: t.tools.map((call) => ({ name: call.name, isError: call.isError === true })),
     ...(t.startedAt ? { startedAt: ms(t.startedAt) } : {}),
     finishedAt: ms(t.finishedAt),
     modelCostsUsd: modelCostsUsd(t.usage),

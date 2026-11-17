@@ -6,12 +6,18 @@ export const AGENT_SLUG = new RegExp(`^${AGENT}$`);
 export const AGENT_ID = new RegExp(`^${TEAM}-${AGENT}$`);
 export const RESERVED_TEAM_SLUGS: readonly string[] = ["studio", "broker", "owner", "system", "a12s"];
 
+// The owner's UI and API; on loopback only, reached through tailscale serve from other devices.
+export const OWNER_PORT = 7400;
 // a12s gives an external Service one port: agents call it on <name>.a12s and the Controller dials the same port
 // on the host, so each listener's port and its agent-facing URL come from one number.
 export const STUDIO_PORT = 7410;
 export const BROKER_PORT = 7420;
-export const STUDIO_URL = `http://studio.a12s:${STUDIO_PORT}`;
-export const BROKER_URL = `http://broker.a12s:${BROKER_PORT}`;
+// a12s passes on the Host the agent called. A web page in the owner's browser can reach a loopback port through a
+// DNS name of its own and set any header but Host, so both agent-facing listeners require exactly these.
+export const STUDIO_HOST = `studio.a12s:${STUDIO_PORT}`;
+export const BROKER_HOST = `broker.a12s:${BROKER_PORT}`;
+export const STUDIO_URL = `http://${STUDIO_HOST}`;
+export const BROKER_URL = `http://${BROKER_HOST}`;
 // a12s stamps the calling agent computer's name in this header and removes any copy the agent sent.
 export const CALLER_HEADER = "a12s-caller";
 export const TOOL_PREFIX = "mcp__a12s-studio__";

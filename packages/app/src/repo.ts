@@ -1,6 +1,7 @@
 import type { DatabaseSync, SQLInputValue } from "node:sqlite";
 import { agentId, type MessageId, newId, type ThreadId } from "@a12s-studio/contract/names";
 import type { MessageKind, Settings, ThreadStatus } from "@a12s-studio/contract/state";
+import type { ModelCosts, Tokens, TurnStatus } from "./a12s/port.ts";
 import { tx } from "./db.ts";
 
 export type Team = {
@@ -61,6 +62,19 @@ export type NewMessage = Pick<Message, "threadId" | "kind" | "fromId" | "toId" |
   implicit?: boolean;
 };
 
+export type StoredTurn = {
+  id: string;
+  agentId: string;
+  threadId: ThreadId | null;
+  session: string | null;
+  status: TurnStatus;
+  error: string | null;
+  startedAt: number | null;
+  finishedAt: number;
+  tokens: Tokens | undefined;
+  modelCostsUsd: ModelCosts;
+};
+
 export type BoardRow = Thread & {
   asksForOwner: number;
   asksForViewer: number;
@@ -98,10 +112,16 @@ const toMessage = (row: Row): Message => ({ ...(row as Message), implicit: row.i
 export type Repo = ReturnType<typeof createRepo>;
 export type TeamRepo = ReturnType<Repo["forTeam"]>;
 
-export function createRepo(db: DatabaseSync) {
+// `onWrite` hears every statement that changed a row. Writes are synchronous, so by the time anything it schedules
+// runs, the write has committed or rolled back.
+export function createRepo(db: DatabaseSync, onWrite: () => void = () => {}) {
   const one = (sql: string, ...params: SQLInputValue[]): Row | undefined => db.prepare(sql).get(...params);
   const all = (sql: string, ...params: SQLInputValue[]): Row[] => db.prepare(sql).all(...params);
-  const run = (sql: string, ...params: SQLInputValue[]): number => Number(db.prepare(sql).run(...params).changes);
+  const run = (sql: string, ...params: SQLInputValue[]): number => {
+    const changes = Number(db.prepare(sql).run(...params).changes);
+    if (changes > 0) onWrite();
+    return changes;
+  };
 
   // Every read and write here binds team_id, so an id from another team finds nothing, exactly like an id that
   // does not exist.
@@ -117,6 +137,17 @@ export function createRepo(db: DatabaseSync) {
       team(): Team | undefined {
         const row = one(`SELECT ${TEAM} FROM teams WHERE id = ? AND deleted_at IS NULL`, teamId);
         return row && toTeam(row);
+      },
+      updateTeam(patch: Partial<Pick<Team, "name" | "purpose" | "accent" | "dailyBudgetUsd">>): void {
+        run(
+          `UPDATE teams SET name = coalesce(?, name), purpose = coalesce(?, purpose), accent = coalesce(?, accent),
+             daily_budget_usd = coalesce(?, daily_budget_usd) WHERE id = ?`,
+          patch.name ?? null,
+          patch.purpose ?? null,
+          patch.accent ?? null,
+          patch.dailyBudgetUsd ?? null,
+          teamId,
+        );
       },
       setPaused(paused: boolean): void {
         run("UPDATE teams SET paused = ? WHERE id = ?", paused ? 1 : 0, teamId);
@@ -153,6 +184,15 @@ export function createRepo(db: DatabaseSync) {
           a.cpu,
           a.memory,
           a.createdAt,
+        );
+      },
+      updateAgent(id: string, patch: Partial<Pick<Agent, "role" | "model">>): void {
+        run(
+          "UPDATE agents SET role = coalesce(?, role), model = coalesce(?, model) WHERE team_id = ? AND id = ?",
+          patch.role ?? null,
+          patch.model ?? null,
+          teamId,
+          id,
         );
       },
       removeAgent(id: string, at: number): void {
@@ -288,6 +328,92 @@ export function createRepo(db: DatabaseSync) {
         ).map(toMessage);
       },
 
+      markDelivered(a12sIds: string[], at: number): void {
+        run(
+          `UPDATE messages SET delivery = 'delivered', delivered_at = ? WHERE team_id = ? AND delivery = 'sent'
+             AND a12s_message_id IN (SELECT value FROM json_each(?))`,
+          at,
+          teamId,
+          JSON.stringify(a12sIds),
+        );
+      },
+      // A Message a12s dropped without delivering it (withdrawn, discarded, expired) will never arrive.
+      markUndelivered(a12sIds: string[]): void {
+        run(
+          `UPDATE messages SET delivery = 'none' WHERE team_id = ? AND delivery = 'sent'
+             AND a12s_message_id IN (SELECT value FROM json_each(?))`,
+          teamId,
+          JSON.stringify(a12sIds),
+        );
+      },
+      // Agents holding Studio messages that are in their a12s inbox but not yet taken by a Turn.
+      agentsWithSent(): string[] {
+        return all(
+          "SELECT DISTINCT to_id AS id FROM messages WHERE team_id = ? AND delivery = 'sent' ORDER BY to_id",
+          teamId,
+        ).map((r) => String(r.id));
+      },
+      // Per agent: messages it has not received yet, and whether an ask or reply is among them.
+      undelivered(): Map<string, { count: number; dispatchable: boolean }> {
+        const rows = all(
+          `SELECT to_id AS id, count(*) AS n, max(delivery = 'queued' AND kind IN ('ask', 'reply')) AS d
+           FROM messages WHERE team_id = ? AND delivery IN ('queued', 'sent') GROUP BY to_id`,
+          teamId,
+        );
+        return new Map(rows.map((r) => [String(r.id), { count: Number(r.n), dispatchable: r.d === 1 }]));
+      },
+      // Asks to the owner with no reply, oldest first.
+      ownerQuestions(): Message[] {
+        return all(
+          `SELECT ${MESSAGE}
+           FROM messages a WHERE a.team_id = ? AND a.to_id = 'owner' AND ${UNANSWERED} ORDER BY a.created_at, a.rowid`,
+          teamId,
+        ).map(toMessage);
+      },
+
+      turnStored(id: string): boolean {
+        return one("SELECT 1 FROM turns WHERE team_id = ? AND id = ?", teamId, id) !== undefined;
+      },
+      insertTurn(t: StoredTurn): void {
+        run(
+          `INSERT OR IGNORE INTO turns (id, team_id, agent_id, thread_id, session, status, error, started_at,
+             finished_at, tokens_in, tokens_out, tokens_cache_read, tokens_cache_write, model_costs)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          t.id,
+          teamId,
+          t.agentId,
+          t.threadId,
+          t.session,
+          t.status,
+          t.error,
+          t.startedAt,
+          t.finishedAt,
+          t.tokens?.input ?? null,
+          t.tokens?.output ?? null,
+          t.tokens?.cacheRead ?? null,
+          t.tokens?.cacheWrite ?? null,
+          JSON.stringify(t.modelCostsUsd),
+        );
+      },
+      // Each agent's latest Turn, when it failed and the owner has not dismissed it.
+      failedTurns(): { id: string; agentId: string; error: string | null; finishedAt: number }[] {
+        return all(
+          `SELECT id, agent_id AS agentId, error, finished_at AS finishedAt FROM turns t
+           WHERE team_id = ? AND status = 'failed' AND acked_at IS NULL AND id = (SELECT id FROM turns l
+             WHERE l.agent_id = t.agent_id ORDER BY finished_at DESC, rowid DESC LIMIT 1)`,
+          teamId,
+        ) as { id: string; agentId: string; error: string | null; finishedAt: number }[];
+      },
+      ackTurn(id: string, at: number): boolean {
+        return run("UPDATE turns SET acked_at = ? WHERE team_id = ? AND id = ?", at, teamId, id) > 0;
+      },
+      spentSince(at: number): number {
+        return Number(
+          one("SELECT coalesce(sum(cost_usd), 0) AS s FROM turns WHERE team_id = ? AND finished_at >= ?", teamId, at)
+            ?.s ?? 0,
+        );
+      },
+
       // Agents with a queued ask or reply, with what orders them: an owner message first, then the oldest.
       dispatchable(): Map<string, { fromOwner: boolean; oldest: number }> {
         const rows = all(
@@ -358,6 +484,15 @@ export function createRepo(db: DatabaseSync) {
         t.a12sToken,
         t.createdAt,
       );
+    },
+    // The team a thread or Turn belongs to, so an owner route can load that team and work through forTeam.
+    threadTeam(id: string): string | undefined {
+      const row = one("SELECT team_id AS t FROM threads WHERE id = ?", id);
+      return row && String(row.t);
+    },
+    turnTeam(id: string): string | undefined {
+      const row = one("SELECT team_id AS t FROM turns WHERE id = ?", id);
+      return row && String(row.t);
     },
     // The caller's identity: a current agent of a current team. Only caller.ts uses this.
     callerAgent(id: string): { id: string; teamId: string } | undefined {

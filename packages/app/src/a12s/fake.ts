@@ -26,7 +26,13 @@ export type FakeAgent = {
   turns: TurnRecord[];
   journal: A12sEvent[];
   files: Map<string, Uint8Array>;
-  current: { turn: string; startedAt: number; messageIds: string[]; text: string } | null;
+  current: {
+    turn: string;
+    startedAt: number;
+    messageIds: string[];
+    text: string;
+    tools: TurnRecord["tools"];
+  } | null;
 };
 
 export type TurnResult = { status?: TurnStatus; error?: string; modelCostsUsd?: ModelCosts };
@@ -38,12 +44,16 @@ export type FakeA12s = A12s & {
   setPhase(name: string, phase: Phase, error?: string): void;
   startTurn(name: string): string;
   finishTurn(name: string, result?: TurnResult): void;
+  // false: every open feed throws unreachable and new feeds do not become ready, as when the Controller stops.
+  setReachable(up: boolean): void;
 };
 
 export function fakeA12s(): FakeA12s {
   const agents = new Map<string, FakeAgent>();
   const tokens = new Map<string, string>();
   const subscribers = new Set<(event: A12sEvent) => void>();
+  const feeds = new Set<() => void>();
+  let reachable = true;
   let counter = 0;
   const nextId = (prefix: string) => `${prefix}${++counter}`;
 
@@ -58,6 +68,9 @@ export function fakeA12s(): FakeA12s {
       const agent = mustGet(event.agent);
       agent.journal.push(event);
       if (event.type === "text.delta" && agent.current?.turn === event.turn) agent.current.text += event.text;
+      if (event.type === "tool.finished" && agent.current?.turn === event.turn) {
+        agent.current.tools.push({ name: event.name, isError: event.isError });
+      }
     }
     for (const push of subscribers) push(event);
   }
@@ -80,7 +93,7 @@ export function fakeA12s(): FakeA12s {
       messageIds.push(message.id);
     }
     const at = Date.now();
-    agent.current = { turn, startedAt: at, messageIds, text: "" };
+    agent.current = { turn, startedAt: at, messageIds, text: "", tools: [] };
     setPhase(name, "Busy");
     emit({ type: "turn.started", agent: name, at, turn, messageIds });
     return turn;
@@ -103,6 +116,7 @@ export function fakeA12s(): FakeA12s {
       ...error,
       text: current.text,
       messageIds: current.messageIds,
+      tools: current.tools,
       startedAt: current.startedAt,
       finishedAt: at,
       modelCostsUsd,
@@ -254,6 +268,10 @@ export function fakeA12s(): FakeA12s {
     setPhase,
     startTurn,
     finishTurn,
+    setReachable(up) {
+      reachable = up;
+      if (!up) for (const drop of feeds) drop();
+    },
     async ensureServices(services) {
       fake.services = services;
     },
@@ -289,28 +307,44 @@ export function fakeA12s(): FakeA12s {
       const queue: A12sEvent[] = [];
       let wakeUp: (() => void) | null = null;
       let closed = false;
+      let lost = false;
       const push = (event: A12sEvent) => {
         queue.push(event);
         wakeUp?.();
       };
+      const drop = () => {
+        lost = true;
+        wakeUp?.();
+      };
       subscribers.add(push);
+      feeds.add(drop);
+      const end = () => {
+        subscribers.delete(push);
+        feeds.delete(drop);
+      };
       return {
-        ready: async () => {},
+        ready: async () => {
+          if (!reachable) {
+            end();
+            throw new A12sError("unreachable", "a12s is not answering.");
+          }
+        },
         close() {
           closed = true;
-          subscribers.delete(push);
+          end();
           wakeUp?.();
         },
         async *[Symbol.asyncIterator]() {
           try {
             while (true) {
+              if (lost) throw new A12sError("unreachable", "a12s is not answering.");
               const event = queue.shift();
               if (event) yield event;
               else if (closed) return;
               else await new Promise<void>((resolve) => (wakeUp = resolve));
             }
           } finally {
-            subscribers.delete(push);
+            end();
           }
         },
       };

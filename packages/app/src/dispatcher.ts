@@ -1,4 +1,4 @@
-import type { WaitingFor } from "@a12s-studio/contract/state";
+import type { Settings, WaitingFor } from "@a12s-studio/contract/state";
 import type { A12s, AgentStatus, Phase, TeamA12s } from "./a12s/port.ts";
 import type { Message, Repo, Team, TeamRepo, Thread } from "./repo.ts";
 import { nameOf } from "./router.ts";
@@ -20,8 +20,8 @@ const MAX_NOTES = 20;
 const NOTE_MAX = 500;
 
 // Why a candidate gets nothing this run. The one place a hold is decided, so presence can show the same reason.
-function blockedReason(team: Team): WaitingFor | null {
-  return team.paused ? "paused" : null;
+export function blockedReason(settings: Settings, team: Team): WaitingFor | null {
+  return settings.paused || team.paused ? "paused" : null;
 }
 
 function render(message: Message, thread: Thread | undefined, notes: Message[]): string {
@@ -115,9 +115,11 @@ export function createDispatcher(repo: Repo, a12s: A12s): Dispatcher {
   }
 
   async function once(): Promise<void> {
-    if (repo.settings().paused) return;
+    const settings = repo.settings();
+    // Nothing can be sent while everything is paused, so the run does not ask a12s for anything.
+    if (settings.paused) return;
     for (const candidate of await candidates()) {
-      if (blockedReason(candidate.team) || candidate.phase === "Error") continue;
+      if (blockedReason(settings, candidate.team) || candidate.phase === "Error") continue;
       try {
         await deliver(candidate);
       } catch (error) {

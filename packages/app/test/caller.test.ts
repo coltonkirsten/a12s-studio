@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
+import { request } from "node:http";
 import { after, before, test } from "node:test";
-import { CALLER_HEADER } from "@a12s-studio/contract/names";
+import { CALLER_HEADER, STUDIO_HOST } from "@a12s-studio/contract/names";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { type Studio, studio } from "./studio.ts";
@@ -35,6 +36,14 @@ for (const [why, callers] of [
   });
 }
 
+test("the agent API refuses a caller that did not come through a12s's Host", async () => {
+  for (const host of ["127.0.0.1:7410", "evil.example:7410", "studio.a12s", "studio.a12s:7410.evil.example"]) {
+    const { status } = await s.raw(["web-lead"], "POST", "/mcp", list, host);
+    assert.equal(status, 403, host);
+  }
+  assert.equal((await s.raw(["web-lead"], "POST", "/mcp", list)).status, 200);
+});
+
 test("the caller check runs before routing, and health needs no caller", async () => {
   assert.equal((await s.raw([], "GET", "/files/m_x/a.txt")).status, 403);
   assert.equal((await s.raw(["web-lead"], "GET", "/files/m_x/a.txt")).status, 404);
@@ -42,12 +51,35 @@ test("the caller check runs before routing, and health needs no caller", async (
   assert.equal((await s.raw([], "GET", "/healthz")).status, 200);
 });
 
+// fetch will not send a Host of its own choosing, so this client goes over node:http the way the a12s proxy does.
+async function viaA12s(url: string | URL, init?: RequestInit): Promise<Response> {
+  const headers = Object.fromEntries(new Headers(init?.headers).entries());
+  const body = typeof init?.body === "string" ? init.body : undefined;
+  return new Promise((resolve, reject) => {
+    const req = request(url, { method: init?.method ?? "GET", headers: { ...headers, host: STUDIO_HOST } }, (res) => {
+      const chunks: Buffer[] = [];
+      res.on("data", (c: Buffer) => chunks.push(c));
+      res.on("end", () => {
+        const out = new Headers();
+        for (const [k, v] of Object.entries(res.headers)) if (typeof v === "string") out.set(k, v);
+        const status = res.statusCode ?? 500;
+        resolve(
+          new Response(status === 202 || status === 204 ? null : Buffer.concat(chunks), { status, headers: out }),
+        );
+      });
+    });
+    req.on("error", reject);
+    req.end(body);
+  });
+}
+
 test("a real MCP client sees the four tools, and no tool takes a team or a sender", async () => {
   const { port } = s.app.agentServer.address() as { port: number };
   const client = new Client({ name: "test", version: "1.0.0" });
   await client.connect(
     new StreamableHTTPClientTransport(new URL(`http://127.0.0.1:${port}/mcp`), {
       requestInit: { headers: { [CALLER_HEADER]: "web-lead" } },
+      fetch: viaA12s,
     }),
   );
   const { tools } = await client.listTools();
