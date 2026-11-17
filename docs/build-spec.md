@@ -89,6 +89,8 @@ Throwaway code. Each has one decision hanging on it.
 | M7 | An agent asleep with a pending Message and no `wakeOnMessage`: does it stay asleep until `wake()`? Does `wake()` on a prefix token work and stay outside `maxWakesPerHour`? | The wake design (section 5.3). **Measured:** `POST …/power {"state":"awake"}` on a prefix token wakes it. |
 | M8 | How a Docker volume name maps to an agent computer's home drive (`GET /v1/drives`). | The backup script. |
 | M9 | A Service a12s runs, named `<team>-addon-<id>`, whose spec `uses` the external Services `broker` and `studio`: is that name stamped as the caller on its calls to both? Do two Services start from one image whose `service.json` carries a third name? Is an agent computer whose spec does not name the Service refused by the proxy? Which tool prefix do agents see for its MCP port? Does a write that names an image the host lacks pull it? | Section 10 as written. It is measured by the first add-on package, not in Phase 0. |
+| M10 | With `inbox.duringTurn: steer`: is a Message sent to a `Busy` agent listed by a `turn.steered` event of the running Turn, and does the model read it before that Turn ends? Does one sent as the Turn ends start a new Turn that lists it in `turn.started`, once? | Delivery into a running Turn (section 5.3). It is measured by the a12s step of the steering work, not in Phase 0. Where a12s cannot steer, a message for a working agent starts its next Turn; the app's code is the same, because `turn.steered` is only one more way a message is reported delivered. |
+| M11 | A `UserPromptSubmit` hook given through `harness.settings` prints text: does it reach the model when a Message starts a Turn, and when one joins a running Turn? Does `curl` in a hook reach `STUDIO_URL`? | How a changed rule reaches an agent (section 6). It is measured by the rules package. If the hook does not run for a Message that joins a Turn, a changed layer arrives with the next Turn instead. If its output never reaches the model, the app sends the changed layer to each agent it applies to as a message from `system`. |
 
 **Phase 0 exit:** inside an agent container the environment and disk show no GitHub token, a push works, and the
 forwarder logged the right caller name.
@@ -117,10 +119,11 @@ packages/
     src/errors.ts       StudioError: status, code, message, fix
     src/caller.ts       resolveCaller: header -> agent -> team
     src/agent-server.ts the agent listener (7410)
-    src/tools/          the six tools, one file each, plus mcp.ts
-    src/router.ts       post rules: kinds, replies, thread status, the implicit answer
+    src/tools/          the seven tools, one file each, plus mcp.ts
+    src/router.ts       post rules: receivers, thread status, the chain record, the implicit answer
     src/dispatcher.ts   the one queue: pause, budget, awake cap, delivery
     src/teams.ts        create, hire, fire, delete, pause and resume
+    src/rules.ts        the instruction layers: versions, who may write, the text an agent loads
     src/addons.ts       the add-on library; turning an add-on on and off for a team
     src/a12s/           port.ts (interface), real.ts (a12s HTTP API), fake.ts (in-memory), spec.ts (agentSpec, addonSpec)
     src/live.ts         a12s events -> presence, line, text, turns
@@ -135,12 +138,13 @@ packages/
     test/
   web/
     src/main.tsx  app.tsx  stream.ts  api.ts  screens/  parts/  styles/*.css
-    src/logic/          pure functions (folding, formatting, command palette); these are tested
+    src/logic/          pure functions (folding, the chain view, differences, formatting, command palette); tested
   e2e/                  `npm run e2e`: real Docker, a12s and Claude login; never in CI (section 12)
     src/run.ts          the Fleet `studio-e2e`, a temp STUDIO_HOME, the real broker and app; runs the scripts; cleans up
     src/preflight.ts    what a run needs, all named before anything is created (pure; table-tested in test/)
     src/studio.ts       what a script drives Studio with: the owner API, the state stream, a command in a container
     src/p1.ts  p2.ts  p3.ts  p4.ts      one exit script per phase
+    src/steer.ts        two agents on tasks that depend on each other; reports the chain (section 12)
 teams/                  templates: blank/, website/, research-notes/
 addons/example/         a reference add-on: Dockerfile, service.json, addon.json and one small server
 scripts/                setup.sh, backup.ts, restore.ts
@@ -204,7 +208,7 @@ CREATE TABLE teams (
 CREATE TABLE agents (
   id TEXT PRIMARY KEY,                                 -- '<team>-<slug>' = a12s name
   team_id TEXT NOT NULL REFERENCES teams(id),
-  slug TEXT NOT NULL, role TEXT NOT NULL, model TEXT NOT NULL,
+  slug TEXT NOT NULL, model TEXT NOT NULL,             -- the role is the newest `rules` row for the agent
   sleep_after_idle TEXT NOT NULL, compact_min_tokens INTEGER NOT NULL,
   cpu REAL, memory TEXT,                               -- null = a12s default
   created_at INTEGER NOT NULL, removed_at INTEGER,
@@ -217,6 +221,7 @@ CREATE TABLE threads (
   title TEXT NOT NULL,
   owner_agent_id TEXT NOT NULL REFERENCES agents(id),
   status TEXT NOT NULL CHECK (status IN ('open','done')),
+  owner_seen_at INTEGER NOT NULL DEFAULT 0,            -- when the owner last wrote here or marked it read
   created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL
 ) STRICT;
 CREATE INDEX threads_board ON threads (team_id, status, updated_at DESC);
@@ -225,21 +230,33 @@ CREATE TABLE messages (
   id TEXT PRIMARY KEY,
   team_id TEXT NOT NULL REFERENCES teams(id),
   thread_id TEXT REFERENCES threads(id),               -- null only when from_id = 'system'
-  kind TEXT NOT NULL CHECK (kind IN ('ask','reply','note')),
   from_id TEXT NOT NULL,                               -- agent id | 'owner' | 'system'
-  to_id TEXT,                                          -- agent id | 'owner' | null (a note to the thread)
-  ask_id TEXT REFERENCES messages(id),                 -- on a reply: the ask it answers
+  to_id TEXT,                                          -- agent id | 'owner' | null (a record in the thread)
   body TEXT NOT NULL,
   file_name TEXT,                                      -- stored at app/files/<id>/<file_name>
-  implicit INTEGER NOT NULL DEFAULT 0,                 -- section 5.5
+  cause_id TEXT REFERENCES messages(id),               -- the message that set it off (section 5.9); null: none
+  depth INTEGER NOT NULL DEFAULT 0,                    -- its cause's depth plus one; 0 without a cause
   delivery TEXT NOT NULL CHECK (delivery IN ('none','queued','sent','delivered')),
   a12s_message_id TEXT,
+  turn_id TEXT,                                        -- the a12s Turn that received it
+  steered INTEGER NOT NULL DEFAULT 0,                  -- 1: it joined that Turn while it ran; 0: it started it
   created_at INTEGER NOT NULL, delivered_at INTEGER
 ) STRICT;
 CREATE INDEX messages_thread ON messages (thread_id, created_at);
 CREATE INDEX messages_queue  ON messages (to_id, delivery, created_at);
-CREATE UNIQUE INDEX messages_one_reply ON messages (ask_id) WHERE kind = 'reply';
 CREATE INDEX messages_a12s ON messages (a12s_message_id);
+CREATE INDEX messages_turn ON messages (turn_id);
+
+CREATE TABLE rules (                                   -- every version of the owner rules, team rules and roles
+  id INTEGER PRIMARY KEY AUTOINCREMENT,                -- (section 6); the newest row of a scope is its text now
+  team_id TEXT REFERENCES teams(id),                   -- null: the owner rules
+  agent_id TEXT REFERENCES agents(id),                 -- set: that agent's role; null with a team: the team rules
+  body TEXT NOT NULL,
+  author TEXT NOT NULL,                                -- 'owner' | agent id
+  created_at INTEGER NOT NULL,
+  CHECK (agent_id IS NULL OR team_id IS NOT NULL)
+) STRICT;
+CREATE INDEX rules_scope ON rules (team_id, agent_id, id DESC);
 
 CREATE TABLE wakes (                                   -- wakes agents set for themselves
   id TEXT PRIMARY KEY,
@@ -299,7 +316,7 @@ CREATE INDEX addon_usage_spend ON addon_usage (team_id, at);
 `teams.paused`. Per-agent: the `agents` columns. All are edited in the UI and read fresh by the dispatcher on every
 run; nothing is cached.
 
-**Not stored, derived:** "needs you" on a thread (it has an unanswered ask with `to_id = 'owner'`); the Needs You
+**Not stored, derived:** "needs you" on a thread (section 5.4); the Needs You
 list (section 7.3); presence, the "doing now" line and streaming text (memory, from a12s events).
 
 **The one code path for `team_id`.** `repo.ts` exports `forTeam(teamId)`, which returns every read and write the
@@ -307,6 +324,9 @@ rest of the app uses, each with `team_id = ?` bound inside. Nothing outside `rep
 receive `forTeam(caller.teamId)` and never see a team id as input. Owner routes receive `forTeam(teamId)` after the
 route has loaded the team named in the URL. Looking up a thread, message, agent or wake by id through a scoped repo
 returns "not found" for another team's id, the same as for an id that does not exist.
+
+The owner rules are the one text that belongs to no team: the `rules` rows with a null `team_id`. They are written
+only by the owner's route and read only through `rules.ts`.
 
 ## 5. Agent ↔ app protocol
 
@@ -318,6 +338,8 @@ The app's agent listener (`7410`) is the external Service `studio`. It serves:
   `enableJsonResponse: true`): a new server and transport per request, with the caller bound in a closure.
 - `GET /files/<message id>/<name>`: an attachment, for a caller on the message's team. The message is looked up
   through the caller's team, so another team's message is a 404 like a missing one.
+- `GET /rules/<layer>`: the caller's own text of one instruction layer (`owner`, `team` or `role`), as plain text.
+  The hook of section 6 reads it.
 - `POST /usage`: an add-on instance reports the cost of paid work (section 10.4).
 - `GET /healthz`: `{ ok: true }`. The one route that needs no caller; it reads nothing.
 
@@ -336,28 +358,24 @@ row. Every agent-listener request goes through it before anything else runs. Too
 with the same `Host` and single-header rules: the name must be an add-on instance's (section 10.2) with a
 `team_addons` row, on a team with `deleted_at IS NULL`.
 
-### 5.2 The six tools
+### 5.2 The seven tools
 
 Agents address each other by agent slug (`dev`), or `owner`. Tool results are JSON text. Errors are tool errors with
 a one-sentence fix. Tool inputs are strict: a field a tool does not name is refused, never dropped.
 
 ```ts
 post: {
-  kind: "ask" | "reply" | "note",
   body: string,            // 1..32000 chars
-  to?: string,             // agent slug or "owner"
+  to?: string,             // agent slug or "owner"; left out: a record in the thread, delivered to nobody
   thread?: string,         // thread id
-  title?: string,          // 1..120 chars
-  ask?: string,            // message id
+  title?: string,          // 1..120 chars: starts a new thread owned by the caller
   file?: string            // absolute path under /home/agent
 } -> { message: string, thread: string }
 ```
 
-| Kind | Required | Rules |
-|---|---|---|
-| ask | `to`; and `thread`, or `title` to start a new thread owned by the caller | `to` is another current agent on the team, or `owner`. Not the caller. |
-| reply | `ask` | The ask is kind `ask`, addressed to the caller, and has no reply yet. Thread and receiver come from the ask. `to`, `thread`, `title` are refused. |
-| note | `thread` | `to` is optional; without it the note is just recorded in the thread. |
+Exactly one of `thread` and `title` is given. `to` is another current agent on the team, or `owner`; never the
+caller. There is one kind of message: no field says what a message is for, and none points at the message it
+answers. What a message does to its receiver is section 5.3.
 
 **A file** is copied when the post is made: the app reads it from the caller's home with `readFile` and stores it at
 `app/files/<message id>/<name>` (the name is the path's last part) in the transaction that inserts the message, so a
@@ -372,8 +390,8 @@ read: {
   limit?: number,                        // default 30, max 100
   before?: string                        // message or thread id, for paging
 }
-// board  -> { threads: [{ id, title, owner, status: "open"|"needs_you"|"done", updated, last, asksForYou }] }
-// thread -> { thread: {...}, messages: [{ id, kind, from, to, ask, body, file, at }] }   (file: the attachment's URL)
+// board  -> { threads: [{ id, title, owner, status: "open"|"needs_you"|"done", updated, last }] }
+// thread -> { thread: {...}, messages: [{ id, from, to, body, file, at }] }   (file: the attachment's URL)
 
 update_thread: { thread: string, status?: "open" | "done", owner?: string, title?: string }
 // any agent on the team may; at least one field
@@ -381,6 +399,16 @@ update_thread: { thread: string, status?: "open" | "done", owner?: string, title
 roster: {}
 // -> { team: { name, purpose }, you, lead, agents: [{ name, role, presence }], owner: "owner" }
 //    role is the first line of the role text
+
+rules: {
+  action: "read" | "set",
+  layer?: "team" | "role",               // set: required. read: left out, the caller's own three layers
+  agent?: string,                        // layer "role": whose role, an agent slug; left out, the caller's
+  body?: string                          // set: the whole new text. team: 0..4000 chars; role: 1..8000
+}
+// read -> { owner, team, role } (the caller's own texts), or { role } of the agent named
+// set  -> { version: number }. Only the team's lead may set; anyone else is refused with the lead's name and
+//         the fix "send the lead a message with the change you want". Section 6.
 
 schedule: {
   action: "set" | "list" | "cancel",
@@ -407,11 +435,25 @@ access: {
 // a team has at most 10 pending requests; another is refused until the owner decides one
 ```
 
-### 5.3 Delivery and wake rules
+### 5.3 Delivery
 
 **a12s is configured so that nothing wakes an agent by itself**: agent computers have no `wakeOnMessage`. The app
 wakes an agent with an explicit `wake()`. This makes "the app is the only waker" a fact a12s enforces, makes the awake
 cap exact, and makes pause a plain `sleep()`.
+
+**a12s is configured to hand a Message to a working agent inside its Turn**: agent computers have
+`inbox.duringTurn: steer` (section 6). The app does not choose how a message arrives. It sends the message to the
+agent's a12s inbox, and a12s does one of three things with it, which the app records from a12s's events:
+
+| When the Message reaches a12s | What a12s does | Event |
+|---|---|---|
+| A Turn of the agent is running | Gives it to the harness, which shows it to the model as soon as the tool calls it is running have finished. The Turn goes on. | `turn.steered`, in that Turn |
+| The agent is awake and no Turn runs | Starts a Turn with it. | `turn.started` |
+| The agent is asleep | Keeps it. The app's `wake()` starts the agent, and then a Turn. | `turn.started` |
+
+A Message handed to the harness as its Turn ends is not lost and not shown twice: the harness starts the next Turn
+with it, and a12s reports that Turn with `turn.started` like any other. A Turn that a12s runs for its own upkeep
+(the compaction before sleep) takes no Message.
 
 A message's `delivery`:
 
@@ -420,16 +462,16 @@ A message's `delivery`:
 | `none` | Nothing to deliver: `to_id` is `owner` or null. |
 | `queued` | Waiting in the app. |
 | `sent` | In the agent's a12s inbox; `a12s_message_id` set. |
-| `delivered` | A `turn.started` event listed that a12s Message id. |
+| `delivered` | A `turn.started` or a `turn.steered` event listed that a12s Message id. `turn_id` is that Turn, and `steered` is 1 for `turn.steered`. |
 
 Rules when a message is committed (`router.ts`):
 
-- ask or reply to an agent: `queued`, then the dispatcher runs.
-- note to an agent: `queued`. It is **never sent to a12s by itself**, because a Message to an idle awake agent starts
-  a Turn. It rides along: when the dispatcher sends an ask or reply to that agent, it appends that agent's queued
-  notes to the same body and marks them `sent` with the same a12s Message id.
-- anything to `owner`, a note with no receiver, or a reply to an asker who has left the team: `none`.
+- A message to a current agent: `queued`, then the dispatcher runs.
+- A message to `owner`, or with no receiver: `none`.
 - A `post` returns only after its transaction has committed. The dispatcher runs after the commit, not inside it.
+
+No rule looks at what a message is for, at what it answers, or at how many came before it. Section 5.9 records
+those facts; nothing acts on them.
 
 **The dispatcher** (`dispatcher.ts`) is one function, `run()`, serialized (a run requested during a run sets a flag
 and runs once more). It is called after every committed message, every a12s phase change, every settings change,
@@ -442,7 +484,7 @@ when a team's cannot be read, its awake agents are unknown, so the run wakes nob
 ```
 if settings.paused: return
 awake = agents whose a12s phase is not Asleep, plus the just-woken set
-candidates = agents with a queued ask or reply, and asleep agents with pending a12s Messages,
+candidates = agents with a queued message, and asleep agents with pending a12s Messages,
              ordered by their best queued message: from 'owner' first, then oldest created_at
 for each candidate:
   team paused                      -> skip
@@ -451,7 +493,7 @@ for each candidate:
   agent asleep:
     awake count >= awake_cap       -> skip
     free disk < min_free_disk_gb   -> skip
-  send every queued ask and reply for it, oldest first, the notes riding on the first
+  send every queued message for it, oldest first
   if it was asleep and its inbox holds anything: wake() it and add it to the just-woken set
 ```
 
@@ -460,59 +502,58 @@ Free disk is measured on the volume that holds the home folder: on macOS Docker'
 the host's reach, and the VM's disk image lives on that volume.
 
 - Send, then wake: the agent wakes with its work already pending.
+- A message for an agent that is awake needs no wake, so the awake cap never holds it; pause and the budget do.
 - All run-time a12s calls use the team's prefix token client.
 - Each send passes `replaceKey: <studio message id>`, so a send repeated after a crash replaces the pending copy.
 - A send that fails leaves the message `queued` and stops that agent's sends for the run, so order holds; the next
   run retries. `inbox_full` waits for the next tick.
 - Skipped agents show presence `waiting` with the reason (cap, budget, paused, disk).
 
-**What the agent receives.** The a12s Message has `sender: "studio"` and `metadata: { thread, message, kind, from }`.
+**What the agent receives.** The a12s Message has `sender: "studio"` and `metadata: { thread, message, from }`.
 Its body:
 
 ```
 thread th_4k2m9x7c1a0b "Launch page copy"
-ask m_8d1f0c3e5a7b from owner
+message m_8d1f0c3e5a7b from owner
 ---
 Draft the hero section and the three feature blurbs.
 ---
-To answer: post(kind="reply", ask="m_8d1f0c3e5a7b")
 ```
 
-A reply reads `reply m_… from dev to your ask m_…` and has no "To answer" line; neither has an ask from `system`,
-which takes no reply, and an ask with no thread has no `thread` line. A file adds
-`file: <STUDIO_URL>/files/<message id>/<name>`. Riding notes follow, at most 20, each cut at 500 characters:
+A message with no thread (from `system`) has no `thread` line. A file adds
+`file: <STUDIO_URL>/files/<message id>/<name>`. The body says nothing about answering: whether a message deserves
+an answer is the receiver's judgement, under the basics (section 6).
 
-```
-notes since your last message:
-- [th_4k2m9x7c1a0b] dev: Staging is rebuilt.
-```
+### 5.4 The owner's messages, and "needs you"
 
-### 5.4 Replies
-
-- One reply per ask (`messages_one_reply`). A reply's target must be kind `ask`, so a reply cannot be replied to.
-- A reply to an agent's ask is queued for the asker and wakes it. A reply to the owner's ask is `none`.
-- The owner answers an agent's question from its Needs You card or inline in the thread: that is a `reply` from
-  `owner` with `ask_id` set. Everything else the owner writes is an `ask` to the agent addressed with @, else the
-  thread's owner; a new thread goes to the lead.
+- Everything the owner writes is a message to the agent addressed with @, else to the thread's owner. A new thread
+  goes to the agent addressed, else to the lead, and that agent owns it.
+- A thread **needs you** while it is open and holds a message with `to_id = 'owner'` whose `created_at` is later
+  than the thread's `owner_seen_at`. Each such thread has one card in the Needs You list (section 7.3).
+- `owner_seen_at` is set to now when the owner posts in the thread, in the same transaction as the message, and by
+  `POST /threads/:thread/seen` (Mark read). A thread set to done needs nobody.
+- The reply box of the card posts in the card's thread to the sender of its newest message for the owner.
+- Agents see the same status on the board that `read` returns.
 
 ### 5.5 When an agent answers without posting
 
-An agent's plain output is not a message. If a completed Turn delivered an ask from `owner` and the agent made no
-`post` in that thread during the Turn, the app stores the Turn's text (if not empty) as a `note` from the agent to
-`owner` with `implicit = 1`. The ask stays open for a real reply. This is the only message the app writes on an
-agent's behalf.
+An agent's plain output is not a message. If a completed Turn received a message from `owner`, at its start or
+steered into it, and the agent made no `post` in that message's thread during the Turn, the app stores the Turn's
+text (if not empty) as a message from the agent to `owner` in that thread, with the owner's message as its cause.
+It is a message like any other, so the thread needs the owner. This is the only message the app writes on an agent's
+behalf.
 
 ### 5.6 When a post could not reach the app
 
 An agent's Studio tool call fails without the app hearing of it when the app is stopped or a12s cannot reach it. The
 agent ends its Turn, and nothing would wake it to try again. So when `live.ts` stores a finished Turn that it did not
 follow whole (it read the Turn from a12s: the Turn started or ran while the app was stopped or the feed was down, or
-a `gap` fell in it) and a12s lists a failed call to a Studio tool in that Turn, it writes one ask from `system` to
+a `gap` fell in it) and a12s lists a failed call to a Studio tool in that Turn, it writes one message from `system` to
 that agent in the same transaction as the `turns` row: Studio could not be reached, use `read` to see what arrived,
-post again what is missing. The dispatcher delivers it and wakes the agent like any ask.
+post again what is missing. The dispatcher delivers it like any message.
 
 The app answers every Studio call of a Turn it followed whole, so a failed call there is a refusal the agent has
-already read, and nothing is written. A refusal inside a Turn the app did not follow whole also draws the ask; the
+already read, and nothing is written. A refusal inside a Turn the app did not follow whole also draws the message; the
 agent finds with `read` that nothing is missing.
 
 ### 5.7 Pause
@@ -522,7 +563,7 @@ left to finish (it may have read the old flag, and would wake an agent after its
 scope gets a plain `sleep()`, which ends its Turn. No a12s inbox hold and no held sleep are used. Messages already
 `sent` stay in the a12s inbox; nothing wakes the agent, so they wait. Sleep also ends an agent's background work
 (section 7.2). Each agent that was working when it was put to sleep (`Busy`, or with background work in its a12s
-status) is queued one system ask (`from_id = 'system'`, no thread): `You were paused while working, and any
+status) is queued one system message (`from_id = 'system'`, no thread): `You were paused while working, and any
 background work was stopped. Continue where you stopped.` The pause holds it like any other message. Queuing it at
 pause time, when the app knows who was working, needs no record of when the pause began.
 
@@ -538,12 +579,31 @@ agents put to sleep with work in their inbox are woken, and the queued messages 
   team. Running Turns finish. A Needs You card offers "Raise budget"
   (edits the limit in place). The hold ends when the sum drops below the limit: at midnight or after an edit.
 - **Scheduled wakes**: the scheduler tick (every 30 s) takes each `wakes` row with `due_at <= now` and, in one
-  transaction, inserts a system ask to the agent (`scheduled wake w_…: <note>`, in the wake's thread if set) and
+  transaction, inserts a system message to the agent (`scheduled wake w_…: <note>`, in the wake's thread if set) and
   either deletes the row or, for a repeat, moves `due_at` forward to the first time after now on its own cycle (a
-  wake missed while the app was stopped fires once). The ask then goes
+  wake missed while the app was stopped fires once). The message then goes
   through the dispatcher like any other, so pause, budget and the cap apply to it.
 - The same tick asks the broker for attention items (section 9.6) and re-runs the dispatcher, which covers the
   midnight budget reset.
+
+### 5.9 The chain record
+
+Every message row says what set it off and what it did to its receiver, so a chain of agents setting each other
+off can be read back from the `messages` table alone. These fields are a record. Nothing in the app acts on them.
+
+- `cause_id` is set when an agent posts: the message most recently delivered to that agent in the Turn it is
+  posting from, which is the newest row with `to_id` = the caller and `turn_id` = the caller's running Turn.
+  `live.ts` knows the running Turn. A post made while no Turn runs (a background sub-agent's) has no cause, and
+  neither has a message from `owner` or `system`.
+- `depth` is the cause's `depth` plus one, and 0 without a cause. An owner's message is 0, the first message an
+  agent writes because of it is 1, an answer to that is 2.
+- `turn_id` and `steered` are set together with `delivered` (section 5.3): the Turn that received the message, and
+  whether the message joined it or started it.
+
+From these a thread's chain is plain: its messages in order, each with its cause, its depth, how it was delivered
+and the Turn that took it. `ThreadView.chain` carries the thread's totals: the greatest `depth` among its messages,
+and the number and summed `cost_usd` of the `turns` rows whose `thread_id` is this thread. The app also writes one
+log line when a message is delivered: its id, sender, receiver, cause, depth, Turn and `steered`.
 
 ## 6. The a12s Fleet
 
@@ -587,9 +647,12 @@ A Service has one port number: agents call `http://studio.a12s:7410` and the Con
 
 **Agent spec.** `a12s/spec.ts` exports one pure function, `agentSpec(team, agent, addons)`, that returns the whole
 spec; `addons` are the manifests of the add-ons the team has on. Fleet `defaults` are not used: the function is the
-single place a spec is decided. Hiring calls `putAgent(create-only)`; any edit to the brief, a role or an agent
+single place a spec is decided. Hiring calls `putAgent(create-only)`; any edit to the team's name or an agent
 setting, and turning an add-on on or off, calls `putAgent` again with the fresh spec, which a12s applies at the
-agent's next idle moment.
+agent's next idle moment. A brief, a rule or a role is not in the spec (see "Instruction layers" below), so editing
+one writes no spec. At every start the app puts each agent's spec again, as it does the external Services; a12s
+leaves an agent computer whose spec has not changed alone, so a spec that a release of Studio has changed reaches
+every agent at its next idle moment.
 
 ```yaml
 harness:
@@ -600,15 +663,34 @@ harness:
     hooks:
       SessionStart:
         - matcher: "startup|clear|compact"
-          hooks: [{ type: command, command: /home/agent/bin/load-notes }]
+          hooks:
+            - { type: command, command: /home/agent/bin/load-rules owner }
+            - { type: command, command: /home/agent/bin/load-rules team }
+            - { type: command, command: /home/agent/bin/load-rules role }
+            - { type: command, command: /home/agent/bin/load-notes }
+      UserPromptSubmit:
+        - hooks:
+            - { type: command, command: /home/agent/bin/load-rules owner changed, timeout: 10 }
+            - { type: command, command: /home/agent/bin/load-rules team changed, timeout: 10 }
+            - { type: command, command: /home/agent/bin/load-rules role changed, timeout: 10 }
 image: slim
 credentials: [anthropic]
-instructions: <core> + <add-ons> + "\n\n# Team: <name>\n" + <team purpose> + "\n\n# Your role\n" + <agent role>
+instructions: <core> + <add-ons>
 files:
+  bin/load-rules: |
+    #!/bin/sh
+    seen="$HOME/.studio/rules-$1"
+    new=$(curl -sf --max-time 5 "<STUDIO_URL>/rules/$1") || { [ "$2" = changed ] || rm -f "$seen"; exit 0; }
+    if [ "$2" = changed ] && [ -f "$seen" ]; then
+      [ "$new" = "$(cat "$seen")" ] && exit 0
+      echo "This has changed. It replaces what you were given before:"
+    fi
+    mkdir -p "$HOME/.studio" && printf '%s' "$new" > "$seen"
+    printf '%s\n' "$new"
   bin/load-notes: |
     #!/bin/sh
     f="$HOME/memory/notes.md"
-    [ -s "$f" ] && { echo "Your notes, from ~/memory/notes.md:"; head -c 16000 "$f"; }
+    [ -s "$f" ] && { echo "Your notes, from ~/memory/notes.md:"; head -c 9000 "$f"; }
     exit 0
   .gitconfig: |
     [url "<BROKER_URL>/github.com/"]
@@ -620,6 +702,7 @@ files:
 power:
   sleepAfterIdle: <agent.sleep_after_idle>          # default 15m
   compactBeforeSleep: { minTokens: <agent.compact_min_tokens> }   # default 100000
+inbox: { duringTurn: steer }                        # a Message for a working agent joins its Turn (section 5.3)
 grants: { send: [] }
 uses: [studio, { name: broker, mcp: false }, <the instance of each add-on the team has on>]
 egress: { allow: ["*"] }
@@ -634,7 +717,8 @@ Your team has these add-ons. Their tools are in your tool list.
 - <name>: <description> Its tools start with mcp__a12s-<instance name>__.
 ```
 
-`memory/notes.md` is deliberately not in `files`: a12s rewrites spec files, and the notes belong to the agent.
+`memory/notes.md` is deliberately not in `files`: a12s rewrites spec files, and the notes belong to the agent. The
+harness takes at most 10,000 characters from one hook, so `load-notes` prints no more than 9,000.
 
 **Core instructions** (exact text; `{…}` filled by `agentSpec`):
 
@@ -671,6 +755,62 @@ Access
   or to request more. The owner decides.
 ```
 
+**Instruction layers.** What an agent is told comes from five places. Each has one store, one way to the agent and
+a fixed set of writers.
+
+| Layer | Stored | Reaches the agent through | Written by |
+|---|---|---|---|
+| 1. Studio basics | The core instructions above, in `spec.ts`. | `instructions`, which a12s writes to the agent's `CLAUDE.md`. | Nobody at run time. |
+| 2. Owner rules | `rules` rows with no team. | `load-rules owner` | The owner: `PUT /rules`. |
+| 3. Team rules | `rules` rows of the team with no agent. They are loaded under the team's name and purpose. | `load-rules team` | The owner: `PUT /teams/:team/rules`. The team's lead: the `rules` tool. |
+| 4. Role | `rules` rows of the agent. | `load-rules role` | The owner: at hire, and `PATCH /agents/:agent { role }`. The team's lead: the `rules` tool. |
+| 5. Notes | `~/memory/notes.md` on the agent's home drive. | `load-notes` | The agent. |
+
+*Writing a layer* (`rules.ts`). One function writes a version: a new `rules` row with the whole text and its
+author. Nothing in `rules` is ever updated or deleted, and the newest row of a scope is its text. A text equal to
+the current one writes nothing. Restoring an earlier version is a write of that version's text, so the history only
+grows. The owner rules and a role hold at most 8,000 characters and the team rules 4,000, which with a purpose of at
+most 4,000 keeps every layer under what the harness takes from one hook. An agent's first role version is written
+at hire, with author `owner`, in the transaction that inserts the agent.
+
+*Who may write* is decided from the caller, in `rules.ts`, never from an input. The `rules` tool's `set` is allowed
+when `caller.agentId` is the `lead_agent_id` of the caller's team, and it writes through `forTeam(caller.teamId)`:
+a lead reaches its own team's rules and the roles of its own team's agents, its own included, and nothing else. The
+stored author is `caller.agentId`. No agent route writes the owner rules, and the basics are not data. Any agent may
+`read` its team's layers and a teammate's role, so it can say to the lead exactly what it wants changed.
+
+*How a layer reaches an agent.* `GET /rules/<layer>` on the agent listener answers the caller's own text:
+
+```
+owner    # Owner rules, for every agent
+         <the owner rules, or "None.">
+team     # Team: <name>
+         <purpose>
+
+         ## Team rules
+         <the team rules, or "None.">
+role     # Your role
+         <the role>
+```
+
+`bin/load-rules <layer>` prints that text and keeps what it printed in `~/.studio/rules-<layer>`. At a session's
+start, and after a compaction, it runs for each layer and always prints: a new or compacted session holds none of
+it. On `UserPromptSubmit`, which the harness runs for every Message, whether it starts a Turn or joins one, it
+runs with `changed` and prints a layer only when the text differs from what it printed last. If the app does not
+answer it prints nothing; after a failed load at a session's start it forgets what it printed, so the next Message
+loads the layer.
+
+So a changed rule or role reaches an agent with the next Message it gets, also in the middle of a Turn, and an
+unchanged one costs one local request and no context. An edit wakes nobody: it is not work. An owner who wants a
+rule followed at once writes to the agent.
+
+*Why these layers are not in the spec.* a12s writes `instructions` to `CLAUDE.md`, and it applies a changed spec by
+restarting the agent computer at its next idle moment. That ends the harness process with its background work, and
+it waits for as long as background work runs. The harness also reads `CLAUDE.md` once, when a session starts, into
+the head of the conversation, so new text there costs a read of the whole conversation without the prompt cache. A
+hook's output is added at the end of the conversation, when a Message arrives. The basics change only with a
+release of Studio, so they are in the spec; everything the owner or a lead edits is loaded by the hook.
+
 **Removing.** Firing an agent: `removeAgent`, set `removed_at`, delete its wakes, mark its queued messages `none`.
 Deleting a team: turn off its add-ons (section 10.3), purge it in the broker (section 9.5), then remove its agents
 and its token, then set
@@ -679,10 +819,11 @@ removed, so the delete can be run again. A team's lead cannot be fired. Agent sl
 at hire.
 
 **Creating a team** does all a12s work first (the prefix token, then `putAgent` for each template agent, lead first)
-and then inserts the team and agent rows in one transaction. The slug is claimed in memory before the first a12s
-call and released once the rows are in or the create has failed, so two creates running at once get different
-slugs and neither can remove the other's token or agent computers. If an a12s step fails, the agent computers and the
-token made so far are removed and nothing is written, so the slug stays free.
+and then inserts the team and agent rows, with each agent's first role version, in one transaction. The slug is
+claimed in memory before the first a12s call and released once the rows are in or the create has failed, so two
+creates running at once get different slugs and neither can remove the other's token or agent computers. If an a12s
+step fails, the agent computers and the token made so far are removed and nothing is written, so the slug stays
+free.
 
 ## 7. Live state
 
@@ -721,8 +862,15 @@ type AgentView = { id, slug, roleLine, model,
                    queued: number, error?: string };                 // queued: messages it has not received yet
 type WorkItem = { id, kind: "agent" | "task", description, threadId: ThreadId | null, startedAt,
                   line: string | null };                             // line: what a sub-agent is doing now
-type ThreadSummary = { id, title, ownerId, status: "open" | "needs_you" | "done", updatedAt, preview, asksForYou };
-type ThreadView = { id, teamId, title, ownerId, status, messages: MessageView[], hasMore };  // newest 200
+type ThreadSummary = { id, title, ownerId, status: "open" | "needs_you" | "done", updatedAt, preview,
+                       forYou };                                     // messages to the owner since owner_seen_at
+type ThreadView = { id, teamId, title, ownerId, status, messages: MessageView[], hasMore,   // newest 200
+                    chain: { depth, turns, costUsd } };              // the thread's totals (section 5.9)
+type MessageView = { id, from, to, body, file, at,
+                     cause: MessageId | null, depth,                 // section 5.9
+                     delivered: { turn, steered, at, costUsd } | null };
+                     // null: it has no agent to reach, or has not reached it yet. costUsd: that Turn's, null until
+                     // the Turn has finished
 ```
 
 **Writes.** Every owner route answers only after its transaction has committed and, where it calls a12s or the
@@ -739,8 +887,9 @@ later; every feed that becomes ready is followed by a resync.
 
 | a12s event | Effect |
 |---|---|
-| `agent_computer.phase` | Presence: `Asleep` → asleep; `Busy` → working; `Ready` with at least one work item → working; `Error` → error (with its message); any other → awake; unknown until a12s has reported a phase. An agent with a queued ask or reply that `blockedReason` holds shows waiting. A phase other than `Busy` or `Ready` empties the agent's work items: no harness session lives through it. Recorded for any agent computer name, because a new agent reports its phases before its row is committed. Runs the dispatcher. |
-| `turn.started` | Marks each Studio message whose `a12s_message_id` is in `inbox.messages` as `delivered`. Sets the Turn's thread to that of the first one; a Turn with no Messages (the harness starts one by itself when background work ends) takes the thread of the work item that ended last, once. Line: "Working". Clears text. |
+| `agent_computer.phase` | Presence: `Asleep` → asleep; `Busy` → working; `Ready` with at least one work item → working; `Error` → error (with its message); any other → awake; unknown until a12s has reported a phase. An agent with a queued message that `blockedReason` holds shows waiting. A phase other than `Busy` or `Ready` empties the agent's work items: no harness session lives through it. Recorded for any agent computer name, because a new agent reports its phases before its row is committed. Runs the dispatcher. |
+| `turn.started` | Marks each Studio message whose `a12s_message_id` is in `inbox.messages` as `delivered`, with this Turn and `steered` 0. Sets the Turn's thread to that of the first one; a Turn with no Messages (the harness starts one by itself when background work ends) takes the thread of the work item that ended last, once. Line: "Working". Clears text. |
+| `turn.steered` | Marks each Studio message whose `a12s_message_id` it lists as `delivered`, with this Turn and `steered` 1. The Turn keeps its thread, line and text. |
 | `text.delta` | Appends to the Turn's text and emits `live`. If no tool is running, line: "Writing". |
 | `tool.started` | With no `parent`: sets the agent's line from the table below; an `Agent` or `Task` call also adds a work item of kind agent (id: the call's id; description: the call's `description`; thread: the Turn's). With a `parent` (a sub-agent's call): sets the line of the work item whose launching call is the `parent`, from the same table. A background sub-agent's calls arrive between Turns too, with no Turn. |
 | `tool.finished` | With no `parent`: removes the work item that call started, unless a12s has reported it as background work. Nothing for the lines; the inspector's log shows it. |
@@ -748,7 +897,7 @@ later; every feed that becomes ready is followed by a resync.
 | `task.finished` | Removes the work item, whatever its status, and keeps its thread for the Turn that follows. |
 | `turn.finished` | Writes the `turns` row (section 7.4), applies sections 5.5 and 5.6, clears the line and text, removes the work items that are not background work (their calls end with the Turn), runs the dispatcher. A Turn followed whole (every event from `turn.started` on, no resync since) is stored from its events; any other is read from a12s `turns`, which has all its text, Messages and tool calls; a12s stores the Turn before it sends the event. |
 | `service.phase` | For an add-on instance, its status: `Ready` → ready; `Error` or `Unhealthy` → error (with its message); any other → starting. Other Services are ignored. |
-| `gap`, or a new feed | Resync: `status()` for phases and background work (an item a12s no longer lists is removed; one it lists that is not known is added with a12s's id, kind, description, start time and launching call, and no thread; a known one keeps its thread and line; work that is not background is dropped); for each agent, recent Turns not yet in `turns`, stored the same way; for each `sent` message, its a12s state; `services()` for add-on statuses. Running Turns are no longer whole. |
+| `gap`, or a new feed | Resync: `status()` for phases and background work (an item a12s no longer lists is removed; one it lists that is not known is added with a12s's id, kind, description, start time and launching call, and no thread; a known one keeps its thread and line; work that is not background is dropped); for each agent, recent Turns not yet in `turns`, stored the same way; for each `sent` message, its a12s state, with the Turn that took it and whether it was steered; `services()` for add-on statuses. Running Turns are no longer whole. |
 
 The same resync runs at app start, which is how state survives a restart.
 
@@ -778,13 +927,14 @@ event that ends it. No clock in the app or the browser decides that an agent is 
 | `Grep`, `Glob` | Searching |
 | `WebFetch`, `WebSearch` | Browsing `<host or query>` |
 | `Agent`, `Task` | Working with a sub-agent |
-| studio `post` | Writing to `<receiver>` (a reply: Writing a reply) |
-| other studio tools | Checking the board / the roster / access / its schedule |
+| studio `post` | Writing to `<receiver>` (with no receiver: Writing in the thread) |
+| other studio tools | Checking the board / the roster / the rules / access / its schedule |
 | anything else | Using `<tool name>` |
 
 The inspector's Now tab replays the current or a past Turn's tool log from a12s through
 `GET /api/agents/:id/turns/:turn/events`; the app does not store tool events. The route answers with what the Turn
-has journaled so far. For a sleeping agent it answers `asleep`, and the inspector offers Wake.
+has journaled so far. A `turn.steered` event is a row of that log: the message, who sent it, and that it joined the
+Turn. For a sleeping agent the route answers `asleep`, and the inspector offers Wake.
 
 ### 7.3 Needs You
 
@@ -792,7 +942,7 @@ Derived on every state build, never stored:
 
 | Item | Source | Actions |
 |---|---|---|
-| question | An ask with `to_id = 'owner'` and no reply. | Reply box. |
+| message | A thread that needs you (section 5.4). The card shows its newest message to the owner and how many more wait. | Reply box, Mark read. |
 | access request | The broker's pending requests (section 9.6). | Approve (with expiry), Deny; add the credential first if the host has none. |
 | agent error | a12s phase `Error`. | Open inspector, Wake. |
 | failed Turn | An agent's latest Turn has status `failed` and `acked_at` is null. | Open inspector, Dismiss. |
@@ -826,11 +976,14 @@ POST   /teams/:team/agents            { slug, role, model }
 PATCH  /agents/:agent                 { role?, model?, sleepAfterIdle?, compactMinTokens?, cpu?, memory? }
 DELETE /agents/:agent
 POST   /agents/:agent/power           { state: "awake" | "asleep" }      POST /agents/:agent/stop
-POST   /teams/:team/threads           { title?, body, to? }              (first message is an ask)
-POST   /threads/:thread/messages      { body, to?, ask? }                (ask set: a reply)
+POST   /teams/:team/threads           { title?, body, to? }
+POST   /threads/:thread/messages      { body, to? }                      POST /threads/:thread/seen
 PATCH  /threads/:thread               { status?, title?, owner? }
 GET    /threads/:thread/messages?before=
 PATCH  /settings                      { awakeCap?, defaultDailyBudgetUsd?, minFreeDiskGb?, paused?, default… }
+GET    /rules?before=                 PUT /rules                         { body }   (the owner rules)
+GET    /teams/:team/rules?before=     PUT /teams/:team/rules             { body }
+GET    /agents/:agent/role?before=    (a role is written with PATCH /agents/:agent)
 POST   /turns/:turn/ack
 GET    /agents/:agent                 (the six fields PATCH takes, as they are now)
 GET    /agents/:agent/turns           GET /agents/:agent/turns/:turn/events
@@ -858,12 +1011,14 @@ credential's `secret` passes through the app's memory once and is never logged o
 
 **The inspector's routes.** An agent's id names its team; an id that names no current team or agent is a 404, and
 every lookup under it (an inbox message, a Turn) goes through that agent, so another agent's or team's id is missing
-like an unknown one. `PATCH /agents/:agent` puts the agent's spec again with the changed fields and writes the row only
-after a12s has taken it; `null` for `cpu` or `memory` is a12s's default. `GET …/turns` answers a12s's last 20 Turns,
+like an unknown one. `PATCH /agents/:agent` with a setting (`model`, `sleepAfterIdle`, `compactMinTokens`, `cpu`,
+`memory`) puts the agent's spec again with the changed fields and writes the row only after a12s has taken it;
+`null` for `cpu` or `memory` is a12s's default. With `role` it writes a role version and puts no spec (section 6).
+`GET /agents/:agent` answers the role's text now with the five settings. `GET …/turns` answers a12s's last 20 Turns,
 each with its text; `GET …/turns/:turn/events` answers its tool calls, each with its "doing now" line and its input
 and output cut at 4000 characters. `GET …/inbox` answers the agent's messages that are `queued` or `sent`, oldest
 first, each with the a12s Message it was sent as (`sentAs`, null while queued). Removing one marks it `none`; a
-`sent` one is first withdrawn from a12s, and the notes that rode on it leave with it. Clearing marks every `queued`
+`sent` one is first withdrawn from a12s. Clearing marks every `queued`
 one `none`, clears the a12s inbox, and marks `none` the `sent` ones a12s reports withdrawn; a Message a Turn has
 already taken is not withdrawn and stays `sent`. Files are read and written through a12s at a path `homePath`
 accepts. An a12s refusal keeps its meaning: `not_found` is a 404, `asleep` and `busy` a 409 (the inspector offers
@@ -878,11 +1033,17 @@ An attachment is always downloaded, never shown: both listeners answer it as `ap
 the owner's listener a page of Studio's own origin could drive the owner API. In a conversation, a message's file is
 a link to the owner's route.
 
+The three rules `GET`s answer `{ versions: [{ id, body, author, at }], hasMore }`, newest first, 50 a page; the
+first version of the first page is the text now. A `PUT`, and a `PATCH` with `role`, writes a version with author
+`owner` (section 6) and answers `{ rev }`. The state carries no rule text, so the UI reads the `GET` again whenever
+the `rev` moves, which a lead's write through the `rules` tool moves too. The differences between two versions are
+made in the browser (`logic/diff.ts`, line by line). Restore is a `PUT` of an earlier version's `body`.
+
 ### 7.6 Message bodies
 
 Agents write markdown. The web renders the body of every message from an agent, in the conversation and in folded
-talk, and a working agent's streaming text, as markdown. The owner's own messages and system notes are shown as
-written. A thread's preview in the list is plain text.
+talk, and a working agent's streaming text, as markdown. The owner's own messages and messages from `system` are
+shown as written. A thread's preview in the list is plain text.
 
 One part, `parts/markdown.tsx`, does all of it, with the options in `logic/markdown.ts`. `markdown-to-jsx` parses
 the text into React elements, so no HTML string is set anywhere in the web. A body is untrusted text: an agent
@@ -907,6 +1068,24 @@ code block scrolls sideways inside the message.
 `img` tag, with or without an event attribute, comes out as text and never as an element; `javascript:`, `data:`
 and `vbscript:` links, in any letter case or with leading spaces, and relative links have no `href`; image syntax
 makes no `img`; a kept link has the `rel` and the new tab.
+
+### 7.7 Folded talk and the chain
+
+All of it is drawn from the open thread's `MessageView`s and `ThreadView.chain`; the web asks for nothing more.
+
+- **Folded talk** (`logic/fold.ts`). A run of messages in a row whose sender and receiver are both agents is one
+  line: the agents' names in the order they first write, the number of messages, and, from a depth of 3, the
+  greatest `depth` in the run (`Lead and Dev · 14 messages · 9 deep`). It opens on click. Messages from or to the
+  owner, messages from `system` and records with no receiver are never folded.
+- **The delivery line.** Under every message to an agent is one quiet line made from `delivered`: `joined Dev's
+  turn`, `woke Dev`, or `waiting for Dev` while it is null. It opens the inspector's Now tab on that Turn.
+- **The Chain view** (`logic/chain.ts`, `parts/chain.tsx`). A switch in the thread's header replaces the
+  conversation with one line per message, oldest first and unfolded: its depth, sender and receiver, the start of
+  its body, how it was delivered, and on the first message of each Turn that Turn's cost. A message's cause is
+  marked on hover and reached with a click. Above the lines: the number of messages, the deepest chain, the Turns
+  and the cost, from `chain`. Older messages page in as they do in the conversation.
+
+Nothing here warns, colours or counts toward a limit. The view exists so that a loop is seen by looking.
 
 ## 8. Templates
 
@@ -1060,8 +1239,9 @@ presets that expand to plain grants:
 `access(request)` → app → admin `POST /teams/:team/requests` (the app supplies team and agent from the caller). The
 card in Needs You shows agent, host, methods, paths, reason and the wanted lifetime. Approve creates a grant with the
 request's host, methods and paths and the expiry the owner chose, in one transaction with the status change; it is
-honoured by the next call. Deny records the decision. Either way the app posts a note to the requesting agent
-(`Access approved: …` or `Access denied: …`), which rides along with its next message. Approving a request for a host
+honoured by the next call. Deny records the decision. Either way the app sends a message from `system` to the
+requesting agent (`Access approved: …` or `Access denied: …`), delivered like any other, so an agent that ended its
+Turn to wait for the decision is woken by it. Approving a request for a host
 without a credential is refused with a fix naming the missing credential.
 
 ### 9.5 Admin API (unix socket)
@@ -1104,7 +1284,7 @@ warning on and changes no one's access. No admin route returns a secret.
 - `sweep.ts` runs each minute: it stamps `expired_at` on grants past their expiry that were not revoked and audits
   `grant.expire` with actor `broker`.
 - The warning reaches the agent through the app: the app's scheduler tick calls `GET /attention`; for each expiring
-  grant not yet warned it posts a note from `system` to the team's lead (`Access to <host> <paths> expires on
+  grant not yet warned it sends a message from `system` to the team's lead (`Access to <host> <paths> expires on
   <date>. Use access to request an extension if the team still needs it.`), then calls `POST /grants/:id/warned`, so
   the lead hears it once. The same answer feeds the access cards in Needs You, a warned grant's included. For a
   team with a pending request the app also reads `GET /teams/:team/access`, for the card's "has a credential". The
@@ -1302,9 +1482,9 @@ everything is still there and still live.
 | Package | Scope |
 |---|---|
 | P2-A Broker | The whole `packages/broker`, with the tests of section 9.7. |
-| P2-B App side | `broker-client.ts`, the `access` tool, the access routes, `scheduler.ts` with the attention items of its tick, the broker's cards in Needs You, approval and expiry notes, team purge on delete. |
+| P2-B App side | `broker-client.ts`, the `access` tool, the access routes, `scheduler.ts` with the attention items of its tick, the broker's cards in Needs You, approval and expiry messages, team purge on delete. |
 | P2-C Web | The access cards in Needs You, Team settings → Access (write-only credential form, grants with expiry and the GitHub presets, audit log), the baseline step of the new-team sheet. Built against the fixture server until P2-B lands. |
-| P2-D End to end | `packages/e2e`: `run.ts`, `studio.ts` and the P1 exit script; the core instructions' rule that an ask ends the Turn. |
+| P2-D End to end | `packages/e2e`: `run.ts`, `studio.ts` and the P1 exit script; the core instructions' rule against waiting for an answer in a loop. |
 | P2-E Exit script (after P2-B) | The P2 exit script. |
 
 Exit: approving a card gives access at once; deny and expiry take it away; another team's agent is refused; the
@@ -1316,11 +1496,18 @@ default-deny tests pass; an agent clones and pushes a repository and its contain
 |---|---|
 | P3-A Limits | Awake cap and queue order, the cost rule, budget hold with its card in Needs You, free-disk check, the `schedule` tool and scheduled wakes, the global settings sheet and Team settings → Budget, so that every global and team limit is edited in the UI. |
 | P3-B Inspector | The agent inspector: Now with the tool log, Inbox with Remove and Clear, Role and notes, Files, Terminal, Settings (model, sleep, compaction, size: every agent limit). The `file` field of `post` and attachment download. |
-| P3-D Live view | Background work under an agent: `task.started` and `task.finished` and a sub-agent's tool calls in the port, `real.ts`, `fake.ts` and `live.ts`; background work in `status()`; `work` in `AgentView`; presence working while work runs; the work list under an agent and in the conversation; the pause ask for an agent with background work. The first line of a Turn is "Working". Message bodies as markdown (section 7.6). |
-| P3-C Durability (merges last) | `scripts/backup.ts` (both databases with SQLite's backup, each home drive as a tar, to `~/a12s-studio-backups/<date>/`, 14 kept) with a nightly LaunchAgent; `scripts/restore.ts`; the documented command to export the vault key; the P3 exit script. |
+| P3-D Live view | Background work under an agent: `task.started` and `task.finished` and a sub-agent's tool calls in the port, `real.ts`, `fake.ts` and `live.ts`; background work in `status()`; `work` in `AgentView`; presence working while work runs; the work list under an agent and in the conversation; the pause message for an agent with background work. The first line of a Turn is "Working". Message bodies as markdown (section 7.6). |
+| P3-E Messages | One kind of message: the schema change, `post` and `read` without kinds, the router and the dispatcher without their rules for kinds; `inbox.duringTurn: steer` in the spec and `turn.steered` in the port, `real.ts`, `fake.ts` and `live.ts` (M10); the chain record; "needs you" from `owner_seen_at`, with Mark read; the basics' rules for messaging; folded talk, the delivery line and the Chain view (section 7.7). It needs the a12s release that steers. |
+| P3-F Rules | The `rules` table and `rules.ts`, the `rules` tool, `GET /rules/<layer>`, the hooks and `load-rules` (M11), the rules routes, the spec put again at every start; the owner rules in the global settings, Team settings → Rules and the role in the inspector, each with its history, differences and restore. |
+| P3-G Steering run (after P3-E and P3-F) | `steer.ts`; the P1 script's check that a lead does not poll. |
+| P3-C Durability (merges last of the first four) | `scripts/backup.ts` (both databases with SQLite's backup, each home drive as a tar, to `~/a12s-studio-backups/<date>/`, 14 kept) with a nightly LaunchAgent; `scripts/restore.ts`; the documented command to export the vault key; the P3 exit script. |
 
 Exit: a team runs unattended inside its budget; a forced budget stop (budget set below today's spend) and a forced
-agent error both appear in Needs You; a restore from last night's backup onto an emptied data folder works.
+agent error both appear in Needs You; a restore from last night's backup onto an emptied data folder works; two
+agents given tasks that depend on each other finish them without the owner, and every message between them is on
+screen with what set it off, how it was delivered, its depth, and the Turns and cost of the thread; a rule changed
+by the owner and one changed by a lead reach a working agent with its next message, with no restart, and each is
+restored from its history.
 
 **P4. Add-ons** (section 10).
 
@@ -1352,8 +1539,10 @@ from the README alone.
 - **One runner**, `node --test`. `npm test` runs everything that needs no Docker; that is what CI runs.
 - **Fake a12s.** `a12s/fake.ts` implements the port in memory: agent computers with phases, inboxes with pending
   Messages, `wake` and `sleep`, prefix-token scoping (a call on a name outside the token's prefix throws
-  `out_of_prefix`), and a scripted event feed (`turn.started`, `text.delta`, `tool.started`, `turn.finished`). Tests
-  build the real app on it and call tools through `resolveCaller` with a caller header, exactly as the proxy would.
+  `out_of_prefix`), and a scripted event feed (`turn.started`, `text.delta`, `tool.started`, `turn.finished`). A
+  Message sent to a `Busy` agent computer whose spec has `inbox.duringTurn: steer` is reported with `turn.steered`
+  in the running Turn; without it, the Message waits for the next Turn. Tests build the real app on it and call
+  tools through `resolveCaller` with a caller header, exactly as the proxy would.
 - **Risky code gets real tests**, written before the code they guard:
   - *Caller auth:* no header, two headers, unknown agent, removed agent, agent of a deleted team → refused; no tool
     accepts a team or a "from".
@@ -1361,8 +1550,12 @@ from the README alone.
     missing one; `post` to another team's agent is refused; a property test runs random tool calls from two teams and
     asserts every row's `team_id` equals its caller's team and no read returns another team's row; run-time a12s
     calls for team A never name a team B agent (asserted by the fake).
-  - *Routing:* ask and reply are sent and wake; a note alone never produces an a12s send; notes ride with the next
-    ask; one reply per ask; no reply to a reply; owner asks jump the queue; pause holds and resume delivers in order;
+  - *Routing:* a message to an agent is sent, and wakes it if it sleeps; one to the owner or to nobody produces no
+    a12s send; a message for a working agent is delivered by `turn.steered` into the running Turn and starts none;
+    one that misses the Turn starts the next and is delivered once; no post is refused for what it answers or for how
+    many came before it; cause and depth along a chain through three agents, and none for a post outside a Turn; a
+    thread needs the owner from an agent's message to them until they post or mark it read, and never when done;
+    owner messages jump the queue; pause holds and resume delivers in order;
     the cap is never exceeded under random arrivals; a budget hold stops sends and an edit releases them; a restart
     between commit and send neither loses nor duplicates.
   - *Broker:* section 9.7.
@@ -1370,6 +1563,12 @@ from the README alone.
     forwarder, an HTTPS stub upstream). The exit path of Phase 2 end to end; `access` takes no team or agent; one
     team's `list` shows nothing of another's; another team's request id in an owner URL is a 404; the agent listener
     serves no approve or credential route; a stored secret appears in no log line, response or state.
+  - *Rules:* a `set` by an agent that is not its team's lead is refused and writes nothing; a lead cannot name
+    another team's agent; no agent route writes the owner rules; `GET /rules/<layer>` answers only the caller's own
+    text; every write is one new row with its author, an equal text writes none, and a restore is a new version;
+    editing a brief, a rule or a role makes no `putAgent` call. `load-rules` is run as the script it is, against a
+    local server: it prints every layer at a session's start, only a changed layer on a prompt, nothing while the
+    server is down, and the layer again on the first prompt after a failed start.
   - *Add-ons:* section 10.5.
   - *Owner gate:* wrong login, missing headers with a foreign `Host`, forwarded request without identity, cross-origin
     write → refused.
@@ -1384,7 +1583,7 @@ from the README alone.
     `E2E_GITHUB_TOKEN`. The ports are constants, so a Studio installed on the same Mac is stopped while it runs.
     Whatever the chosen scripts need and is missing is named at the start, with its fix, before anything is created.
   - `run.ts` creates a Fleet named `studio-e2e` under a temp `STUDIO_HOME`, sets its `anthropic` credential, starts
-    the real broker and the real app there, sets the default model to `haiku`, runs the exit scripts in order, and
+    the real broker and the real app there, sets the default model to `haiku`, runs the scripts in order, and
     removes the Fleet with its drives, what a script made elsewhere (the branch `p2` pushes) and the folder whether
     they pass, fail or are interrupted. It prints no secret.
   - A script drives Studio only as the owner and agents do: the owner API, the state stream, and a command run
@@ -1394,7 +1593,8 @@ from the README alone.
 
   | Script | Shows |
   |---|---|
-  | `p1.ts` | Two teams are created and both leads answer the owner. A lead asks a second agent, ends its Turn after the ask, and the answer comes back in the thread. The app is stopped and started mid-conversation; the state is the same and still live. |
+  | `p1.ts` | Two teams are created and both leads answer the owner. A lead writes to a second agent and does not call `read` to wait for the answer, which comes back in the thread. The app is stopped and started mid-conversation; the state is the same and still live. |
   | `p2.ts` | From inside an agent's container a call with no grant is a 403. The agent requests access with the `access` tool; the card appears; approving makes the same call succeed at once; a second request, denied, stays a 403; a grant with a short expiry is a 403 after it; the same call from another team's agent is a 403. The agent clones the repository, commits and pushes a branch, which GitHub then lists; the token is in neither the container's environment nor its home drive. |
-  | `p3.ts` | With the awake cap at 1 and asks for two agents, two are never awake together. A budget set below today's spend holds the team and shows its card; raising it delivers. A forced agent error shows its card. An agent asked to run a command in the background and end its Turn stays working, with the command listed under it and no Turn, until the command ends and the agent reports. After a backup, the data folder is emptied and restored, and teams, threads, grants and an agent's notes are as before. |
+  | `p3.ts` | With the awake cap at 1 and messages for two agents, two are never awake together. A budget set below today's spend holds the team and shows its card; raising it delivers. A forced agent error shows its card. An agent asked to run a command in the background and end its Turn stays working, with the command listed under it and no Turn, until the command ends and the agent reports. After a backup, the data folder is emptied and restored, and teams, threads, grants and an agent's notes are as before. |
+  | `steer.ts` | Two agents get tasks that depend on each other: each needs something only the other produces, and both must check the joined result. The owner writes one message and nothing more. When the thread is done the script prints, for that thread: the messages between the two agents, how many joined a running Turn and how many started one, the deepest chain, the Turns and the cost. It fails only if the work is not done in 20 minutes or the two exchange more than 40 messages; every other number is a report, not a verdict. It runs three times and prints the three rows. Then a message sent to an agent in the middle of a long command is delivered into that Turn. Then a team rule is changed while an agent works and the agent gets a message: the file `load-rules` keeps in the agent's home holds the new text, and the agent computer has not restarted; the lead changes a role with the `rules` tool and another agent's attempt is refused. |
   | `p4.ts` | The example add-on is turned on for one team: its agent uses the tool, the broker's audit shows the call under the instance's name, the reported cost is in the team's spend and a budget below it holds the team; the instance's container holds no secret; another team's agent cannot reach it; turned off, the grants are revoked and the Service is gone. |
