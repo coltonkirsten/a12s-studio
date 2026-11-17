@@ -8,11 +8,12 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { p1 } from "./p1.ts";
+import { p2 } from "./p2.ts";
 import { missing, PORTS } from "./preflight.ts";
 import { connectStudio, type Studio, step } from "./studio.ts";
 
 const FLEET = "studio-e2e";
-const SCRIPTS: Record<string, (studio: Studio) => Promise<void>> = { p1 };
+const SCRIPTS: Record<string, (studio: Studio) => Promise<void>> = { p1, p2 };
 const repo = fileURLToPath(new URL("../../..", import.meta.url));
 
 const chosen = process.argv.length > 2 ? process.argv.slice(2) : Object.keys(SCRIPTS);
@@ -31,11 +32,15 @@ function portBusy(port: number): Promise<boolean> {
 }
 
 const version = spawnSync("a12s", ["version"], { encoding: "utf8" });
-const problems = missing(process.env, {
-  docker: spawnSync("docker", ["info"], { stdio: "ignore" }).status === 0,
-  a12s: version.status === 0 ? (/^a12s v([0-9.]+)/.exec(version.stdout)?.[1] ?? null) : null,
-  busyPorts: (await Promise.all(PORTS.map(async (port) => ((await portBusy(port)) ? [port] : [])))).flat(),
-});
+const problems = missing(
+  process.env,
+  {
+    docker: spawnSync("docker", ["info"], { stdio: "ignore" }).status === 0,
+    a12s: version.status === 0 ? (/^a12s v([0-9.]+)/.exec(version.stdout)?.[1] ?? null) : null,
+    busyPorts: (await Promise.all(PORTS.map(async (port) => ((await portBusy(port)) ? [port] : [])))).flat(),
+  },
+  chosen,
+);
 if (problems.length > 0) {
   for (const { what, fix } of problems) console.error(`missing  ${what}\n         Fix: ${fix}`);
   console.error("Nothing was created.");
@@ -59,8 +64,8 @@ for (const signal of ["SIGINT", "SIGTERM"] as const) {
   });
 }
 
-// Runs an a12s command on the e2e Fleet. Its output stays out of the log unless it fails.
-function a12s(args: string[], input?: string): Promise<void> {
+// Runs an a12s command on the e2e Fleet and answers its output, which stays out of the log unless it fails.
+function a12s(args: string[], input?: string): Promise<string> {
   const child = spawn("a12s", ["-F", fleetFile, ...args], { detached: true, stdio: ["pipe", "pipe", "pipe"] });
   current = child;
   let output = "";
@@ -71,7 +76,7 @@ function a12s(args: string[], input?: string): Promise<void> {
     child.once("error", reject);
     child.once("exit", (code) => {
       current = null;
-      if (code === 0) resolve();
+      if (code === 0) resolve(output);
       else reject(new Error(`a12s ${args.join(" ")} exited ${code}: ${output.trim().slice(-600)}`));
     });
   });
@@ -116,8 +121,8 @@ const fleetFile = join(home, "fleet", "fleet.yaml");
 mkdirSync(join(home, "fleet"));
 writeFileSync(fleetFile, `apiVersion: a12s.ai/v1alpha1\nkind: Fleet\nmetadata: { name: ${FLEET} }\n`);
 writeFileSync(join(home, "config.json"), JSON.stringify({ ownerLogin: "owner@example.com", fleet: FLEET }));
-// The host processes need no Claude token; it goes to the Controller only.
-const { CLAUDE_CODE_OAUTH_TOKEN: token, ...inherited } = process.env;
+// The host processes need neither token: the Claude one goes to the Controller only, the GitHub one to p2.
+const { CLAUDE_CODE_OAUTH_TOKEN: token, E2E_GITHUB_TOKEN: _, ...inherited } = process.env;
 const env = { ...inherited, STUDIO_HOME: home };
 const broker = hostProcess("packages/broker/src/main.ts", join(home, "broker.log"));
 const app = hostProcess("packages/app/src/main.ts", join(home, "app.log"));
@@ -137,7 +142,7 @@ try {
       const studio = await step("The broker and the app run and the app sees a12s", async () => {
         broker.start();
         app.start();
-        const studio = connectStudio(app);
+        const studio = connectStudio(app, a12s);
         await studio.until("a12s up", (s) => s.a12s === "up", 60_000);
         return studio;
       });
@@ -157,8 +162,8 @@ try {
   console.log("--    cleanup");
   // An interrupted a12s command ends first, so it never runs beside the one that removes the Fleet.
   if (current) await once(current, "exit");
-  const cleanup: [string, () => Promise<void>][] = [
-    ["The app and the broker are stopped", () => Promise.all([app.stop(), broker.stop()]).then(() => {})],
+  const cleanup: [string, () => Promise<unknown>][] = [
+    ["The app and the broker are stopped", () => Promise.all([app.stop(), broker.stop()])],
     [`Fleet ${FLEET} is removed with its drives`, () => a12s(["down", "--purge", "--yes"])],
     ["The data folder is removed", async () => rmSync(home, { recursive: true, force: true })],
   ];

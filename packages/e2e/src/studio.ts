@@ -1,16 +1,22 @@
-import type { ErrorBody } from "@a12s-studio/contract/api";
+import type { ErrorBody, MessagesPage, WriteResult } from "@a12s-studio/contract/api";
 import { OWNER_PORT } from "@a12s-studio/contract/names";
-import type { StudioState } from "@a12s-studio/contract/state";
+import type { MessageView, StudioState } from "@a12s-studio/contract/state";
 
 const BASE = `http://127.0.0.1:${OWNER_PORT}/api`;
 const RECONNECT_MS = 250;
 // The app writes each state as one frame: this prefix, then the JSON on the same line.
 const STATE_FRAME = "event: state\ndata: ";
 
+// A model's Turn includes waking its agent computer, so each wait for an agent allows a few minutes.
+export const ANSWER_MS = 5 * 60_000;
+
 // The app process, as run.ts started it.
 type AppProcess = { stop(): Promise<void>; start(): void };
+// Runs an a12s command on the e2e Fleet, `input` on its stdin, and answers its output.
+type A12s = (args: string[], input?: string) => Promise<string>;
 
-// What a script drives Studio with: the owner API and the state stream, as the UI uses them.
+// What a script drives Studio with: the owner API and the state stream, as the UI uses them, and a shell in an
+// agent's container.
 export type Studio = {
   api<T>(method: string, path: string, body?: unknown): Promise<T>;
   // The newest state the stream has sent.
@@ -22,6 +28,9 @@ export type Studio = {
   open(thread: string): Promise<StudioState>;
   // Stops the app process and starts it again, then waits until it sees a12s.
   restartApp(): Promise<void>;
+  // Wakes the agent as the owner can, then runs `command` with sh in its container and answers the output. A secret
+  // goes in `input`, on the command's stdin: a12s journals the command itself.
+  shell(agent: string, command: string, input?: string): Promise<string>;
 };
 
 const elapsed = (since: number) => `${Math.round((Date.now() - since) / 1000)}s`;
@@ -39,7 +48,28 @@ export async function step<T>(title: string, run: () => Promise<T>): Promise<T> 
   }
 }
 
-export function connectStudio(app: AppProcess): Studio {
+export const messages = (state: StudioState): MessageView[] => state.open?.messages ?? [];
+
+export const replyTo = (state: StudioState, ask: string, from: string) =>
+  messages(state).find((m) => m.kind === "reply" && m.ask === ask && m.from === from);
+
+export async function createTeam(studio: Studio, name: string, template: string, purpose: string): Promise<string> {
+  const { id } = await studio.api<WriteResult>("POST", "/teams", { name, purpose, accent: "#4f6bed", template });
+  if (!id) throw new Error(`creating ${name} answered no id`);
+  return id;
+}
+
+// Starts a thread with an ask to one of the team's agents, by default its lead; answers the thread and the ask's ids.
+export async function ownerAsk(studio: Studio, team: string, title: string, body: string, to?: string) {
+  const { id: thread } = await studio.api<WriteResult>("POST", `/teams/${team}/threads`, { title, body, to });
+  if (!thread) throw new Error(`the new thread in ${team} answered no id`);
+  const { messages: first } = await studio.api<MessagesPage>("GET", `/threads/${thread}/messages`);
+  const ask = first.find((m) => m.kind === "ask" && m.from === "owner");
+  if (!ask) throw new Error(`thread ${thread} has no ask from the owner`);
+  return { thread, ask: ask.id };
+}
+
+export function connectStudio(app: AppProcess, a12s: A12s): Studio {
   let current: StudioState | null = null;
   let thread: string | null = null;
   let connection = new AbortController();
@@ -98,19 +128,21 @@ export function connectStudio(app: AppProcess): Studio {
     });
   }
 
+  async function api<T>(method: string, path: string, body?: unknown): Promise<T> {
+    const res = await fetch(`${BASE}${path}`, {
+      method,
+      ...(body === undefined ? {} : { headers: { "content-type": "application/json" }, body: JSON.stringify(body) }),
+    });
+    const answer: unknown = await res.json();
+    if (!res.ok) {
+      const { code, message } = answer as ErrorBody;
+      throw new Error(`${method} ${path} answered ${res.status} ${code}: ${message}`);
+    }
+    return answer as T;
+  }
+
   return {
-    async api<T>(method: string, path: string, body?: unknown): Promise<T> {
-      const res = await fetch(`${BASE}${path}`, {
-        method,
-        ...(body === undefined ? {} : { headers: { "content-type": "application/json" }, body: JSON.stringify(body) }),
-      });
-      const answer: unknown = await res.json();
-      if (!res.ok) {
-        const { code, message } = answer as ErrorBody;
-        throw new Error(`${method} ${path} answered ${res.status} ${code}: ${message}`);
-      }
-      return answer as T;
-    },
+    api,
     state(): StudioState {
       if (!current) throw new Error("the stream has sent no state yet");
       return current;
@@ -128,6 +160,10 @@ export function connectStudio(app: AppProcess): Studio {
       current = null;
       app.start();
       await until("a12s up after the restart", (state) => state.a12s === "up", 60_000);
+    },
+    async shell(agent: string, command: string, input?: string): Promise<string> {
+      await api("POST", `/agents/${agent}/power`, { state: "awake" });
+      return a12s(["shell", agent, "--", "sh", "-c", command], input);
     },
   };
 }

@@ -1,35 +1,11 @@
 // The Phase 1 exit (build-spec section 12): two teams answer the owner, a lead hands work to a second agent and
 // ends its Turn after the ask, and a restart of the app mid-conversation loses nothing.
 import assert from "node:assert/strict";
-import type { MessagesPage, WriteResult } from "@a12s-studio/contract/api";
-import type { MessageView, StudioState } from "@a12s-studio/contract/state";
-import { type Studio, step } from "./studio.ts";
+import type { StudioState } from "@a12s-studio/contract/state";
+import { ANSWER_MS, createTeam, messages, ownerAsk, replyTo, type Studio, step } from "./studio.ts";
 
-// A model's Turn includes waking its agent computer, so each wait allows a few minutes.
-const ANSWER_MS = 5 * 60_000;
-
-const messages = (state: StudioState): MessageView[] => state.open?.messages ?? [];
 const presence = (state: StudioState, agent: string) =>
   state.teams.flatMap((t) => t.agents).find((a) => a.id === agent)?.presence;
-
-async function createTeam(studio: Studio, name: string, template: string, purpose: string): Promise<string> {
-  const { id } = await studio.api<WriteResult>("POST", "/teams", { name, purpose, accent: "#4f6bed", template });
-  if (!id) throw new Error(`creating ${name} answered no id`);
-  return id;
-}
-
-// Starts a thread with an ask to the team's lead; answers the thread and the ask's ids.
-async function askLead(studio: Studio, team: string, title: string, body: string) {
-  const { id: thread } = await studio.api<WriteResult>("POST", `/teams/${team}/threads`, { title, body });
-  if (!thread) throw new Error(`the new thread in ${team} answered no id`);
-  const { messages: first } = await studio.api<MessagesPage>("GET", `/threads/${thread}/messages`);
-  const ask = first.find((m) => m.kind === "ask" && m.from === "owner");
-  if (!ask) throw new Error(`thread ${thread} has no ask from the owner`);
-  return { thread, ask: ask.id };
-}
-
-const replyTo = (state: StudioState, ask: string, from: string) =>
-  messages(state).find((m) => m.kind === "reply" && m.ask === ask && m.from === from);
 
 // What a restart must keep: every team with its agents, every thread, and each message of the open thread.
 function snapshot(state: StudioState) {
@@ -52,7 +28,7 @@ export async function p1(studio: Studio): Promise<void> {
     const asked = await Promise.all(
       [web, notes].map(async (team) => ({
         team,
-        ...(await askLead(studio, team, "Say hello", "Reply to this ask with the single word: hello")),
+        ...(await ownerAsk(studio, team, "Say hello", "Reply to this ask with the single word: hello")),
       })),
     );
     for (const { team, thread, ask } of asked) {
@@ -64,7 +40,7 @@ export async function p1(studio: Studio): Promise<void> {
   const lead = `${web}-lead`;
   const dev = `${web}-dev`;
   const { work, devAsk } = await step("The lead asks dev in the thread", async () => {
-    const work = await askLead(
+    const work = await ownerAsk(
       studio,
       web,
       "Heading element",
