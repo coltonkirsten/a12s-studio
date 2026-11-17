@@ -1,6 +1,7 @@
 #!/bin/sh
 # Installs a12s Studio for this user: checks the tools, starts the Fleet once, writes the config and the
-# LaunchAgents. Safe to run again. Usage: scripts/setup.sh [--owner-login you@example.com]
+# LaunchAgents (the app, the broker and the nightly backup). Safe to run again.
+# Usage: scripts/setup.sh [--owner-login you@example.com]
 set -eu
 
 repo=$(cd "$(dirname "$0")/.." && pwd)
@@ -30,9 +31,12 @@ docker info >/dev/null 2>&1 || die "Docker is not running. Start Docker Desktop 
 command -v a12s >/dev/null || die "a12s is not installed: brew install coltonkirsten/tap/a12s"
 a12s_version=$(a12s version | sed -n 's/^a12s v\([0-9.]*\).*/\1/p')
 at_least "${a12s_version:-0}" 0.11.2 || die "a12s ${a12s_version:-?} is too old; 0.11.2 or later is needed: brew upgrade a12s"
-command -v node >/dev/null || die "Node.js is not installed. Install Node 24 or later."
+command -v node >/dev/null || die "Node.js is not installed. Install Node 24.2 or later."
 node=$(command -v node)
-at_least "$(node -p process.versions.node)" 24.0.0 || die "Node $(node -p process.versions.node) is too old; 24 or later is needed."
+# 24.2 for import.meta.main: on an older Node the backup script would end at once, having saved nothing.
+at_least "$(node -p process.versions.node)" 24.2.0 || die "Node $(node -p process.versions.node) is too old; 24.2 or later is needed."
+# launchd starts a job with a bare PATH; the backup job runs docker.
+job_path=$(dirname "$(command -v docker)"):/usr/bin:/bin:/usr/sbin:/sbin
 
 mkdir -p "$home/fleet"
 chmod 700 "$home"
@@ -75,10 +79,10 @@ for template in "$repo"/launchd/*.plist; do
   name=$(basename "$template" .plist)
   label=com.a12s-studio.$name
   sed -e "s|{{node}}|$node|g" -e "s|{{repo}}|$repo|g" -e "s|{{home}}|$home|g" -e "s|{{logs}}|$logs|g" \
-    "$template" >"$agents/$label.plist"
+    -e "s|{{path}}|$job_path|g" "$template" >"$agents/$label.plist"
   launchctl bootout "gui/$(id -u)/$label" 2>/dev/null || true
   launchctl bootstrap "gui/$(id -u)" "$agents/$label.plist"
-  echo "Started $label (log: $logs/$name.log)."
+  echo "Installed $label (log: $logs/$name.log)."
 done
 
 echo "Studio is at http://127.0.0.1:7400. To reach it from your other devices:"

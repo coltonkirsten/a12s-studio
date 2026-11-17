@@ -64,15 +64,34 @@ fleet/fleet.yaml       written once by setup; names the Fleet, nothing else
 
 `STUDIO_HOME` overrides the folder (tests use a temp dir). Ports are constants in code, not settings.
 
-**Install** (`scripts/setup.sh [--owner-login <login>]`, idempotent): checks Docker, a12s 0.11.2+ and Node 24+;
+**Install** (`scripts/setup.sh [--owner-login <login>]`, idempotent): checks Docker, a12s 0.11.2+ and Node 24.2+;
 when the Fleet `studio` has never been started, writes `fleet/fleet.yaml` (`metadata.name: studio`, no agent
 computers) and runs `a12s up` once to start the Controller; prints the `a12s creds set anthropic` command when the
 Controller has no `anthropic` credential; writes `config.json` (asking for the owner's Tailscale login unless given);
 builds the web app; installs the LaunchAgents `com.a12s-studio.app` and `com.a12s-studio.broker` from the
-`launchd/*.plist` templates (`KeepAlive`, logs to `~/Library/Logs/a12s-studio/`); and prints
+`launchd/*.plist` templates (`KeepAlive`, logs to `~/Library/Logs/a12s-studio/`) and the nightly backup job
+`com.a12s-studio.backup` (below); and prints
 `tailscale serve --bg 7400` for the owner to run, since exposing the UI on the tailnet is the owner's call. After
 setup nothing runs `a12s up` again: it would remove every agent computer the app created. The live Fleet is the
 truth. `npm start` runs the broker and the app in the foreground instead.
+
+**Backup** (`scripts/backup.ts [<folder>]`, run by `com.a12s-studio.backup` at 03:30 with `docker` on its `PATH`):
+copies `app/studio.db` and `broker/vault.db` with SQLite's online backup (the app and the broker keep running),
+`config.json` and `app/files/`, and each home drive the Fleet lists (M8) as a gzipped tar, made by a throwaway
+`busybox` container with the drive's volume mounted read-only and no network. It writes `<folder>/<date>.partial`
+(default folder `~/a12s-studio-backups`, date local) and renames it to `<date>` when whole, so a dated folder is
+always complete and a second run that day replaces it. A run that finds the `.partial` of its own date stops, so
+two runs never write one backup, and a run that fails removes its own. It then removes the dated folders after the
+newest 14, never the one it just wrote, and any `.partial` a killed run left. The folder holds the teams' a12s tokens, so it is created for the owner alone. The
+broker's credentials in it are encrypted with the vault key, which stays in the Keychain (section 9.2); the README
+gives the command to export it.
+
+**Restore** (`scripts/restore.ts <backup> [--force]`, with Studio stopped and every agent asleep): unless `--force`
+is given it refuses, before changing anything, when the data folder already holds any of what the backup would put
+back (`config.json`, `app/`, `broker/`) or the Fleet the backup names already has a home drive the backup would
+load. With `--force` it removes each of those entries before copying it back, so no old write-ahead log stays
+beside a restored database. It loads each saved drive into the drive of the same name, emptied first, and names
+any drive the Fleet no longer has instead of creating it. It ends by naming the vault-key step for another Mac.
 
 ## 2. Phase 0 measurements
 
@@ -87,7 +106,7 @@ Throwaway code. Each has one decision hanging on it.
 | M5 | `turn.finished.usage.modelUsage[*].costUSD` across: two Turns in one session, a sleep and wake, a compaction, a `fresh` session, a Turn with a sub-agent. | The cost delta rule (section 7.4). **Measured:** each model's `costUSD` is its running total for the session, sub-agents and `/compact` Turns included; it starts again from zero only in a fresh session. So the rule works per model, per session. |
 | M6 | Does `tailscale serve` set `Tailscale-User-Login` and `X-Forwarded-For`, strip client-sent `Tailscale-*` headers, and pass on the `Host` the browser used? | `ownerGate` as written. A write's `Origin` is compared with `Host`, so if `tailscale serve` rewrites `Host`, every change through it is refused (reads still work). |
 | M7 | An agent asleep with a pending Message and no `wakeOnMessage`: does it stay asleep until `wake()`? Does `wake()` on a prefix token work and stay outside `maxWakesPerHour`? | The wake design (section 5.3). **Measured:** `POST …/power {"state":"awake"}` on a prefix token wakes it. |
-| M8 | How a Docker volume name maps to an agent computer's home drive (`GET /v1/drives`). | The backup script. |
+| M8 | How a Docker volume name maps to an agent computer's home drive (`GET /v1/drives`). | The backup script. **Measured:** `GET /v1/drives` (owner token) lists `{ name, kind, computer, attachedTo?, orphaned? }`; an agent computer's home drive is `home-<computer>` with kind `home`, and it outlives the computer (`orphaned: true`). Its Docker volume is `a12s-<fleet>-<drive name>`, labelled `a12s.fleet`, `a12s.drive` and `a12s.computer`. The backup lists the home drives through the API and reaches each volume by that name. |
 | M9 | A Service a12s runs, named `<team>-addon-<id>`, whose spec `uses` the external Services `broker` and `studio`: is that name stamped as the caller on its calls to both? Do two Services start from one image whose `service.json` carries a third name? Is an agent computer whose spec does not name the Service refused by the proxy? Which tool prefix do agents see for its MCP port? Does a write that names an image the host lacks pull it? | Section 10 as written. It is measured by the first add-on package, not in Phase 0. |
 | M10 | With `inbox.duringTurn: steer`: is a Message sent to a `Busy` agent listed by a `turn.steered` event of the running Turn, and does the model read it before that Turn ends? Does one sent as the Turn ends start a new Turn that lists it in `turn.started`, once? | Delivery into a running Turn (section 5.3). It is measured by the a12s step of the steering work, not in Phase 0. Where a12s cannot steer, a message for a working agent starts its next Turn; the app's code is the same, because `turn.steered` is only one more way a message is reported delivered. |
 | M11 | A `UserPromptSubmit` hook given through `harness.settings` prints text: does it reach the model when a Message starts a Turn, and when one joins a running Turn? Does `curl` in a hook reach `STUDIO_URL`? | How a changed rule reaches an agent (section 6). It is measured by the rules package. If the hook does not run for a Message that joins a Turn, a changed layer arrives with the next Turn instead. If its output never reaches the model, the app sends the changed layer to each agent it applies to as a message from `system`. |
@@ -147,7 +166,8 @@ packages/
     src/steer.ts        two agents on tasks that depend on each other; reports the chain (section 12)
 teams/                  templates: blank/, website/, research-notes/
 addons/example/         a reference add-on: Dockerfile, service.json, addon.json and one small server
-scripts/                setup.sh, backup.ts, restore.ts
+scripts/                setup.sh, backup.ts, restore.ts, drives.ts (a home drive saved and loaded through Docker),
+                        test/ (run by `npm test`; typed by `tsc -p scripts`)
 launchd/
 .github/workflows/ci.yml
 ```
@@ -1500,7 +1520,7 @@ default-deny tests pass; an agent clones and pushes a repository and its contain
 | P3-E Messages | One kind of message: the schema change, `post` and `read` without kinds, the router and the dispatcher without their rules for kinds; `inbox.duringTurn: steer` in the spec and `turn.steered` in the port, `real.ts`, `fake.ts` and `live.ts` (M10); the chain record; "needs you" from `owner_seen_at`, with Mark read; the basics' rules for messaging; folded talk, the delivery line and the Chain view (section 7.7). It needs the a12s release that steers. |
 | P3-F Rules | The `rules` table and `rules.ts`, the `rules` tool, `GET /rules/<layer>`, the hooks and `load-rules` (M11), the rules routes, the spec put again at every start; the owner rules in the global settings, Team settings → Rules and the role in the inspector, each with its history, differences and restore. |
 | P3-G Steering run (after P3-E and P3-F) | `steer.ts`; the P1 script's check that a lead does not poll. |
-| P3-C Durability (merges last of the first four) | `scripts/backup.ts` (both databases with SQLite's backup, each home drive as a tar, to `~/a12s-studio-backups/<date>/`, 14 kept) with a nightly LaunchAgent; `scripts/restore.ts`; the documented command to export the vault key; the P3 exit script. |
+| P3-C Durability (merges last of the first four) | `scripts/backup.ts` (both databases with SQLite's backup, `config.json`, the attachments, each home drive as a tar, to `~/a12s-studio-backups/<date>/`, 14 kept) with a nightly LaunchAgent; `scripts/restore.ts`; the documented command to export the vault key; the P3 exit script. |
 
 Exit: a team runs unattended inside its budget; a forced budget stop (budget set below today's spend) and a forced
 agent error both appear in Needs You; a restore from last night's backup onto an emptied data folder works; two
@@ -1574,6 +1594,11 @@ from the README alone.
     write → refused.
 - **Pure functions get table tests:** path patterns, the cost rule, the "doing now" line, state derivation, slug
   rules, the web `logic/` folder.
+- **Backup and restore** (`scripts/test/`): a data folder in use by the real app and broker is backed up and
+  restored with every row of both databases, the attachments and the drives equal; the drive step is the one
+  function a test replaces with a folder and the host's `tar`, so the test needs no Docker. Retention, the
+  unfinished folder as a lock, the refusal without `--force` (data folder and drives), and that no secret is
+  printed are tested too.
 - **`real.ts` against real a12s:** `node packages/app/scripts/a12s-smoke.ts <fleet>` runs every port call once against a
   running Fleet (one haiku agent, removed at the end). Manual, never in CI.
 - **End-to-end against real a12s is manual, never in CI.** `npm run e2e` (`packages/e2e`) is run before each phase
@@ -1595,6 +1620,6 @@ from the README alone.
   |---|---|
   | `p1.ts` | Two teams are created and both leads answer the owner. A lead writes to a second agent and does not call `read` to wait for the answer, which comes back in the thread. The app is stopped and started mid-conversation; the state is the same and still live. |
   | `p2.ts` | From inside an agent's container a call with no grant is a 403. The agent requests access with the `access` tool; the card appears; approving makes the same call succeed at once; a second request, denied, stays a 403; a grant with a short expiry is a 403 after it; the same call from another team's agent is a 403. The agent clones the repository, commits and pushes a branch, which GitHub then lists; the token is in neither the container's environment nor its home drive. |
-  | `p3.ts` | With the awake cap at 1 and messages for two agents, two are never awake together. A budget set below today's spend holds the team and shows its card; raising it delivers. A forced agent error shows its card. An agent asked to run a command in the background and end its Turn stays working, with the command listed under it and no Turn, until the command ends and the agent reports. After a backup, the data folder is emptied and restored, and teams, threads, grants and an agent's notes are as before. |
+  | `p3.ts` | With the awake cap at 1 and messages for two agents, two are never awake together. A budget set below today's spend holds the team and shows its card; raising it delivers. A forced agent error (memory `8Mi`: a12s answers the wake with the failure and reports phase `Error`) shows its card, and is gone after the memory is set back and the agent woken. An agent asked to run a command in the background and end its Turn stays working, with the command listed under it and no Turn, until the command ends and the agent reports. After a backup, the data folder is emptied and restored, and teams, threads, grants and an agent's notes are as before. |
   | `steer.ts` | Two agents get tasks that depend on each other: each needs something only the other produces, and both must check the joined result. The owner writes one message and nothing more. When the thread is done the script prints, for that thread: the messages between the two agents, how many joined a running Turn and how many started one, the deepest chain, the Turns and the cost. It fails only if the work is not done in 20 minutes or the two exchange more than 40 messages; every other number is a report, not a verdict. It runs three times and prints the three rows. Then a message sent to an agent in the middle of a long command is delivered into that Turn. Then a team rule is changed while an agent works and the agent gets a message: the file `load-rules` keeps in the agent's home holds the new text, and the agent computer has not restarted; the lead changes a role with the `rules` tool and another agent's attempt is refused. |
   | `p4.ts` | The example add-on is turned on for one team: its agent uses the tool, the broker's audit shows the call under the instance's name, the reported cost is in the team's spend and a budget below it holds the team; the instance's container holds no secret; another team's agent cannot reach it; turned off, the grants are revoked and the Service is gone. |
