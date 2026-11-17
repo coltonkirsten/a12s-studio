@@ -10,8 +10,8 @@ const STATE_FRAME = "event: state\ndata: ";
 // A model's Turn includes waking its agent computer, so each wait for an agent allows a few minutes.
 export const ANSWER_MS = 5 * 60_000;
 
-// The app process, as run.ts started it.
-type AppProcess = { stop(): Promise<void>; start(): void };
+// The app or the broker process, as run.ts started it.
+type HostProcess = { stop(): Promise<void>; start(): void };
 // Runs an a12s command on the e2e Fleet, `input` on its stdin, and answers its output.
 type A12s = (args: string[], input?: string) => Promise<string>;
 // Names one thing a script makes outside the Fleet and the data folder. run.ts removes it with `remove` in its
@@ -35,6 +35,10 @@ export type Studio = {
   // goes in `input`, on the command's stdin: a12s journals the command itself.
   shell(agent: string, command: string, input?: string): Promise<string>;
   atEnd: AtEnd;
+  // The data folder, STUDIO_HOME of both processes.
+  home: string;
+  // Stops the app and the broker, runs `work` while neither runs, then starts both and waits until the app sees a12s.
+  offline(work: () => Promise<void>): Promise<void>;
 };
 
 const elapsed = (since: number) => `${Math.round((Date.now() - since) / 1000)}s`;
@@ -73,7 +77,7 @@ export async function ownerAsk(studio: Studio, team: string, title: string, body
   return { thread, ask: ask.id };
 }
 
-export function connectStudio(app: AppProcess, a12s: A12s, atEnd: AtEnd): Studio {
+export function connectStudio(app: HostProcess, broker: HostProcess, a12s: A12s, atEnd: AtEnd, home: string): Studio {
   let current: StudioState | null = null;
   let thread: string | null = null;
   let connection = new AbortController();
@@ -145,6 +149,8 @@ export function connectStudio(app: AppProcess, a12s: A12s, atEnd: AtEnd): Studio
     return answer as T;
   }
 
+  const upAgain = () => until("a12s up after the restart", (state) => state.a12s === "up", 60_000);
+
   return {
     api,
     state(): StudioState {
@@ -163,12 +169,21 @@ export function connectStudio(app: AppProcess, a12s: A12s, atEnd: AtEnd): Studio
       await app.stop();
       current = null;
       app.start();
-      await until("a12s up after the restart", (state) => state.a12s === "up", 60_000);
+      await upAgain();
     },
     async shell(agent: string, command: string, input?: string): Promise<string> {
       await api("POST", `/agents/${agent}/power`, { state: "awake" });
       return a12s(["shell", agent, "--", "sh", "-c", command], input);
     },
     atEnd,
+    home,
+    async offline(work: () => Promise<void>): Promise<void> {
+      await Promise.all([app.stop(), broker.stop()]);
+      current = null;
+      await work();
+      broker.start();
+      app.start();
+      await upAgain();
+    },
   };
 }

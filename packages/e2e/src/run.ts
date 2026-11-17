@@ -10,11 +10,12 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { p1 } from "./p1.ts";
 import { p2 } from "./p2.ts";
+import { p3 } from "./p3.ts";
 import { missing, PORTS } from "./preflight.ts";
 import { connectStudio, type Studio, step } from "./studio.ts";
 
 const FLEET = "studio-e2e";
-const SCRIPTS: Record<string, (studio: Studio) => Promise<void>> = { p1, p2 };
+const SCRIPTS: Record<string, (studio: Studio) => Promise<void>> = { p1, p2, p3 };
 const repo = fileURLToPath(new URL("../../..", import.meta.url));
 
 const chosen = process.argv.length > 2 ? process.argv.slice(2) : Object.keys(SCRIPTS);
@@ -150,7 +151,7 @@ try {
       const studio = await step("The broker and the app run and the app sees a12s", async () => {
         broker.start();
         app.start();
-        const studio = connectStudio(app, a12s, (title, remove) => leftovers.push([title, remove]));
+        const studio = connectStudio(app, broker, a12s, (title, remove) => leftovers.push([title, remove]), home);
         await studio.until("a12s up", (s) => s.a12s === "up", 60_000);
         return studio;
       });
