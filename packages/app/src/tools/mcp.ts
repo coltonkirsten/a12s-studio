@@ -23,6 +23,8 @@ export type ToolContext = {
   broker: TeamBroker;
   dispatcher: Dispatcher;
   scheduler: Pick<Scheduler, "refresh">;
+  // The folder attachments are stored in, app/files.
+  files: string;
 };
 
 export type Tool<S extends ZodRawShape> = {

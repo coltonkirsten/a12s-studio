@@ -1,18 +1,28 @@
-import type { ServerResponse } from "node:http";
-import type { WriteResult } from "@a12s-studio/contract/api";
+import type { IncomingMessage, ServerResponse } from "node:http";
+import type { Duplex } from "node:stream";
+import type {
+  AgentSettings,
+  InboxResponse,
+  ToolCall,
+  TurnEventsResponse,
+  TurnsResponse,
+  WriteResult,
+} from "@a12s-studio/contract/api";
 import type { AccessRequest } from "@a12s-studio/contract/broker-admin";
 import { teamOf } from "@a12s-studio/contract/names";
 import { z } from "zod";
-import type { A12s } from "../a12s/port.ts";
+import type { A12s, A12sEvent } from "../a12s/port.ts";
 import type { BrokerClient } from "../broker-client.ts";
 import type { Dispatcher } from "../dispatcher.ts";
 import { StudioError } from "../errors.ts";
-import type { Live } from "../live.ts";
+import { homePath, sendAttachment } from "../files.ts";
+import { doingNow, type Live } from "../live.ts";
 import type { Repo, Team, TeamRepo } from "../repo.ts";
 import { BODY_MAX, changeThread, ownerPost, ownerThread, systemNote, TITLE_MAX } from "../router.ts";
 import type { Scheduler } from "../scheduler.ts";
-import { deriveState, messagesPage, type Stream } from "../state.ts";
+import { deriveState, messagesPage, messageView, type Stream } from "../state.ts";
 import type { createTeams } from "../teams.ts";
+import { bridgeTerminal } from "./terminal.ts";
 
 export type OwnerDeps = {
   repo: Repo;
@@ -23,15 +33,24 @@ export type OwnerDeps = {
   teams: ReturnType<typeof createTeams>;
   live: Live;
   stream: Stream;
+  filesDir: string;
 };
 
-// What a route sees: the URL's decoded parameters and query, the parsed JSON body, and the response for the stream.
+// What a route sees: the URL's decoded parameters and query, the parsed JSON body, and the response for the stream
+// and downloads. A WebSocket route sees the connection instead, which has no response.
 type Request = { params: string[]; query: URLSearchParams; body: unknown; res: ServerResponse };
-export type Route = { method: string; path: RegExp; run(req: Request): Promise<unknown> | unknown };
+export type Upgrade = { params: string[]; query: URLSearchParams; req: IncomingMessage; socket: Duplex; head: Buffer };
+export type Route =
+  | { method: string; path: RegExp; run(req: Request): Promise<unknown> | unknown }
+  | { method: "GET"; path: RegExp; socket(upgrade: Upgrade): Promise<void> | void };
 
 const SLUG = z.string().min(1).max(40);
 const TEXT = z.string().trim().min(1);
 const MODEL = z.string().min(1).max(100);
+const DURATION = z.string().min(1).max(20);
+// How many past Turns the inspector lists, and how much of a tool call's input or output it shows.
+const TURN_LIST = 20;
+const CALL_TEXT_MAX = 4000;
 
 const schemas = {
   createTeam: z.strictObject({
@@ -51,7 +70,18 @@ const schemas = {
     paused: z.boolean().optional(),
   }),
   hire: z.strictObject({ slug: SLUG, role: TEXT.max(8000), model: MODEL }),
-  patchAgent: z.strictObject({ role: TEXT.max(8000).optional(), model: MODEL.optional() }),
+  patchAgent: z.strictObject({
+    role: TEXT.max(8000).optional(),
+    model: MODEL.optional(),
+    sleepAfterIdle: DURATION.optional(),
+    compactMinTokens: z.int().min(0).optional(),
+    cpu: z.number().positive().max(64).nullable().optional(),
+    memory: z.string().min(1).max(20).nullable().optional(),
+  }),
+  putFile: z.discriminatedUnion("encoding", [
+    z.strictObject({ encoding: z.literal("utf-8"), content: z.string() }),
+    z.strictObject({ encoding: z.literal("base64"), content: z.base64() }),
+  ]),
   power: z.strictObject({ state: z.enum(["awake", "asleep"]) }),
   newThread: z.strictObject({
     title: TEXT.max(TITLE_MAX).optional(),
@@ -70,7 +100,7 @@ const schemas = {
     minFreeDiskGb: z.number().min(0).optional(),
     paused: z.boolean().optional(),
     defaultModel: MODEL.optional(),
-    defaultSleepAfterIdle: z.string().min(1).max(20).optional(),
+    defaultSleepAfterIdle: DURATION.optional(),
     defaultCompactMinTokens: z.int().min(0).optional(),
   }),
   // The broker checks hosts, methods, patterns and the secret's form; these only give the bodies their shape.
@@ -96,6 +126,36 @@ function decisionNote(request: AccessRequest, expiresAt: number | undefined): st
   return `Access approved: ${reach}${expiresAt === undefined ? "" : `, until ${new Date(expiresAt).toISOString()}`}.`;
 }
 
+function callText(value: unknown): string {
+  const text = typeof value === "string" ? value : (JSON.stringify(value, null, 2) ?? "");
+  return text.length > CALL_TEXT_MAX ? `${text.slice(0, CALL_TEXT_MAX)}…` : text;
+}
+
+// A Turn's tool calls in the order they started, each with its result once it has finished.
+function toolLog(events: A12sEvent[]): ToolCall[] {
+  const calls = new Map<string, ToolCall>();
+  for (const event of events) {
+    if (event.type === "tool.started") {
+      calls.set(event.id, {
+        id: event.id,
+        name: event.name,
+        line: doingNow(event.name, event.input),
+        input: callText(event.input),
+        output: null,
+        isError: false,
+        parent: event.parent ?? null,
+        startedAt: event.at,
+        finishedAt: null,
+      });
+    }
+    const call = event.type === "tool.finished" ? calls.get(event.id) : undefined;
+    if (call && event.type === "tool.finished") {
+      Object.assign(call, { output: callText(event.output), isError: event.isError, finishedAt: event.at });
+    }
+  }
+  return [...calls.values()];
+}
+
 function parse<S extends z.ZodType>(schema: S, body: unknown): z.output<S> {
   const result = schema.safeParse(body);
   if (result.success) return result.data;
@@ -110,7 +170,7 @@ function parse<S extends z.ZodType>(schema: S, body: unknown): z.output<S> {
 }
 
 export function ownerRoutes(deps: OwnerDeps): Route[] {
-  const { repo, a12s, broker, dispatcher, scheduler, teams, stream } = deps;
+  const { repo, a12s, broker, dispatcher, scheduler, teams, stream, filesDir } = deps;
   const written = (id?: string): WriteResult => ({ rev: stream.rev(), ...(id === undefined ? {} : { id }) });
   // A change in the broker can add or remove a Needs You card, so the attention answer is read again before the
   // route answers: the state at the returned rev already shows the change. The rev moves even when no card does:
@@ -139,10 +199,13 @@ export function ownerRoutes(deps: OwnerDeps): Route[] {
     return scoped;
   }
 
+  // An agent id names its team; an id that names no team, or no agent of it, is missing.
   function agentOf(id: string | undefined) {
-    const { team: found, scoped } = team(teamOf(id ?? ""));
-    if (!scoped.agent(id ?? "")) throw new StudioError(404, "not_found", `No agent ${id}.`);
-    return { team: found, id: id ?? "", client: a12s.forTeam(found.a12sToken) };
+    const scoped = repo.forTeam(teamOf(id ?? ""));
+    const found = scoped.team();
+    const agent = found && scoped.agent(id ?? "");
+    if (!agent) throw new StudioError(404, "not_found", `No agent ${id}.`);
+    return { team: found, scoped, agent, id: agent.id, client: a12s.forTeam(found.a12sToken) };
   }
 
   return [
@@ -227,6 +290,114 @@ export function ownerRoutes(deps: OwnerDeps): Route[] {
       },
     },
     {
+      method: "GET",
+      path: /^\/agents\/([^/]+)$/,
+      run({ params }): AgentSettings {
+        const { role, model, sleepAfterIdle, compactMinTokens, cpu, memory } = agentOf(params[0]).agent;
+        return { role, model, sleepAfterIdle, compactMinTokens, cpu, memory };
+      },
+    },
+    {
+      method: "GET",
+      path: /^\/agents\/([^/]+)\/turns$/,
+      async run({ params }): Promise<TurnsResponse> {
+        const { client, id } = agentOf(params[0]);
+        const turns = await client.turns(id, TURN_LIST);
+        return {
+          turns: turns.map((t) => ({
+            id: t.id,
+            status: t.status,
+            error: t.error ?? null,
+            startedAt: t.startedAt ?? null,
+            finishedAt: t.finishedAt,
+            text: t.text,
+          })),
+        };
+      },
+    },
+    {
+      method: "GET",
+      path: /^\/agents\/([^/]+)\/turns\/([^/]+)\/events$/,
+      async run({ params }): Promise<TurnEventsResponse> {
+        const { client, id } = agentOf(params[0]);
+        // a12s answers only for this agent computer's own Turns, so another agent's Turn id finds no events.
+        const events: A12sEvent[] = [];
+        for await (const event of client.turnEvents(id, params[1] ?? "")) events.push(event);
+        return { calls: toolLog(events) };
+      },
+    },
+    {
+      method: "GET",
+      path: /^\/agents\/([^/]+)\/inbox$/,
+      run({ params }): InboxResponse {
+        const { scoped, id } = agentOf(params[0]);
+        return {
+          messages: scoped.inbox(id).map((m) => ({
+            ...messageView(m),
+            thread: m.threadId,
+            delivery: m.delivery === "queued" ? "queued" : "sent",
+          })),
+        };
+      },
+    },
+    {
+      method: "DELETE",
+      path: /^\/agents\/([^/]+)\/inbox\/([^/]+)$/,
+      async run({ params }) {
+        const { scoped, client, id } = agentOf(params[0]);
+        const message = scoped.inbox(id).find((m) => m.id === params[1]);
+        if (!message) throw new StudioError(404, "not_found", `No message ${params[1]} in this inbox.`);
+        if (message.a12sMessageId === null) scoped.unqueue(id, message.id);
+        else {
+          // Notes that rode along share the a12s Message, so they leave the inbox with it.
+          await client.withdraw(id, message.a12sMessageId);
+          scoped.markUndelivered([message.a12sMessageId]);
+        }
+        return written();
+      },
+    },
+    {
+      method: "POST",
+      path: /^\/agents\/([^/]+)\/inbox\/clear$/,
+      async run({ params }) {
+        const { scoped, client, id } = agentOf(params[0]);
+        scoped.unqueue(id);
+        await client.clearInbox(id);
+        // Only what a12s withdrew: a Message a Turn has just taken is still delivered.
+        const withdrawn = (await client.inbox(id)).filter((m) => m.state === "withdrawn").map((m) => m.id);
+        scoped.markUndelivered(withdrawn);
+        return written();
+      },
+    },
+    {
+      method: "GET",
+      path: /^\/agents\/([^/]+)\/files$/,
+      run({ params, query }) {
+        const { client, id } = agentOf(params[0]);
+        return client.readFile(id, homePath(query.get("path") ?? ""));
+      },
+    },
+    {
+      method: "PUT",
+      path: /^\/agents\/([^/]+)\/files$/,
+      async run({ params, query, body }) {
+        const { client, id } = agentOf(params[0]);
+        const path = homePath(query.get("path") ?? "");
+        const file = parse(schemas.putFile, body);
+        const content = file.encoding === "base64" ? Buffer.from(file.content, "base64") : Buffer.from(file.content);
+        await client.writeFile(id, path, content);
+        return written();
+      },
+    },
+    {
+      method: "GET",
+      path: /^\/agents\/([^/]+)\/terminal$/,
+      async socket(upgrade) {
+        const { client, id } = agentOf(upgrade.params[0]);
+        await bridgeTerminal(client, id, upgrade);
+      },
+    },
+    {
       method: "POST",
       path: /^\/teams\/([^/]+)\/threads$/,
       run({ params, body }) {
@@ -251,6 +422,16 @@ export function ownerRoutes(deps: OwnerDeps): Route[] {
       run({ params, query }) {
         const id = params[0] ?? "";
         return messagesPage(threadTeam(id), id, query.get("before") ?? undefined);
+      },
+    },
+    {
+      method: "GET",
+      path: /^\/files\/([^/]+)\/([^/]+)$/,
+      async run({ params, res }) {
+        const id = params[0] ?? "";
+        const teamId = repo.messageTeam(id);
+        const scoped = teamId === undefined ? undefined : repo.forTeam(teamId);
+        await sendAttachment(res, filesDir, scoped?.team() && scoped.message(id), params[1] ?? "");
       },
     },
     {

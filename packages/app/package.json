@@ -10,9 +10,11 @@
     "@a12s-studio/contract": "*",
     "@coltonkirsten/a12s": "0.11.2",
     "@modelcontextprotocol/sdk": "1.32.2",
+    "ws": "8.23.0",
     "zod": "4.6.7"
   },
   "devDependencies": {
-    "@a12s-studio/broker": "*"
+    "@a12s-studio/broker": "*",
+    "@types/ws": "8.18.2"
   }
 }

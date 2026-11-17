@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { StudioError } from "../errors.ts";
+import { attachmentUrl } from "../files.ts";
 import { boardStatus, nameOf } from "../router.ts";
 import type { Tool } from "./mcp.ts";
 
@@ -58,7 +59,7 @@ export const read: Tool<typeof input> = {
         to: m.toId && nameOf(m.toId),
         ask: m.askId,
         body: m.body,
-        file: m.fileName,
+        file: attachmentUrl(m),
         at: iso(m.createdAt),
       })),
     };

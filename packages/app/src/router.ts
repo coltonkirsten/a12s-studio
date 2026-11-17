@@ -7,6 +7,10 @@ import type { Agent, BoardRow, NewMessage, TeamRepo, Thread } from "./repo.ts";
 
 type PostInput = { kind: MessageKind; body: string; to?: string; thread?: string; title?: string; ask?: string };
 type Posted = { message: MessageId; thread: ThreadId };
+type Content = Pick<NewMessage, "body" | "fileName">;
+// A file to post with the message, stored by `store` inside the message's transaction, so a message never names a
+// file that is not there.
+type PostedFile = { name: string; store(message: MessageId): void };
 type FinishedTurn = {
   agentId: string;
   status: TurnStatus;
@@ -71,7 +75,7 @@ function ownerReceiver(team: TeamRepo, slug: string): Agent {
   );
 }
 
-function reply(team: TeamRepo, fromId: string, askId: string, body: string, threadId?: string): Posted {
+function reply(team: TeamRepo, fromId: string, askId: string, content: Content, threadId?: string): Posted {
   const ask = team.message(askId);
   if (!ask || (threadId !== undefined && ask.threadId !== threadId)) {
     notFound(`No message ${askId}.`, "Use read on the thread to find the ask's id.");
@@ -89,53 +93,66 @@ function reply(team: TeamRepo, fromId: string, askId: string, body: string, thre
     refuse("replied", `The ask ${askId} already has its reply.`, "Post a note to the thread to add more.");
   }
   const threadOf = ask.threadId;
-  const message = insert(team, { threadId: threadOf, kind: "reply", fromId, toId: ask.fromId, askId: ask.id, body });
+  const message = insert(team, {
+    threadId: threadOf,
+    kind: "reply",
+    fromId,
+    toId: ask.fromId,
+    askId: ask.id,
+    ...content,
+  });
   return { message, thread: threadOf };
 }
 
-export function agentPost(team: TeamRepo, caller: Caller, input: PostInput): Posted {
+export function agentPost(team: TeamRepo, caller: Caller, input: PostInput, file?: PostedFile): Posted {
+  return team.tx(() => {
+    const posted = post(team, caller, input, { body: input.body, fileName: file?.name });
+    file?.store(posted.message);
+    return posted;
+  });
+}
+
+function post(team: TeamRepo, caller: Caller, input: PostInput, content: Content): Posted {
   const { allowed, fix } = FIELDS[input.kind];
   for (const field of ["to", "thread", "title", "ask"] as const) {
     if (input[field] !== undefined && !allowed.includes(field)) {
       refuse("bad_field", `A ${input.kind} takes no ${field}.`, fix);
     }
   }
-  return team.tx(() => {
-    const fromId = caller.agentId;
-    if (input.kind === "reply") {
-      if (input.ask === undefined) refuse("missing_ask", "A reply needs ask.", fix);
-      return reply(team, fromId, input.ask, input.body);
-    }
-    if (input.kind === "note") {
-      if (input.thread === undefined) refuse("missing_thread", "A note needs thread.", fix);
-      const thread = mustThread(team, input.thread).id;
-      const toId = input.to === undefined ? null : agentReceiver(team, caller, input.to);
-      return {
-        message: insert(team, { threadId: thread, kind: "note", fromId, toId, askId: null, body: input.body }),
-        thread,
-      };
-    }
-    if (input.to === undefined) refuse("missing_to", "An ask needs to.", 'Set to to a name from roster, or "owner".');
-    const toId = agentReceiver(team, caller, input.to);
-    let thread: ThreadId;
-    if (input.thread !== undefined && input.title !== undefined) {
-      refuse(
-        "thread_or_title",
-        "An ask takes thread or title, not both.",
-        "Give thread to continue one, or title to start one.",
-      );
-    } else if (input.thread !== undefined) {
-      thread = mustThread(team, input.thread).id;
-    } else if (input.title !== undefined) {
-      thread = team.insertThread(input.title, fromId, Date.now());
-    } else {
-      refuse("missing_thread", "An ask needs thread or title.", "Give thread to continue one, or title to start one.");
-    }
+  const fromId = caller.agentId;
+  if (input.kind === "reply") {
+    if (input.ask === undefined) refuse("missing_ask", "A reply needs ask.", fix);
+    return reply(team, fromId, input.ask, content);
+  }
+  if (input.kind === "note") {
+    if (input.thread === undefined) refuse("missing_thread", "A note needs thread.", fix);
+    const thread = mustThread(team, input.thread).id;
+    const toId = input.to === undefined ? null : agentReceiver(team, caller, input.to);
     return {
-      message: insert(team, { threadId: thread, kind: "ask", fromId, toId, askId: null, body: input.body }),
+      message: insert(team, { threadId: thread, kind: "note", fromId, toId, askId: null, ...content }),
       thread,
     };
-  });
+  }
+  if (input.to === undefined) refuse("missing_to", "An ask needs to.", 'Set to to a name from roster, or "owner".');
+  const toId = agentReceiver(team, caller, input.to);
+  let thread: ThreadId;
+  if (input.thread !== undefined && input.title !== undefined) {
+    refuse(
+      "thread_or_title",
+      "An ask takes thread or title, not both.",
+      "Give thread to continue one, or title to start one.",
+    );
+  } else if (input.thread !== undefined) {
+    thread = mustThread(team, input.thread).id;
+  } else if (input.title !== undefined) {
+    thread = team.insertThread(input.title, fromId, Date.now());
+  } else {
+    refuse("missing_thread", "An ask needs thread or title.", "Give thread to continue one, or title to start one.");
+  }
+  return {
+    message: insert(team, { threadId: thread, kind: "ask", fromId, toId, askId: null, ...content }),
+    thread,
+  };
 }
 
 // The owner writing in a thread: with `ask`, the reply to that ask; otherwise an ask to the agent named in `to`,
@@ -149,7 +166,7 @@ export function ownerPost(
     if (input.ask !== undefined) {
       if (input.to !== undefined)
         refuse("bad_field", "A reply takes no to.", "Leave out to; the reply goes to the asker.");
-      return reply(team, "owner", input.ask, input.body, threadId);
+      return reply(team, "owner", input.ask, { body: input.body }, threadId);
     }
     const thread = mustThread(team, threadId);
     const to =

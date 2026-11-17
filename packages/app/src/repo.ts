@@ -61,6 +61,7 @@ export type Message = {
 
 export type NewMessage = Pick<Message, "threadId" | "kind" | "fromId" | "toId" | "askId" | "body"> & {
   implicit?: boolean;
+  fileName?: string;
 };
 
 export type StoredTurn = {
@@ -206,13 +207,18 @@ export function createRepo(db: DatabaseSync, onWrite: () => void = () => {}) {
           a.createdAt,
         );
       },
-      updateAgent(id: string, patch: Partial<Pick<Agent, "role" | "model">>): void {
+      updateAgent(a: Agent): void {
         run(
-          "UPDATE agents SET role = coalesce(?, role), model = coalesce(?, model) WHERE team_id = ? AND id = ?",
-          patch.role ?? null,
-          patch.model ?? null,
+          `UPDATE agents SET role = ?, model = ?, sleep_after_idle = ?, compact_min_tokens = ?, cpu = ?, memory = ?
+           WHERE team_id = ? AND id = ?`,
+          a.role,
+          a.model,
+          a.sleepAfterIdle,
+          a.compactMinTokens,
+          a.cpu,
+          a.memory,
           teamId,
-          id,
+          a.id,
         );
       },
       removeAgent(id: string, at: number): void {
@@ -311,8 +317,8 @@ export function createRepo(db: DatabaseSync, onWrite: () => void = () => {}) {
       insertMessage(m: NewMessage, delivery: Delivery, at: number): MessageId {
         const id = newId("m_");
         run(
-          `INSERT INTO messages (id, team_id, thread_id, kind, from_id, to_id, ask_id, body, implicit, delivery,
-             created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          `INSERT INTO messages (id, team_id, thread_id, kind, from_id, to_id, ask_id, body, file_name, implicit,
+             delivery, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
           id,
           teamId,
           m.threadId,
@@ -321,6 +327,7 @@ export function createRepo(db: DatabaseSync, onWrite: () => void = () => {}) {
           m.toId,
           m.askId,
           m.body,
+          m.fileName ?? null,
           m.implicit ? 1 : 0,
           delivery,
           at,
@@ -364,6 +371,26 @@ export function createRepo(db: DatabaseSync, onWrite: () => void = () => {}) {
              AND a12s_message_id IN (SELECT value FROM json_each(?))`,
           teamId,
           JSON.stringify(a12sIds),
+        );
+      },
+      // What the agent has not received yet, oldest first: queued in the app, or sent and not yet taken by a Turn.
+      inbox(agentId: string): Message[] {
+        return all(
+          `SELECT ${MESSAGE} FROM messages WHERE team_id = ? AND to_id = ? AND delivery IN ('queued', 'sent')
+           ORDER BY created_at, rowid`,
+          teamId,
+          agentId,
+        ).map(toMessage);
+      },
+      // The owner took queued messages out of the agent's inbox (one, or all with no id); they are never sent.
+      unqueue(agentId: string, id?: string): void {
+        run(
+          `UPDATE messages SET delivery = 'none' WHERE team_id = ? AND to_id = ? AND delivery = 'queued'
+             AND (? IS NULL OR id = ?)`,
+          teamId,
+          agentId,
+          id ?? null,
+          id ?? null,
         );
       },
       // Agents holding Studio messages that are in their a12s inbox but not yet taken by a Turn.
@@ -563,9 +590,13 @@ export function createRepo(db: DatabaseSync, onWrite: () => void = () => {}) {
         t.createdAt,
       );
     },
-    // The team a thread or Turn belongs to, so an owner route can load that team and work through forTeam.
+    // The team a thread, message or Turn belongs to, so an owner route can load that team and work through forTeam.
     threadTeam(id: string): string | undefined {
       const row = one("SELECT team_id AS t FROM threads WHERE id = ?", id);
+      return row && String(row.t);
+    },
+    messageTeam(id: string): string | undefined {
+      const row = one("SELECT team_id AS t FROM messages WHERE id = ?", id);
       return row && String(row.t);
     },
     turnTeam(id: string): string | undefined {

@@ -50,6 +50,7 @@ const app = createApp({
   brokerSocket: join(home, "broker", "admin.sock"),
   templatesDir: fileURLToPath(new URL("../../../teams", import.meta.url)),
   webDir: fileURLToPath(new URL("../../web/dist", import.meta.url)),
+  filesDir: join(home, "app", "files"),
   ownerLogin: config.ownerLogin,
 });
 
