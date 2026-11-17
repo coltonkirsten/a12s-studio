@@ -1,7 +1,8 @@
 import type { DatabaseSync, SQLInputValue } from "node:sqlite";
-import { agentId, type MessageId, newId, type ThreadId } from "@a12s-studio/contract/names";
+import { agentId, type MessageId, newId, type ThreadId, type WakeId } from "@a12s-studio/contract/names";
 import type { MessageKind, Settings, ThreadStatus } from "@a12s-studio/contract/state";
-import type { ModelCosts, Tokens, TurnStatus } from "./a12s/port.ts";
+import type { Tokens, TurnStatus } from "./a12s/port.ts";
+import type { SessionCosts } from "./cost.ts";
 import { tx } from "./db.ts";
 
 export type Team = {
@@ -72,7 +73,17 @@ export type StoredTurn = {
   startedAt: number | null;
   finishedAt: number;
   tokens: Tokens | undefined;
-  modelCostsUsd: ModelCosts;
+  costUsd: number;
+} & SessionCosts;
+
+export type Wake = {
+  id: WakeId;
+  teamId: string;
+  agentId: string;
+  threadId: ThreadId | null;
+  note: string;
+  dueAt: number;
+  repeatSeconds: number | null;
 };
 
 export type BoardRow = Thread & {
@@ -97,6 +108,8 @@ const AGENT = `id, team_id AS teamId, slug, role, model, sleep_after_idle AS sle
   compact_min_tokens AS compactMinTokens, cpu, memory, created_at AS createdAt`;
 const THREAD = `id, team_id AS teamId, title, owner_agent_id AS ownerAgentId, status, created_at AS createdAt,
   updated_at AS updatedAt`;
+const WAKE = `id, team_id AS teamId, agent_id AS agentId, thread_id AS threadId, note, due_at AS dueAt,
+  repeat_seconds AS repeatSeconds`;
 const MESSAGE = `id, team_id AS teamId, thread_id AS threadId, kind, from_id AS fromId, to_id AS toId,
   ask_id AS askId, body, file_name AS fileName, implicit, delivery, a12s_message_id AS a12sMessageId,
   created_at AS createdAt, delivered_at AS deliveredAt`;
@@ -105,6 +118,13 @@ const UNANSWERED =
   "a.kind = 'ask' AND NOT EXISTS (SELECT 1 FROM messages r WHERE r.ask_id = a.id AND r.kind = 'reply')";
 
 type Row = Record<string, unknown>;
+
+// The budget's day starts at local midnight.
+function localMidnight(now: number): number {
+  const day = new Date(now);
+  day.setHours(0, 0, 0, 0);
+  return day.getTime();
+}
 
 const toTeam = (row: Row): Team => ({ ...(row as Team), paused: row.paused === 1 });
 const toMessage = (row: Row): Message => ({ ...(row as Message), implicit: row.implicit === 1 });
@@ -377,8 +397,8 @@ export function createRepo(db: DatabaseSync, onWrite: () => void = () => {}) {
       insertTurn(t: StoredTurn): void {
         run(
           `INSERT OR IGNORE INTO turns (id, team_id, agent_id, thread_id, session, status, error, started_at,
-             finished_at, tokens_in, tokens_out, tokens_cache_read, tokens_cache_write, model_costs)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+             finished_at, tokens_in, tokens_out, tokens_cache_read, tokens_cache_write, model_costs, cost_usd)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
           t.id,
           teamId,
           t.agentId,
@@ -393,7 +413,19 @@ export function createRepo(db: DatabaseSync, onWrite: () => void = () => {}) {
           t.tokens?.cacheRead ?? null,
           t.tokens?.cacheWrite ?? null,
           JSON.stringify(t.modelCostsUsd),
+          t.costUsd,
         );
+      },
+      // The agent's latest stored Turn with a session, finished no later than `at`: what the cost rule compares to.
+      previousCosts(agentId: string, at: number): SessionCosts | undefined {
+        const row = one(
+          `SELECT session, model_costs AS costs FROM turns WHERE team_id = ? AND agent_id = ? AND session IS NOT NULL
+             AND finished_at <= ? ORDER BY finished_at DESC, rowid DESC LIMIT 1`,
+          teamId,
+          agentId,
+          at,
+        );
+        return row && { session: String(row.session), modelCostsUsd: JSON.parse(String(row.costs)) };
       },
       // Each agent's latest Turn, when it failed and the owner has not dismissed it.
       failedTurns(): { id: string; agentId: string; error: string | null; finishedAt: number }[] {
@@ -407,11 +439,48 @@ export function createRepo(db: DatabaseSync, onWrite: () => void = () => {}) {
       ackTurn(id: string, at: number): boolean {
         return run("UPDATE turns SET acked_at = ? WHERE team_id = ? AND id = ?", at, teamId, id) > 0;
       },
-      spentSince(at: number): number {
+      spentToday(now: number): number {
         return Number(
-          one("SELECT coalesce(sum(cost_usd), 0) AS s FROM turns WHERE team_id = ? AND finished_at >= ?", teamId, at)
-            ?.s ?? 0,
+          one(
+            "SELECT coalesce(sum(cost_usd), 0) AS s FROM turns WHERE team_id = ? AND finished_at >= ?",
+            teamId,
+            localMidnight(now),
+          )?.s ?? 0,
         );
+      },
+
+      // An agent's own wakes, soonest first.
+      wakes(agentId: string): Wake[] {
+        return all(
+          `SELECT ${WAKE} FROM wakes WHERE team_id = ? AND agent_id = ? ORDER BY due_at, rowid`,
+          teamId,
+          agentId,
+        ) as Wake[];
+      },
+      insertWake(w: Omit<Wake, "id" | "teamId">, at: number): WakeId {
+        const id = newId("w_");
+        run(
+          `INSERT INTO wakes (id, team_id, agent_id, thread_id, note, due_at, repeat_seconds, created_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+          id,
+          teamId,
+          w.agentId,
+          w.threadId,
+          w.note,
+          w.dueAt,
+          w.repeatSeconds,
+          at,
+        );
+        return id;
+      },
+      // Only the agent that set a wake can cancel it.
+      cancelWake(agentId: string, id: string): boolean {
+        return run("DELETE FROM wakes WHERE team_id = ? AND agent_id = ? AND id = ?", teamId, agentId, id) > 0;
+      },
+      // A fired wake is gone, or for a repeat, due again at `next`.
+      wakeFired(id: string, next: number | null): void {
+        if (next === null) run("DELETE FROM wakes WHERE team_id = ? AND id = ?", teamId, id);
+        else run("UPDATE wakes SET due_at = ? WHERE team_id = ? AND id = ?", next, teamId, id);
       },
 
       // Agents with a queued ask or reply, with what orders them: an owner message first, then the oldest.
@@ -461,6 +530,15 @@ export function createRepo(db: DatabaseSync, onWrite: () => void = () => {}) {
         const value = patch[field as keyof Settings];
         if (value !== undefined) run("UPDATE settings SET value = ? WHERE key = ?", JSON.stringify(value), key);
       }
+    },
+
+    // Wakes due by `now`, across teams, for the scheduler to hand each to its team's scoped repo.
+    dueWakes(now: number): Wake[] {
+      return all(
+        `SELECT ${WAKE} FROM wakes WHERE due_at <= ? AND team_id IN (SELECT id FROM teams WHERE deleted_at IS NULL)
+         ORDER BY due_at, rowid`,
+        now,
+      ) as Wake[];
     },
 
     teams(): Team[] {

@@ -2,7 +2,7 @@ import type { Attention, Grant } from "@a12s-studio/contract/broker-admin";
 import type { BrokerClient } from "./broker-client.ts";
 import type { Dispatcher } from "./dispatcher.ts";
 import { StudioError } from "./errors.ts";
-import type { Repo } from "./repo.ts";
+import type { Repo, Wake } from "./repo.ts";
 import { systemNote } from "./router.ts";
 
 const TICK_MS = 30_000;
@@ -12,7 +12,16 @@ type BrokerAttention = Attention & { credentialHosts: Record<string, string[]> }
 
 const NOTHING: BrokerAttention = { requests: [], expiring: [], rejected: [], credentialHosts: {} };
 
-// The one 30 s tick: the broker's attention items, the expiry warnings they call for, then a dispatcher run.
+// A repeat's next time: the first one after now on the wake's own cycle, so a long stop fires it once, not once
+// per missed hour.
+function nextDue(wake: Wake, now: number): number | null {
+  if (wake.repeatSeconds === null) return null;
+  const every = wake.repeatSeconds * 1000;
+  return wake.dueAt + every * (Math.floor((now - wake.dueAt) / every) + 1);
+}
+
+// The one 30 s tick: due wakes, the broker's attention items, the expiry warnings they call for, then a dispatcher
+// run, which delivers the wakes' asks under every limit.
 export function createScheduler(deps: {
   repo: Repo;
   broker: BrokerClient;
@@ -70,7 +79,29 @@ export function createScheduler(deps: {
     await broker.warned(grant.id);
   }
 
+  // Each wake becomes its ask in the same transaction that removes or moves it, so a crash can neither lose nor
+  // repeat one. A wake belongs to a current agent (removing an agent removes its wakes), so its ask is queued.
+  function fireWakes(now: number): void {
+    for (const wake of repo.dueWakes(now)) {
+      const team = repo.forTeam(wake.teamId);
+      const body = `scheduled wake ${wake.id}: ${wake.note}`;
+      team.tx(() => {
+        team.insertMessage(
+          { threadId: wake.threadId, kind: "ask", fromId: "system", toId: wake.agentId, askId: null, body },
+          "queued",
+          now,
+        );
+        team.wakeFired(wake.id, nextDue(wake, now));
+      });
+    }
+  }
+
   async function tick(): Promise<void> {
+    try {
+      fireWakes(Date.now());
+    } catch (error) {
+      console.error("scheduler: wakes:", error);
+    }
     try {
       const fresh = await refresh();
       for (const grant of fresh?.expiring ?? []) {

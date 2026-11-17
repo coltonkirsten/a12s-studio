@@ -1,15 +1,19 @@
 import type { StudioState, TeamView } from "@a12s-studio/contract/state";
-import type { CSSProperties } from "react";
+import { type CSSProperties, useState } from "react";
+import { createPortal } from "react-dom";
 import { api } from "../api.ts";
+import { budgetUsed, usd } from "../logic/money.ts";
 import { href, type Route } from "../logic/route.ts";
 import { Icon } from "../parts/icons.tsx";
 import { Dot } from "../parts/presence.tsx";
 import { Switch } from "../parts/switch.tsx";
+import { SettingsSheet } from "./settings.tsx";
 
 type Props = { state: StudioState; route: Route; connected: boolean; onNewTeam: () => void };
 
 export function Sidebar({ state, route, connected, onNewTeam }: Props) {
   const needs = state.needsYou.length;
+  const [settings, setSettings] = useState(false);
   return (
     <nav className="sidebar">
       <div className="sidebar-scroll">
@@ -42,14 +46,20 @@ export function Sidebar({ state, route, connected, onNewTeam }: Props) {
         {!connected && <p className="status-line">Reconnecting…</p>}
         {connected && state.a12s === "down" && <p className="status-line">a12s is not reachable</p>}
         <Switch label="Pause everything" on={state.settings.paused} set={(paused) => api.patchSettings({ paused })} />
+        <button type="button" className="side-row quiet" onClick={() => setSettings(true)}>
+          Settings…
+        </button>
       </footer>
+      {/* The sidebar's backdrop filter would hold a fixed sheet inside it, so the sheet is drawn on the page. */}
+      {settings &&
+        createPortal(<SettingsSheet settings={state.settings} onClose={() => setSettings(false)} />, document.body)}
     </nav>
   );
 }
 
 function TeamRow({ team, selected, needs }: { team: TeamView; selected: boolean; needs: number }) {
   const { dailyUsd, spentTodayUsd } = team.budget;
-  const used = dailyUsd > 0 ? Math.min(1, spentTodayUsd / dailyUsd) : 0;
+  const used = budgetUsed(spentTodayUsd, dailyUsd);
   return (
     <a
       className={selected ? "side-row team-row selected" : "side-row team-row"}
@@ -66,7 +76,7 @@ function TeamRow({ team, selected, needs }: { team: TeamView; selected: boolean;
           <Dot key={agent.id} presence={agent.presence} />
         ))}
       </span>
-      <span className="usage" title={`$${spentTodayUsd.toFixed(2)} of $${dailyUsd.toFixed(0)} today`}>
+      <span className="usage" title={`${usd(spentTodayUsd)} of ${usd(dailyUsd)} today`}>
         <span style={{ width: `${used * 100}%` }} />
       </span>
     </a>

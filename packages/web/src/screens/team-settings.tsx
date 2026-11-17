@@ -1,6 +1,7 @@
 import type { TeamView } from "@a12s-studio/contract/state";
 import { type CSSProperties, useState } from "react";
 import { api, useAccess, useAction } from "../api.ts";
+import { parseUsd, usd } from "../logic/money.ts";
 import { href } from "../logic/route.ts";
 import { Access } from "../parts/access/access.tsx";
 import { AuditLog } from "../parts/access/audit.tsx";
@@ -8,6 +9,7 @@ import { Icon } from "../parts/icons.tsx";
 import { Problem } from "../parts/problem.tsx";
 import { Sheet } from "../parts/sheet.tsx";
 import { Switch } from "../parts/switch.tsx";
+import { LimitField } from "./settings.tsx";
 
 export function TeamSettings({ team }: { team: TeamView }) {
   const [deleting, setDeleting] = useState(false);
@@ -29,6 +31,11 @@ export function TeamSettings({ team }: { team: TeamView }) {
       <section className="settings-section">
         <h2>Access</h2>
         <Access team={team.id} access={access} />
+      </section>
+
+      <section className="settings-section">
+        <h2>Budget</h2>
+        <Budget team={team} />
       </section>
 
       <section className="settings-section">
@@ -78,6 +85,21 @@ function Brief({ team }: { team: TeamView }) {
         </div>
       )}
     </form>
+  );
+}
+
+function Budget({ team }: { team: TeamView }) {
+  const { dailyUsd, spentTodayUsd, held } = team.budget;
+  const spent = `${usd(spentTodayUsd)} spent today, at list price since local midnight.`;
+  return (
+    <LimitField
+      key={dailyUsd}
+      label="Daily budget, in dollars"
+      hint={held ? `${spent} Work waits until midnight or a higher budget.` : spent}
+      value={dailyUsd}
+      parse={parseUsd}
+      save={(dailyBudgetUsd) => api.patchTeam(team.id, { dailyBudgetUsd })}
+    />
   );
 }
 

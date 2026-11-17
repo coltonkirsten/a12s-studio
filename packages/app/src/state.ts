@@ -8,7 +8,7 @@ import type {
   ThreadView,
 } from "@a12s-studio/contract/state";
 import type { BrokerClient } from "./broker-client.ts";
-import { blockedReason } from "./dispatcher.ts";
+import { blockedReason, freeDiskGb, overBudget } from "./dispatcher.ts";
 import { type Live, presenceOf } from "./live.ts";
 import type { Message, Repo, TeamRepo } from "./repo.ts";
 import { boardStatus } from "./router.ts";
@@ -40,12 +40,6 @@ export function messagesPage(team: TeamRepo, threadId: string, before?: string) 
   return { messages: rows.slice(-MESSAGES).map(messageView), hasMore: rows.length > MESSAGES };
 }
 
-function localMidnight(now: number): number {
-  const day = new Date(now);
-  day.setHours(0, 0, 0, 0);
-  return day.getTime();
-}
-
 type Sources = { repo: Repo; live: Live; broker: Pick<BrokerClient, "up">; scheduler: Pick<Scheduler, "attention"> };
 
 // StudioState without its rev, from the database, the live agent records and the broker's last attention answer.
@@ -56,12 +50,19 @@ export function deriveState(
 ): Omit<StudioState, "rev"> {
   const settings = repo.settings();
   const attention = scheduler.attention();
-  const since = localMidnight(Date.now());
+  const now = Date.now();
   const needsYou: NeedsYouItem[] = [];
+  // The dispatcher's count, as far as the live records know it: a phase other than Asleep.
+  const awake = repo
+    .teams()
+    .flatMap((team) => repo.forTeam(team.id).agents())
+    .filter((agent) => {
+      const phase = live.agent(agent.id)?.phase;
+      return phase !== undefined && phase !== "Asleep";
+    }).length;
   const teams: TeamView[] = repo.teams().map((team) => {
     const scoped = repo.forTeam(team.id);
     const waiting = scoped.undelivered();
-    const blocked = blockedReason(settings, team);
     for (const m of scoped.ownerQuestions()) {
       if (m.threadId)
         needsYou.push({ kind: "question", teamId: team.id, threadId: m.threadId, message: messageView(m) });
@@ -91,7 +92,10 @@ export function deriveState(
         needsYou.push({ kind: "grant_expiring", teamId, grantId: id, host, paths, expiresAt });
       }
     }
-    const spent = scoped.spentSince(since);
+    const spent = scoped.spentToday(now);
+    const held = overBudget(team, spent);
+    if (held) needsYou.push({ kind: "budget", teamId: team.id, dailyUsd: team.dailyBudgetUsd, spentTodayUsd: spent });
+    const blocked = (asleep: boolean) => blockedReason(settings, team, spent, asleep ? { awake, freeDiskGb } : null);
     return {
       id: team.id,
       name: team.name,
@@ -99,7 +103,7 @@ export function deriveState(
       accent: team.accent,
       paused: team.paused,
       leadId: team.leadAgentId,
-      budget: { dailyUsd: team.dailyBudgetUsd, spentTodayUsd: spent, held: spent >= team.dailyBudgetUsd },
+      budget: { dailyUsd: team.dailyBudgetUsd, spentTodayUsd: spent, held },
       agents: scoped.agents().map((agent) => {
         const rec = live.agent(agent.id);
         const queue = waiting.get(agent.id);
@@ -107,16 +111,18 @@ export function deriveState(
         if (rec?.phase === "Error") {
           needsYou.push({ kind: "agent_error", teamId: team.id, agentId: agent.id, error: rec.error ?? "" });
         }
-        const held =
-          blocked !== null && queue?.dispatchable === true && (presence === "asleep" || presence === "awake");
-        if (held) presence = "waiting";
+        const waitingFor =
+          queue?.dispatchable === true && (presence === "asleep" || presence === "awake")
+            ? blocked(presence === "asleep")
+            : null;
+        if (waitingFor) presence = "waiting";
         return {
           id: agent.id,
           slug: agent.slug,
           roleLine: agent.role.split("\n")[0] ?? "",
           model: agent.model,
           presence,
-          ...(held && blocked ? { waitingFor: blocked } : {}),
+          ...(waitingFor ? { waitingFor } : {}),
           line: rec?.line ?? null,
           turn: rec?.turn
             ? {

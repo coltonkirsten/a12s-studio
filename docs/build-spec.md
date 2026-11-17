@@ -382,7 +382,9 @@ schedule: {
   thread?: string,
   id?: string                            // cancel
 }
-// at most 20 wakes per agent; an agent sees and cancels only its own
+// set    -> { wake: id, due }        list -> { wakes: [{ id, due, repeat_hours, note, thread }] }
+// cancel -> { cancelled: id }
+// at most 20 wakes per agent, each due within a year; an agent sees and cancels only its own
 
 access: {
   action: "list" | "request",
@@ -422,8 +424,10 @@ Rules when a message is committed (`router.ts`):
 
 **The dispatcher** (`dispatcher.ts`) is one function, `run()`, serialized (a run requested during a run sets a flag
 and runs once more). It is called after every committed message, every a12s phase change, every settings change,
-and every scheduler tick. It keeps no state of its own except the set of agents it has just woken, cleared when their
-phase event arrives. Phases and pending counts come from each team's `status()` at the start of a run.
+and every scheduler tick. It keeps no state of its own except the set of agents it has just woken, each cleared once
+`status()` reports it not asleep: a12s takes a wake before it reports the new phase, and until then the agent counts
+as awake and is not woken twice. Phases and pending counts come from each team's `status()` at the start of a run;
+when a team's cannot be read, its awake agents are unknown, so the run wakes nobody.
 
 ```
 if settings.paused: return
@@ -442,6 +446,8 @@ for each candidate:
 ```
 
 The skips that show as `waiting` (paused, budget, cap, disk) are decided in one function, `blockedReason`.
+Free disk is measured on the volume that holds the home folder: on macOS Docker's data root is inside its VM, out of
+the host's reach, and the VM's disk image lives on that volume.
 
 - Send, then wake: the agent wakes with its work already pending.
 - All run-time a12s calls use the team's prefix token client.
@@ -523,7 +529,8 @@ agents put to sleep with work in their inbox are woken, and the queued messages 
   (edits the limit in place). The hold ends when the sum drops below the limit: at midnight or after an edit.
 - **Scheduled wakes**: the scheduler tick (every 30 s) takes each `wakes` row with `due_at <= now` and, in one
   transaction, inserts a system ask to the agent (`scheduled wake w_…: <note>`, in the wake's thread if set) and
-  either deletes the row or, for a repeat, moves `due_at` forward to the next time after now. The ask then goes
+  either deletes the row or, for a repeat, moves `due_at` forward to the first time after now on its own cycle (a
+  wake missed while the app was stopped fires once). The ask then goes
   through the dispatcher like any other, so pause, budget and the cap apply to it.
 - The same tick asks the broker for attention items (section 9.6) and re-runs the dispatcher, which covers the
   midnight budget reset.
@@ -791,8 +798,8 @@ Turn's session, sub-agents and `/compact` Turns included. The port passes these 
 and the `turns` row keeps them as JSON in `model_costs`.
 
 `cost_usd` = the sum, over the models the Turn reports, of the model's total minus the same model's total in the
-agent's previous Turn. A model counts in full when the previous Turn has another `session`, does not list the model,
-or lists a larger total. A Turn that ended before the harness started has no session and costs nothing. The rule
+agent's previous Turn (its latest stored Turn with a session). A model counts in full when the previous Turn has
+another `session`, does not list the model, or lists a larger total. A Turn that ended before the harness started has no session and costs nothing. The rule
 lives in one function with table tests.
 
 ### 7.5 Owner API
