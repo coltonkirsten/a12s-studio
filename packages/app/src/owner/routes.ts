@@ -30,7 +30,6 @@ const MODEL = z.string().min(1).max(100);
 
 const schemas = {
   createTeam: z.strictObject({
-    slug: SLUG,
     name: TEXT.max(80),
     purpose: TEXT.max(4000),
     accent: z.string().regex(/^#[0-9a-fA-F]{6}$/),

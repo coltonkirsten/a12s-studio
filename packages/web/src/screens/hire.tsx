@@ -1,8 +1,8 @@
-import { AGENT_SLUG } from "@a12s-studio/contract/names";
+import { AGENT_SLUG, agentSlug } from "@a12s-studio/contract/names";
 import type { Settings, TeamView } from "@a12s-studio/contract/state";
 import { useState } from "react";
 import { api, useAction } from "../api.ts";
-import { agentSlug, title } from "../logic/names.ts";
+import { title } from "../logic/names.ts";
 import { Problem } from "../parts/problem.tsx";
 import { Sheet } from "../parts/sheet.tsx";
 

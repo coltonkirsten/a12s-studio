@@ -12,7 +12,7 @@ before(async () => {
   await s.twoTeams();
   await s.app.teams.hire("web", { slug: "gone", role: "Leaves soon.", model: "haiku" });
   await s.app.teams.fire("web", "web-gone");
-  await s.app.teams.createTeam({ slug: "old", name: "Old", purpose: "Gone.", accent: "#000000", template: "website" });
+  await s.app.teams.createTeam({ name: "Old", purpose: "Gone.", accent: "#000000", template: "website" });
   await s.app.teams.deleteTeam("old");
 });
 after(() => s.close());

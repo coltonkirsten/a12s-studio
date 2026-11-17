@@ -4,7 +4,35 @@ const AGENT = "[a-z][a-z0-9-]{0,29}";
 export const TEAM_SLUG = new RegExp(`^${TEAM}$`);
 export const AGENT_SLUG = new RegExp(`^${AGENT}$`);
 export const AGENT_ID = new RegExp(`^${TEAM}-${AGENT}$`);
-export const RESERVED_TEAM_SLUGS: readonly string[] = ["studio", "broker", "owner", "system", "a12s"];
+const RESERVED_TEAM_SLUGS: readonly string[] = ["studio", "broker", "owner", "system", "a12s"];
+
+function plain(name: string): string {
+  return name
+    .normalize("NFKD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase();
+}
+
+/** A team's slug comes from its name: words run together, then a number if the slug is reserved or taken. */
+export function teamSlug(name: string, taken: (slug: string) => boolean): string {
+  const words = plain(name)
+    .replace(/[^a-z0-9]/g, "")
+    .replace(/^[0-9]+/, "");
+  const stem = words.length >= 2 ? words : "team";
+  for (let n = 1; ; n++) {
+    const suffix = n === 1 ? "" : String(n);
+    const slug = stem.slice(0, 20 - suffix.length) + suffix;
+    if (!RESERVED_TEAM_SLUGS.includes(slug) && !taken(slug)) return slug;
+  }
+}
+
+export function agentSlug(name: string): string {
+  return plain(name)
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^[^a-z]+/, "")
+    .slice(0, 30)
+    .replace(/-+$/, "");
+}
 
 // The owner's UI and API; on loopback only, reached through tailscale serve from other devices.
 export const OWNER_PORT = 7400;

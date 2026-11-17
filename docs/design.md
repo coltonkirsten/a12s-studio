@@ -60,7 +60,8 @@ Across teams, nothing passes. You are the only bridge.
 **What teams share:** the owner's Claude login, the Mac and one agent image. A team is a wall for work and access,
 not for billing.
 
-**Creating a team** is one sheet: a name, a purpose and a template. A template is a folder in the repo (`teams/<name>/`
+**Creating a team** is one sheet: pick a template, which fills in a name and a purpose to edit; the blank template
+starts with none and only a lead. Studio makes the team's id from its name. A template is a folder in the repo (`teams/<name>/`
 with a brief and one role file per agent). The template only creates the team. After that the app's database is the
 truth, and the folder is not read again.
 

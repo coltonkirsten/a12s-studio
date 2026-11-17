@@ -132,7 +132,7 @@ packages/
   web/
     src/main.tsx  app.tsx  stream.ts  api.ts  screens/  parts/  styles/*.css
     src/logic/          pure functions (folding, formatting, command palette); these are tested
-teams/                  templates: website/, research-notes/
+teams/                  templates: blank/, website/, research-notes/
 scripts/                setup.sh, backup.ts, restore.ts
 launchd/
 .github/workflows/ci.yml
@@ -168,6 +168,8 @@ Natural keys keep the walls simple: a team's id is its slug, an agent's id is it
   names. Reserved: `studio`, `broker`, `owner`, `system`, `a12s`.
 - Agent slug: `^[a-z][a-z0-9-]{0,29}$`. Agent id = `<team>-<agent>`. The team of an agent computer name is everything
   before its first hyphen.
+- A team's slug comes from its name (`teamSlug` in `names.ts`): lower case, letters and digits run together, `team`
+  if fewer than two are left, then `2`, `3`, ... if it is reserved or has been used. The owner never types it.
 - Slugs are never reused: teams and agents are soft-deleted, because a12s keeps a removed agent computer's home drive
   and inbox under its name.
 
@@ -715,7 +717,7 @@ All under `/api`, all behind `ownerGate`. Bodies are zod-checked.
 ```
 GET    /stream?thread=
 GET    /templates
-POST   /teams                         { slug, name, purpose, accent, template }
+POST   /teams                         { name, purpose, accent, template }     (answers the new team's id)
 PATCH  /teams/:team                   { name?, purpose?, accent?, dailyBudgetUsd?, paused? }
 DELETE /teams/:team
 POST   /teams/:team/agents            { slug, role, model }
@@ -749,7 +751,11 @@ messages `none`.
 
 `teams/<template>/brief.md` (the purpose) and `teams/<template>/roles/<slug>.md` (one per agent; `lead.md` is
 required and becomes the lead). Every agent takes the default model. Creating a team from a template inserts rows
-and hires the agents; the folder is never read again for that team. Two ship:
+and hires the agents; the folder is never read again for that team. The New team sheet starts with the template; a
+template's name and brief fill the form, which the owner then edits. Three ship:
+
+- `blank`: an empty brief and only `lead`, for a team that starts from nothing. Every team keeps a lead, because an
+  unaddressed message goes to the lead.
 
 - `website`: `lead` (plans, talks to the owner, reviews) and `dev` (writes and tests the code).
 - `research-notes`: `lead` and `researcher`, for a written comparison on a neutral topic, such as comparing
