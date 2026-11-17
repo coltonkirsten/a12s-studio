@@ -1,10 +1,5 @@
 export const HOME = "/home/agent";
 
-/** The folder a path is in; null for the home itself, which is as far up as the inspector goes. */
-export function parentPath(path: string): string | null {
-  return path === HOME ? null : path.slice(0, path.lastIndexOf("/"));
-}
-
 /** Each step from the home down to `path`, for the breadcrumb. */
 export function crumbs(path: string): { name: string; path: string }[] {
   const steps = [{ name: "Home", path: HOME }];

@@ -1,15 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { crumbs, fileSize, HOME, parentPath } from "./files.ts";
-
-test("parentPath stops at the home", () => {
-  const rows: [string, string | null][] = [
-    [HOME, null],
-    [`${HOME}/memory`, HOME],
-    [`${HOME}/memory/notes.md`, `${HOME}/memory`],
-  ];
-  for (const [path, parent] of rows) assert.equal(parentPath(path), parent, path);
-});
+import { crumbs, fileSize, HOME } from "./files.ts";
 
 test("crumbs walk from the home down to the path", () => {
   assert.deepEqual(crumbs(HOME), [{ name: "Home", path: HOME }]);

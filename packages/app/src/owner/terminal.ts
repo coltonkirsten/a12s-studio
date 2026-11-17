@@ -22,10 +22,15 @@ function size(query: URLSearchParams): { rows: number; cols: number } {
 export async function bridgeTerminal(client: TeamA12s, agent: string, upgrade: Upgrade): Promise<void> {
   const { req, socket, head, query } = upgrade;
   const browser = await new Promise<WebSocket>((resolve) => sockets.handleUpgrade(req, socket, head, resolve));
+  // A frame the WebSocket refuses (too large, malformed) closes it; with no listener it would stop the app.
+  browser.on("error", () => browser.terminate());
+  // What is typed before a12s has opened the terminal waits for it.
+  browser.pause();
   let stream: Duplex;
   try {
     ({ stream } = await client.openTerminal(agent, size(query)));
   } catch (error) {
+    browser.resume();
     browser.close(1011, error instanceof A12sError ? error.code : "other");
     if (!(error instanceof A12sError)) console.error(`terminal for ${agent}:`, error);
     return;
@@ -36,4 +41,5 @@ export async function bridgeTerminal(client: TeamA12s, agent: string, upgrade: U
   stream.on("error", () => browser.close(1011, "unreachable"));
   browser.on("close", () => stream.destroy());
   browser.on("message", (data) => stream.write(data as Buffer));
+  browser.resume();
 }

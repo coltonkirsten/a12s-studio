@@ -386,3 +386,37 @@ test("terminal: an asleep agent's terminal closes with asleep, for the inspector
   const term = connect(s, "/api/agents/web-dev/terminal");
   assert.deepEqual(await term.closed, { code: 1011, reason: "asleep" });
 });
+
+test("terminal: what is typed while a12s opens the terminal reaches it", async (t) => {
+  const s = await setup(t, {
+    wrap: (fake) => ({
+      ...fake,
+      forTeam(token) {
+        const team = fake.forTeam(token);
+        return {
+          ...team,
+          async openTerminal(name, size) {
+            await new Promise((resolve) => setTimeout(resolve, 50));
+            return team.openTerminal(name, size);
+          },
+        };
+      },
+    }),
+  });
+  const term = connect(s, "/api/agents/web-dev/terminal");
+  const echoed = new Promise<Buffer>((resolve) => term.socket.once("message", (data) => resolve(data as Buffer)));
+  await term.opened;
+  term.socket.send(Buffer.from("ls\r"));
+  assert.equal((await echoed).toString(), "ls\r");
+  term.socket.close();
+  await term.closed;
+});
+
+test("terminal: a frame over the limit closes that terminal and nothing else", async (t) => {
+  const s = await setup(t);
+  const term = connect(s, "/api/agents/web-dev/terminal");
+  await term.opened;
+  term.socket.send(Buffer.alloc(65 * 1024, "x"));
+  assert.equal((await term.closed).code, 1009);
+  assert.equal((await s.owner("GET", "/api/agents/web-dev")).status, 200);
+});

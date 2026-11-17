@@ -113,6 +113,7 @@ export const api = {
   file: (agent: string, path: string) => read<FileView>(`/agents/${at(agent)}/files?path=${at(path)}`, [], "file"),
   putFile: (agent: string, path: string, body: PutFileBody) =>
     write("PUT", `/agents/${at(agent)}/files?path=${at(path)}`, body),
+  attachment: (message: string, name: string) => `/api/files/${at(message)}/${at(name)}`,
   terminal: (agent: string, rows: number, cols: number) =>
     `${location.protocol === "https:" ? "wss" : "ws"}://${location.host}/api/agents/${at(agent)}/terminal?rows=${rows}&cols=${cols}`,
 };

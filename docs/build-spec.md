@@ -862,11 +862,12 @@ like an unknown one. `PATCH /agents/:agent` puts the agent's spec again with the
 after a12s has taken it; `null` for `cpu` or `memory` is a12s's default. `GET …/turns` answers a12s's last 20 Turns,
 each with its text; `GET …/turns/:turn/events` answers its tool calls, each with its "doing now" line and its input
 and output cut at 4000 characters. `GET …/inbox` answers the agent's messages that are `queued` or `sent`, oldest
-first, each with the a12s Message it was sent as (`sentAs`, null while queued). Removing one marks it `none`; a `sent` one is first withdrawn from a12s, and the notes that rode on it leave
-with it. Clearing marks every `queued` one `none`, clears the a12s inbox, and marks `none` the `sent` ones a12s
-reports withdrawn; a Message a Turn has already taken is not withdrawn and stays `sent`. Files are read and written
-through a12s at a path `homePath` accepts. An a12s refusal keeps its meaning: `not_found` is a 404, `asleep` and
-`busy` a 409 (the inspector offers Wake on `asleep`); any other a12s error is a 502.
+first, each with the a12s Message it was sent as (`sentAs`, null while queued). Removing one marks it `none`; a
+`sent` one is first withdrawn from a12s, and the notes that rode on it leave with it. Clearing marks every `queued`
+one `none`, clears the a12s inbox, and marks `none` the `sent` ones a12s reports withdrawn; a Message a Turn has
+already taken is not withdrawn and stays `sent`. Files are read and written through a12s at a path `homePath`
+accepts. An a12s refusal keeps its meaning: `not_found` is a 404, `asleep` and `busy` a 409 (the inspector offers
+Wake on `asleep`); any other a12s error is a 502.
 
 The terminal's WebSocket carries the terminal's bytes both ways, at the size the URL names (24 by 80 otherwise; the
 web uses that fixed size). The upgrade passes `ownerGate` and the agent lookup before a12s is asked for a terminal. A
@@ -874,7 +875,8 @@ terminal a12s will not open closes the socket with code 1011 and a12s's error co
 
 An attachment is always downloaded, never shown: both listeners answer it as `application/octet-stream` with
 `Content-Disposition: attachment`, `nosniff` and a `sandbox` policy. An agent chose its content and its name, and on
-the owner's listener a page of Studio's own origin could drive the owner API.
+the owner's listener a page of Studio's own origin could drive the owner API. In a conversation, a message's file is
+a link to the owner's route.
 
 ### 7.6 Message bodies
 

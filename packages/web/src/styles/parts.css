@@ -345,6 +345,10 @@
   font-size: var(--size-small);
 }
 
+.file:hover {
+  text-decoration: underline;
+}
+
 .talk-line {
   display: inline-flex;
   align-items: center;

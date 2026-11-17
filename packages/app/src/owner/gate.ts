@@ -22,8 +22,9 @@ export function ownerGate(method: string, headers: IncomingHttpHeaders, ownerLog
     );
   }
   const socket = headers.upgrade !== undefined;
-  if (READS.includes(method) && !socket) return null;
-  if (!socket && headers["content-type"]?.split(";")[0]?.trim() !== "application/json") {
+  if (READS.includes(method)) {
+    if (!socket) return null;
+  } else if (headers["content-type"]?.split(";")[0]?.trim() !== "application/json") {
     return new StudioError(415, "not_json", "A change must be sent as application/json.", "Send a JSON body.");
   }
   const origin = headers.origin;
