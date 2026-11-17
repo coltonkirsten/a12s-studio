@@ -75,7 +75,7 @@ test("turn.started marks the delivered messages and sets the Turn's thread", asy
   await until(() => delivery(s, posted.message) === "delivered");
   const lead = agentView(s, "web-lead");
   assert.equal(lead?.presence, "working");
-  assert.equal(lead?.line, "Thinking");
+  assert.equal(lead?.line, "Working");
   assert.equal(lead?.turn?.threadId, posted.thread);
 });
 

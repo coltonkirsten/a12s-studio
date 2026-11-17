@@ -7,7 +7,7 @@ import { shortTime } from "../logic/time.ts";
 import { Composer } from "../parts/composer.tsx";
 import { Conversation, StatusChip } from "../parts/conversation.tsx";
 import { Icon } from "../parts/icons.tsx";
-import { Dot, doing } from "../parts/presence.tsx";
+import { Dot, doing, WorkList } from "../parts/presence.tsx";
 import { Problem } from "../parts/problem.tsx";
 
 type Props = { state: StudioState; team: TeamView; route: Route; onHire: () => void };
@@ -135,6 +135,7 @@ function AgentRow({ agent, lead }: { agent: AgentView; lead: boolean }) {
           <span className={`agent-doing doing-${agent.presence}`}>{doing(agent)}</span>
         </span>
       </button>
+      <WorkList items={agent.work} />
       {open && (
         <div className="agent-more">
           <p className="agent-role">{agent.roleLine}</p>

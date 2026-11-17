@@ -44,6 +44,7 @@ function agent(
     presence,
     line: null,
     turn: null,
+    work: [],
     queued: 0,
     ...extra,
   };
@@ -63,6 +64,31 @@ function thread(
 ): ThreadView {
   return { id, teamId, title, ownerId: `${teamId}-lead`, status, messages, hasMore: false };
 }
+
+// An answer as agents write them: markdown, with an image and a tag the page must not honour.
+const SUMMARY = `## Summary
+
+All three are fine for a small docs site. **The fastest builds** came from the one with the fewest plugins; the best docs belong to the oldest.
+
+| Tool | Build | Plugins | Docs |
+|---|--:|--:|---|
+| Alpha | 1.2 s | 40 | Good |
+| Beta | 3.8 s | 300 | Very good |
+| Gamma | 2.1 s | 120 | Excellent |
+
+- [x] Build times on the same 200 pages
+- [x] Plugin counts from each registry
+- [ ] Theme support, next week
+
+To try the fastest one:
+
+\`\`\`sh
+npx alpha build --out site && npx alpha serve site --port 8080 --open --watch --verbose
+\`\`\`
+
+> Raw numbers are in \`compare.md\`.
+
+Sources: [Alpha docs](https://example.com/alpha), ![build time chart](https://example.com/chart.png). <script>alert("hi")</script>`;
 
 const question = msg(
   "ask",
@@ -118,13 +144,7 @@ const threads: ThreadView[] = [
       60 * 5 - 2,
     ),
     msg("reply", "notes-researcher", "notes-lead", "Notes are in compare.md.", 60 * 2),
-    msg(
-      "reply",
-      "notes-lead",
-      "owner",
-      "Summary: all three are fine for a small site. The fastest builds came from the one with the fewest plugins; the best docs belong to the oldest. Details are in compare.md.",
-      60 * 2 - 5,
-    ),
+    msg("reply", "notes-lead", "owner", SUMMARY, 60 * 2 - 5),
   ]),
   thread("th_fixturereading", "notes", "Reading list for next week", "done", [
     msg("ask", "owner", "notes-lead", "Five short articles on writing clear documentation.", 60 * 24 * 3),
@@ -142,7 +162,28 @@ const teams: Omit<TeamView, "threads">[] = [
     leadId: "website-lead",
     budget: { dailyUsd: 25, spentTodayUsd: 6.4, held: false },
     agents: [
-      agent("website-lead", "Plans the work, talks to you, reviews", "awake"),
+      // Its Turn has ended and its work runs on: working, with the work listed.
+      agent("website-lead", "Plans the work, talks to you, reviews", "working", {
+        line: "Working in the background",
+        work: [
+          {
+            id: "task-fixture-1",
+            kind: "agent",
+            description: "Check every page for the same overlap",
+            threadId: "th_fixturemenu",
+            startedAt: now - 7 * MIN,
+            line: "Reading header.css",
+          },
+          {
+            id: "task-fixture-2",
+            kind: "task",
+            description: "npm run preview",
+            threadId: "th_fixturemenu",
+            startedAt: now - 4 * MIN,
+            line: null,
+          },
+        ],
+      }),
       agent("website-dev", "Writes and tests the code", "working", {
         line: "Running tests",
         turn: { id: "turn-fixture", threadId: "th_fixturemenu", startedAt: now - 2 * MIN, text: "" },
@@ -367,7 +408,7 @@ function changed(): void {
 }
 
 const words =
-  "The header now wraps below 600px and the logo keeps its size. I added a test that renders the header at 390px and checks nothing overlaps. Running the full suite once more before I post the result.".split(
+  "The header now wraps below **600px** and the logo keeps its size. I added a test that renders the header at 390px and checks nothing overlaps. Running the full suite once more before I post the result.".split(
     /(?= )/,
   );
 let word = 0;
@@ -386,6 +427,16 @@ setInterval(() => {
   const live = { agent: dev.id, turn: dev.turn.id, text };
   for (const c of clients) c.res.write(`event: live\ndata: ${JSON.stringify(live)}\n\n`);
 }, 140);
+
+// The lead's sub-agent moves on as its tool calls arrive.
+const subAgentLines = ["Reading header.css", "Searching", "Reading footer.css", "Editing notes.md"];
+let step = 0;
+setInterval(() => {
+  const item = teams[0]?.agents[0]?.work[0];
+  if (!item) return;
+  item.line = subAgentLines[++step % subAgentLines.length] ?? null;
+  changed();
+}, 2500);
 
 async function body(req: AsyncIterable<Buffer>): Promise<Record<string, unknown>> {
   let raw = "";

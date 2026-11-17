@@ -1,10 +1,22 @@
 import { basename } from "node:path";
 import { type ThreadId, TOOL_PREFIX, teamOf } from "@a12s-studio/contract/names";
-import type { LiveText, Presence } from "@a12s-studio/contract/state";
-import { type A12s, A12sError, type A12sEvent, type EventFeed, type Phase, type TurnRecord } from "./a12s/port.ts";
+import type { LiveText, Presence, WorkItem } from "@a12s-studio/contract/state";
+import {
+  type A12s,
+  A12sError,
+  type A12sEvent,
+  type BackgroundItem,
+  type EventFeed,
+  type Phase,
+  type TurnRecord,
+} from "./a12s/port.ts";
 import type { Dispatcher } from "./dispatcher.ts";
 import type { Repo, TeamRepo } from "./repo.ts";
 import { onTurnFinished, systemAsk } from "./router.ts";
+
+// A sub-agent or background work of an agent. `call` is the tool call that started it, which a sub-agent's own calls
+// name as their parent; `background` once a12s has reported it as work that outlives the Turn.
+type Work = Omit<WorkItem, "id"> & { call: string | null; background: boolean };
 
 // What an agent is doing, known only from a12s events; never stored.
 export type AgentLive = {
@@ -21,6 +33,10 @@ export type AgentLive = {
     whole: boolean;
   } | null;
   tools: Set<string>;
+  // By item id: the launching call's id until a12s names it as a background task, then the task's.
+  work: Map<string, Work>;
+  // The thread of the work item that ended last, for the Turn with no Messages that the harness starts after it.
+  lastThread: ThreadId | null;
 };
 
 export type Live = ReturnType<typeof createLive>;
@@ -30,6 +46,7 @@ const RESYNC_TURNS = 20;
 const POST_AGAIN =
   "a12s Studio could not be reached during part of your last Turn, and a Studio tool call in it failed. " +
   "What you posted then was not received. Use read to see what did arrive, and post again what is missing.";
+const IN_BACKGROUND = "Working in the background";
 const STUDIO_LINES: Record<string, string> = {
   read: "Checking the board",
   update_thread: "Checking the board",
@@ -38,13 +55,47 @@ const STUDIO_LINES: Record<string, string> = {
   schedule: "Checking its schedule",
 };
 
-// No phase: a12s has not reported one, as before the first resync or while a12s is down at start.
-export function presenceOf(phase: Phase | undefined): Presence {
+// No phase: a12s has not reported one, as before the first resync or while a12s is down at start. Between Turns
+// a12s reports an agent with background work as Ready; it is not idle.
+export function presenceOf(phase: Phase | undefined, hasWork: boolean): Presence {
   if (phase === undefined) return "unknown";
   if (phase === "Asleep") return "asleep";
-  if (phase === "Busy") return "working";
+  if (phase === "Busy" || (phase === "Ready" && hasWork)) return "working";
   if (phase === "Error") return "error";
   return "awake";
+}
+
+// The line of an agent with no Turn running.
+function idleLine(rec: AgentLive): void {
+  if (!rec.turn) rec.line = rec.work.size > 0 ? IN_BACKGROUND : null;
+}
+
+function workOf(rec: AgentLive, call: string): [string, Work] | undefined {
+  for (const entry of rec.work) if (entry[1].call === call) return entry;
+  return undefined;
+}
+
+// a12s passes the harness's own kind: Claude Code names a sub-agent local_agent.
+const kindOf = (kind: string): Work["kind"] => (kind === "local_agent" || kind === "agent" ? "agent" : "task");
+
+// a12s's list of an agent's background work is the truth after a gap or a restart. A known item keeps its thread
+// and line; one a12s no longer lists has ended; foreground work's calls ended unseen or are not known to be running.
+function syncWork(rec: AgentLive, background: BackgroundItem[]): void {
+  const listed = new Set(background.map((item) => item.id));
+  for (const [id, work] of rec.work) if (!work.background || !listed.has(id)) rec.work.delete(id);
+  for (const item of background) {
+    if (rec.work.has(item.id)) continue;
+    rec.work.set(item.id, {
+      kind: kindOf(item.kind),
+      description: item.description,
+      threadId: null,
+      startedAt: item.startedAt,
+      line: null,
+      call: item.toolUseId ?? null,
+      background: true,
+    });
+  }
+  idleLine(rec);
 }
 
 // Section 5.6: a Studio tool call fails for an agent only when the app refuses it or cannot be reached.
@@ -107,7 +158,7 @@ export function createLive(deps: {
   function record(agent: string): AgentLive {
     let rec = agents.get(agent);
     if (!rec) {
-      rec = { line: null, turn: null, tools: new Set() };
+      rec = { line: null, turn: null, tools: new Set(), work: new Map(), lastThread: null };
       agents.set(agent, rec);
     }
     return rec;
@@ -118,9 +169,14 @@ export function createLive(deps: {
     rec.error = error;
     if (phase !== "Busy") {
       rec.turn = null;
-      rec.line = null;
       rec.tools.clear();
     }
+    // No harness session lives through any other phase, so none of its work does.
+    if (phase !== "Busy" && phase !== "Ready") {
+      rec.work.clear();
+      rec.lastThread = null;
+    }
+    idleLine(rec);
   }
 
   // Only a current agent of a current team has Turns worth recording; the Fleet may hold other agent computers.
@@ -169,9 +225,12 @@ export function createLive(deps: {
     switch (ev.type) {
       case "turn.started": {
         scoped.markDelivered(ev.messageIds, ev.at);
-        const threadId = scoped.messagesByA12sIds(ev.messageIds)[0]?.threadId ?? null;
+        // The harness starts a Turn with no Messages when background work ends, to read its result.
+        const threadId =
+          ev.messageIds.length === 0 ? rec.lastThread : (scoped.messagesByA12sIds(ev.messageIds)[0]?.threadId ?? null);
+        rec.lastThread = null;
         rec.turn = { id: ev.turn, threadId, startedAt: ev.at, text: "", messageIds: ev.messageIds, whole: true };
-        rec.line = "Thinking";
+        rec.line = "Working";
         rec.tools.clear();
         changed();
         return;
@@ -188,15 +247,69 @@ export function createLive(deps: {
         }
         return;
       }
-      case "tool.started":
-        if (ev.parent) return;
+      case "tool.started": {
+        if (ev.parent) {
+          const work = workOf(rec, ev.parent)?.[1];
+          if (!work) return;
+          work.line = doingNow(ev.name, ev.input);
+          changed();
+          return;
+        }
         rec.tools.add(ev.id);
         rec.line = doingNow(ev.name, ev.input);
+        if (ev.name === "Agent" || ev.name === "Task") {
+          const { description } = (typeof ev.input === "object" && ev.input !== null ? ev.input : {}) as {
+            description?: unknown;
+          };
+          rec.work.set(ev.id, {
+            kind: "agent",
+            description: typeof description === "string" ? description : "",
+            threadId: rec.turn?.threadId ?? null,
+            startedAt: ev.at,
+            line: null,
+            call: ev.id,
+            background: false,
+          });
+        }
         changed();
         return;
-      case "tool.finished":
-        if (!ev.parent) rec.tools.delete(ev.id);
+      }
+      case "tool.finished": {
+        if (ev.parent) return;
+        rec.tools.delete(ev.id);
+        const [id, work] = workOf(rec, ev.id) ?? [];
+        if (id && !work?.background) {
+          rec.work.delete(id);
+          changed();
+        }
         return;
+      }
+      case "task.started": {
+        const launched = ev.toolUseId ? workOf(rec, ev.toolUseId) : undefined;
+        if (launched) rec.work.delete(launched[0]);
+        rec.work.set(ev.id, {
+          kind: kindOf(ev.kind),
+          description: ev.description,
+          threadId: rec.turn?.threadId ?? null,
+          startedAt: ev.at,
+          line: null,
+          call: ev.toolUseId ?? null,
+          ...launched?.[1],
+          background: true,
+        });
+        idleLine(rec);
+        changed();
+        return;
+      }
+      case "task.finished": {
+        const work = rec.work.get(ev.id);
+        if (!work) return;
+        rec.work.delete(ev.id);
+        rec.lastThread = work.threadId;
+        idleLine(rec);
+        changed();
+        return;
+      }
       case "turn.finished": {
         const seen = rec.turn?.id === ev.turn && rec.turn.whole ? rec.turn : null;
         if (seen) {
@@ -220,8 +333,10 @@ export function createLive(deps: {
           if (turn) recordTurn(scoped, turn, lostCalls(turn));
         }
         rec.turn = null;
-        rec.line = null;
         rec.tools.clear();
+        // A foreground sub-agent's call ends with its Turn, even when the Turn was interrupted before it finished.
+        for (const [id, work] of rec.work) if (!work.background) rec.work.delete(id);
+        idleLine(rec);
         changed();
         void dispatcher.run();
         return;
@@ -248,7 +363,10 @@ export function createLive(deps: {
       try {
         const current = new Set(scoped.agents().map((a) => a.id));
         for (const s of await client.status()) {
-          if (current.has(s.name)) setPhase(record(s.name), s.phase, s.error);
+          if (!current.has(s.name)) continue;
+          const rec = record(s.name);
+          setPhase(rec, s.phase, s.error);
+          syncWork(rec, s.background);
         }
         for (const agent of current) {
           for (const turn of (await client.turns(agent, RESYNC_TURNS)).reverse()) {

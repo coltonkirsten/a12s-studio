@@ -12,7 +12,8 @@ import { systemAsk } from "./router.ts";
 
 // Names that mean something else wherever an agent can be addressed.
 const RESERVED_AGENT_SLUGS = ["owner", "system"];
-const PAUSED_MID_TURN = "You were paused mid-turn. Continue where you stopped.";
+const PAUSED_WHILE_WORKING =
+  "You were paused while working, and any background work was stopped. Continue where you stopped.";
 
 type TemplateFiles = Template & { roles: { slug: string; role: string }[] };
 
@@ -100,10 +101,10 @@ export function createTeams(deps: {
     for (const team of teams) {
       const client = a12s.forTeam(team.a12sToken);
       try {
-        for (const { name, phase } of await client.status()) {
+        for (const { name, phase, background } of await client.status()) {
           if (phase === "Asleep") continue;
           // Queued now, held by the pause, delivered first thing on resume.
-          if (phase === "Busy") systemAsk(repo.forTeam(team.id), name, PAUSED_MID_TURN);
+          if (phase === "Busy" || background.length > 0) systemAsk(repo.forTeam(team.id), name, PAUSED_WHILE_WORKING);
           await client.sleep(name);
         }
       } catch (error) {

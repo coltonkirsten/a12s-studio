@@ -1,9 +1,9 @@
 import { BROKER_PORT, OWNER_PORT, STUDIO_PORT } from "@a12s-studio/contract/names";
 
 export const PORTS = [OWNER_PORT, STUDIO_PORT, BROKER_PORT];
-const MIN_A12S = [0, 11, 0];
+const MIN_A12S = [0, 11, 2];
 
-// What run.ts measured on this machine before it creates anything. `a12s` is the installed release ("0.11.1"),
+// What run.ts measured on this machine before it creates anything. `a12s` is the installed release ("0.11.2"),
 // or null when the command is missing.
 export type Probes = { docker: boolean; a12s: string | null; busyPorts: number[] };
 export type Problem = { what: string; fix: string };

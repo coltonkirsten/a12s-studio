@@ -10,16 +10,19 @@ export const roster: Tool<Record<string, never>> = {
   async run({ team, caller, a12s }) {
     const row = team.team();
     if (!row) throw new StudioError(404, "not_found", "Your team no longer exists.");
-    const phases = new Map((await a12s.status()).map((s) => [s.name, s.phase]));
+    const status = new Map((await a12s.status()).map((s) => [s.name, s]));
     return {
       team: { name: row.name, purpose: row.purpose },
       you: nameOf(caller.agentId),
       lead: row.leadAgentId && nameOf(row.leadAgentId),
-      agents: team.agents().map((a) => ({
-        name: a.slug,
-        role: a.role.split("\n")[0] ?? "",
-        presence: presenceOf(phases.get(a.id)),
-      })),
+      agents: team.agents().map((a) => {
+        const s = status.get(a.id);
+        return {
+          name: a.slug,
+          role: a.role.split("\n")[0] ?? "",
+          presence: presenceOf(s?.phase, !!s?.background.length),
+        };
+      }),
       owner: "owner",
     };
   },

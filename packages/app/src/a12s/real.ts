@@ -119,6 +119,9 @@ export function modelCostsUsd(usage: unknown): ModelCosts {
 // The SDK types a session as a string, but a12s sends null for a Turn that ended before the harness started one.
 const sessionOf = (session: string | null): string | null => session || null;
 
+// a12s marks an event outside any Turn with an empty one.
+const turnOf = (turn: string): { turn?: string } => (turn ? { turn } : {});
+
 export function toEvent(ev: SdkEvent): A12sEvent | null {
   const agent = ev.agentComputer ?? "";
   const at = ms(ev.ts);
@@ -133,12 +136,27 @@ export function toEvent(ev: SdkEvent): A12sEvent | null {
       return { type: ev.type, agent, at, turn: ev.turn, text: ev.data.text };
     case "tool.started": {
       const { id, name, input, parent } = ev.data;
-      return { type: ev.type, agent, at, turn: ev.turn, id, name, input, ...(parent ? { parent } : {}) };
+      return { type: ev.type, agent, at, ...turnOf(ev.turn), id, name, input, ...(parent ? { parent } : {}) };
     }
     case "tool.finished": {
       const { id, name, isError, output, parent } = ev.data;
-      return { type: ev.type, agent, at, turn: ev.turn, id, name, isError, output, ...(parent ? { parent } : {}) };
+      return { type: ev.type, agent, at, ...turnOf(ev.turn), id, name, isError, output, ...(parent ? { parent } : {}) };
     }
+    case "task.started": {
+      const { id, kind, description, toolUseId } = ev.data;
+      return {
+        type: ev.type,
+        agent,
+        at,
+        ...turnOf(ev.turn),
+        id,
+        kind,
+        description,
+        ...(toolUseId ? { toolUseId } : {}),
+      };
+    }
+    case "task.finished":
+      return { type: ev.type, agent, at, id: ev.data.id };
     case "turn.finished": {
       const { status, error, usage, tokens } = ev.data;
       return {
@@ -304,6 +322,13 @@ export function realA12s(owner: Controller): A12s {
           phase: phaseOf(c.phase),
           ...(c.error ? { error: c.error.reason } : {}),
           pending: c.inbox?.pending ?? 0,
+          background: (c.background?.items ?? []).map((item) => ({
+            id: item.id,
+            kind: item.kind,
+            description: item.description,
+            startedAt: ms(item.startedAt),
+            ...(item.toolUseId ? { toolUseId: item.toolUseId } : {}),
+          })),
         }));
       },
       async inbox(name) {

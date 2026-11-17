@@ -210,7 +210,7 @@ test("a team pause holds delivery, puts its agents to sleep, and resume delivers
   assert.equal(lead.length, 1);
   assert.match(
     lead[0]?.body ?? "",
-    /^ask m_\w+ from system\n---\nYou were paused mid-turn\. Continue where you stopped\.\n---$/,
+    /^ask m_\w+ from system\n---\nYou were paused while working, and any background work was stopped\. Continue where you stopped\.\n---$/,
   );
   for (const name of ["web-lead", "web-dev"]) assert.notEqual(s.a12s.agents.get(name)?.phase, "Asleep", name);
 });

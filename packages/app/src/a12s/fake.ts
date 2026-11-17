@@ -6,6 +6,7 @@ import {
   A12sError,
   type A12sEvent,
   type AgentSpec,
+  type BackgroundItem,
   type EventFeed,
   type ExternalService,
   type FileEntry,
@@ -26,6 +27,7 @@ export type FakeAgent = {
   turns: TurnRecord[];
   journal: A12sEvent[];
   files: Map<string, Uint8Array>;
+  background: BackgroundItem[];
   current: {
     turn: string;
     startedAt: number;
@@ -44,6 +46,9 @@ export type FakeA12s = A12s & {
   setPhase(name: string, phase: Phase, error?: string): void;
   startTurn(name: string): string;
   finishTurn(name: string, result?: TurnResult): void;
+  // Work going on in the background, as the harness reports it: inside the running Turn, if any, else between Turns.
+  startTask(name: string, task: Omit<BackgroundItem, "startedAt">): void;
+  finishTask(name: string, id: string): void;
   // false: every open feed throws unreachable and new feeds do not become ready, as when the Controller stops.
   setReachable(up: boolean): void;
 };
@@ -68,7 +73,7 @@ export function fakeA12s(): FakeA12s {
       const agent = mustGet(event.agent);
       agent.journal.push(event);
       if (event.type === "text.delta" && agent.current?.turn === event.turn) agent.current.text += event.text;
-      if (event.type === "tool.finished" && agent.current?.turn === event.turn) {
+      if (event.type === "tool.finished" && agent.current && agent.current.turn === event.turn) {
         agent.current.tools.push({ name: event.name, isError: event.isError });
       }
     }
@@ -138,8 +143,24 @@ export function fakeA12s(): FakeA12s {
     setPhase(name, "Ready");
   }
 
+  function startTask(name: string, task: Omit<BackgroundItem, "startedAt">): void {
+    const agent = mustGet(name);
+    const at = Date.now();
+    agent.background.push({ ...task, startedAt: at });
+    emit({ type: "task.started", agent: name, at, ...(agent.current ? { turn: agent.current.turn } : {}), ...task });
+  }
+
+  function finishTask(name: string, id: string): void {
+    const agent = mustGet(name);
+    agent.background = agent.background.filter((task) => task.id !== id);
+    emit({ type: "task.finished", agent: name, at: Date.now(), id });
+  }
+
+  // Stop and sleep end the harness session's work: the Turn and everything in the background.
   function endActivity(name: string, phase: Phase): void {
-    if (mustGet(name).current) endTurn(name, { status: "interrupted" });
+    const agent = mustGet(name);
+    for (const { id } of agent.background) finishTask(name, id);
+    if (agent.current) endTurn(name, { status: "interrupted" });
     setPhase(name, phase);
   }
 
@@ -192,7 +213,8 @@ export function fakeA12s(): FakeA12s {
         if (mustGet(own(name)).phase !== "Asleep") endActivity(name, "Asleep");
       },
       async stop(name) {
-        if (mustGet(own(name)).current) endActivity(name, "Ready");
+        const agent = mustGet(own(name));
+        if (agent.current || agent.background.length > 0) endActivity(name, "Ready");
       },
       async status() {
         const prefix = teamPrefix(team());
@@ -203,6 +225,7 @@ export function fakeA12s(): FakeA12s {
             phase: agent.phase,
             ...(agent.error ? { error: agent.error } : {}),
             pending: agent.inbox.filter((m) => m.state === "pending").length,
+            background: agent.background.map((task) => ({ ...task })),
           }));
       },
       async inbox(name) {
@@ -268,6 +291,8 @@ export function fakeA12s(): FakeA12s {
     setPhase,
     startTurn,
     finishTurn,
+    startTask,
+    finishTask,
     setReachable(up) {
       reachable = up;
       if (!up) for (const drop of feeds) drop();
@@ -299,6 +324,7 @@ export function fakeA12s(): FakeA12s {
         turns: [],
         journal: [],
         files: new Map(),
+        background: [],
         current: null,
       });
       setPhase(name, "Ready");
