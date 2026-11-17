@@ -26,6 +26,8 @@ const AWAKE_CAP = 4;
 // How long after the long command has started the owner writes.
 const STEER_AFTER_MS = 10_000;
 const POLL_MS = 3000;
+// A minute in the foreground. Not a bare sleep: Claude Code refuses a long foreground sleep and ends the call at once.
+const LONG_COMMAND = "timeout 60 tail -f /dev/null; echo finished";
 // The second agent of each team, by the name the owner addresses it with.
 const DEV = "dev";
 
@@ -190,13 +192,13 @@ async function longCommand(studio: Studio, team: string, agent: string, title: s
     studio,
     team,
     title,
-    "Run this shell command in the foreground, not in the background: sleep 60. Then tell me it has finished.",
+    `Run this shell command in the foreground, not in the background: ${LONG_COMMAND}. Then tell me it has finished.`,
     DEV,
   );
   await studio.open(thread);
   const running = await studio.until(
-    `${agent} running sleep`,
-    (s) => /^Running .*sleep/i.test(agentOf(s, agent)?.line ?? ""),
+    `${agent} running the command`,
+    (s) => agentOf(s, agent)?.line?.startsWith("Running") === true,
     ANSWER_MS,
   );
   return { thread, turn: agentOf(running, agent)?.turn?.id };

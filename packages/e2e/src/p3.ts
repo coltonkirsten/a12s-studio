@@ -204,7 +204,7 @@ export async function p3(studio: Studio): Promise<void> {
       "Later",
       "Use schedule to wake yourself in this thread one minute from now, then end your turn. " +
         "When that wake arrives, ask dev, with a post to dev, to write the word hello into ~/hello.txt and to " +
-        "answer you with a post to you. When dev has answered, send me a post to owner holding the single word: " +
+        "answer with a post to lead. When dev has answered, send me a post to owner holding the single word: " +
         "finished",
     );
     await studio.open(asked.thread);

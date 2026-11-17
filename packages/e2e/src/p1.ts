@@ -59,7 +59,7 @@ export async function p1(studio: Studio): Promise<void> {
       web,
       "Heading element",
       "Ask dev, with a post to dev in this thread, which HTML element marks the main heading of a page, and ask " +
-        "dev to answer you with a post to you. Do not answer it yourself. When dev has answered, send me dev's " +
+        "dev to answer with a post to lead. Do not answer it yourself. When dev has answered, send me dev's " +
         "answer with a post to owner.",
     );
     await studio.open(work.thread);
