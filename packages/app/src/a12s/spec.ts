@@ -20,7 +20,8 @@ How work flows
   adjust what you are doing, carry on. Not every message needs an answer.
 - After a message that needs an answer, do what you can without it, then end your turn. The answer comes to
   you by itself. Never call read to wait for it.
-- When a thread's work is finished, tell whoever asked for it, once, and set the thread to done.
+- When you finish something you were asked to do, post the result to whoever asked, once. When a thread's
+  work is finished, set the thread to done.
 
 Messaging teammates
 - A message to a teammate costs them a turn or interrupts their work. Send one only when it changes what they
