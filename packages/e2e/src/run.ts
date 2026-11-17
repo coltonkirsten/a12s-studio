@@ -83,6 +83,8 @@ function hostProcess(entry: string, log: string) {
   return {
     log,
     start(): void {
+      // A script that was interrupted keeps running until this process exits; it starts nothing new.
+      if (cleaning) throw new Error("the run is stopping");
       const fd = openSync(log, "a");
       child = spawn(process.execPath, [join(repo, entry)], {
         cwd: repo,
@@ -91,12 +93,12 @@ function hostProcess(entry: string, log: string) {
         stdio: ["ignore", fd, fd],
       });
     },
+    // Every caller waits for the exit, also one that asks while another's stop is under way.
     async stop(): Promise<void> {
-      const running = child;
-      child = null;
-      if (!running || running.exitCode !== null || running.signalCode !== null) return;
-      running.kill("SIGTERM");
-      await once(running, "exit");
+      if (!child || child.exitCode !== null || child.signalCode !== null) return;
+      const exited = once(child, "exit");
+      child.kill("SIGTERM");
+      await exited;
     },
   };
 }
@@ -153,6 +155,8 @@ try {
 } finally {
   cleaning = true;
   console.log("--    cleanup");
+  // An interrupted a12s command ends first, so it never runs beside the one that removes the Fleet.
+  if (current) await once(current, "exit");
   const cleanup: [string, () => Promise<void>][] = [
     ["The app and the broker are stopped", () => Promise.all([app.stop(), broker.stop()]).then(() => {})],
     [`Fleet ${FLEET} is removed with its drives`, () => a12s(["down", "--purge", "--yes"])],

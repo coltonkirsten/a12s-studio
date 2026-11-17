@@ -4,6 +4,8 @@ import type { StudioState } from "@a12s-studio/contract/state";
 
 const BASE = `http://127.0.0.1:${OWNER_PORT}/api`;
 const RECONNECT_MS = 250;
+// The app writes each state as one frame: this prefix, then the JSON on the same line.
+const STATE_FRAME = "event: state\ndata: ";
 
 // The app process, as run.ts started it.
 type AppProcess = { stop(): Promise<void>; start(): void };
@@ -61,18 +63,10 @@ export function connectStudio(app: AppProcess): Studio {
           buffer += chunk;
           let end = buffer.indexOf("\n\n");
           while (end >= 0) {
-            const lines = buffer.slice(0, end).split("\n");
+            const frame = buffer.slice(0, end);
             buffer = buffer.slice(end + 2);
             end = buffer.indexOf("\n\n");
-            if (lines[0] !== "event: state") continue;
-            receive(
-              JSON.parse(
-                lines
-                  .slice(1)
-                  .join("\n")
-                  .replace(/^data: /, ""),
-              ) as StudioState,
-            );
+            if (frame.startsWith(STATE_FRAME)) receive(JSON.parse(frame.slice(STATE_FRAME.length)) as StudioState);
           }
         }
       } catch {

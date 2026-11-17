@@ -9,8 +9,8 @@ import { type Studio, step } from "./studio.ts";
 const ANSWER_MS = 5 * 60_000;
 
 const messages = (state: StudioState): MessageView[] => state.open?.messages ?? [];
-const agent = (state: StudioState, id: string) =>
-  state.teams.flatMap((t) => t.agents).find((a) => a.id === id) ?? { presence: "unknown" };
+const presence = (state: StudioState, agent: string) =>
+  state.teams.flatMap((t) => t.agents).find((a) => a.id === agent)?.presence;
 
 async function createTeam(studio: Studio, name: string, template: string, purpose: string): Promise<string> {
   const { id } = await studio.api<WriteResult>("POST", "/teams", { name, purpose, accent: "#4f6bed", template });
@@ -82,7 +82,7 @@ export async function p1(studio: Studio): Promise<void> {
       `${lead} no longer working`,
       (s) => {
         if (replyTo(s, devAsk, dev)) throw new Error(`${lead} was still working when dev's reply arrived`);
-        return agent(s, lead).presence !== "working";
+        return presence(s, lead) !== "working";
       },
       ANSWER_MS,
     ),
