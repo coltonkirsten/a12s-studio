@@ -2,7 +2,7 @@
 // looked at before the real owner API exists. Vite never bundles this folder.
 import { createServer, type ServerResponse } from "node:http";
 import type { Template } from "@a12s-studio/contract/api";
-import type { MessageId, ThreadId } from "@a12s-studio/contract/names";
+import { type MessageId, type ThreadId, teamSlug } from "@a12s-studio/contract/names";
 import type {
   AgentView,
   MessageView,
@@ -184,6 +184,7 @@ const settings: StudioState["settings"] = {
 };
 
 const templates: Template[] = [
+  { id: "blank", purpose: "", agents: ["lead"] },
   { id: "website", purpose: "Build and look after a small website.", agents: ["lead", "dev"] },
   { id: "research-notes", purpose: "Write short, neutral comparisons of tools.", agents: ["lead", "researcher"] },
 ];
@@ -272,7 +273,7 @@ function write(b: Record<string, unknown>, path: string, method: string): string
     return newId;
   }
   if (method === "POST" && kind === "teams" && !id) {
-    const slug = String(b.slug);
+    const slug = teamSlug(String(b.name), (taken) => teams.some((t) => t.id === taken));
     teams.push({
       id: slug,
       name: String(b.name),
@@ -283,6 +284,7 @@ function write(b: Record<string, unknown>, path: string, method: string): string
       budget: { dailyUsd: settings.defaultDailyBudgetUsd, spentTodayUsd: 0, held: false },
       agents: [agent(`${slug}-lead`, "Leads the team", "asleep")],
     });
+    return slug;
   }
   if (method === "POST" && kind === "teams" && sub === "agents") {
     teams

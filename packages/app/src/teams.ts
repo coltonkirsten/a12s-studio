@@ -39,7 +39,8 @@ export function createTeams(deps: { repo: Repo; a12s: A12s; dispatcher: Dispatch
   function templateIds(): string[] {
     return readdirSync(templatesDir, { withFileTypes: true })
       .filter((e) => e.isDirectory())
-      .map((e) => e.name);
+      .map((e) => e.name)
+      .sort((a, b) => Number(b === "blank") - Number(a === "blank") || a.localeCompare(b));
   }
 
   function newAgent(scoped: TeamRepo, teamId: string, slug: string, role: string, model: string): Agent {
@@ -120,11 +121,11 @@ export function createTeams(deps: { repo: Repo; a12s: A12s; dispatcher: Dispatch
 
     // All a12s work first and then one transaction, so a failure leaves no half-made team behind.
     async createTeam(input: CreateTeamBody): Promise<Team> {
-      const id = teamSlug(input.name, repo.teamSlugUsed);
       const known = templateIds();
       if (!known.includes(input.template)) {
         throw new StudioError(404, "not_found", `No template "${input.template}".`, `Use one of: ${known.join(", ")}.`);
       }
+      const id = teamSlug(input.name, repo.teamSlugUsed);
       const { roles } = readTemplate(input.template);
       const settings = repo.settings();
       const scoped = repo.forTeam(id);

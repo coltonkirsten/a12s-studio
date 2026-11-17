@@ -2,6 +2,7 @@ import type { ErrorBody, Template } from "@a12s-studio/contract/api";
 import type { StudioState } from "@a12s-studio/contract/state";
 import { useEffect, useState } from "react";
 import { api, useAction } from "../api.ts";
+import { choose, type Draft, EMPTY_DRAFT } from "../logic/draft.ts";
 import { title } from "../logic/names.ts";
 import { href } from "../logic/route.ts";
 import { Problem } from "../parts/problem.tsx";
@@ -19,40 +20,22 @@ const ACCENTS = [
   "#8e8e93",
 ] as const;
 
-// A template fills the form with its name and brief; the blank one has no brief and leaves the form empty.
-function filled(t: Template): { name: string; purpose: string } {
-  return t.purpose ? { name: title(t.id), purpose: t.purpose } : { name: "", purpose: "" };
-}
-
 export function NewTeamSheet({ state, onClose }: { state: StudioState; onClose: () => void }) {
-  const [name, setName] = useState("");
-  const [purpose, setPurpose] = useState("");
+  const [draft, setDraft] = useState<Draft>(EMPTY_DRAFT);
   const [accent, setAccent] = useState<string>(
     ACCENTS.find((a) => !state.teams.some((t) => t.accent === a)) ?? ACCENTS[0],
   );
   const [templates, setTemplates] = useState<Template[]>([]);
-  const [template, setTemplate] = useState<Template | null>(null);
   const [loadProblem, setLoadProblem] = useState<ErrorBody | null>(null);
   const action = useAction();
-
-  // A field the owner has typed in keeps their text; one still holding the old template's value takes the new one.
-  function pick(next: Template): void {
-    const before = template ? filled(template) : { name: "", purpose: "" };
-    const after = filled(next);
-    if (name === before.name) setName(after.name);
-    if (purpose === before.purpose) setPurpose(after.purpose);
-    setTemplate(next);
-  }
+  const { template, name, purpose } = draft;
 
   useEffect(() => {
     api.templates().then(
       (list) => {
         setTemplates(list);
         const first = list[0];
-        if (!first) return;
-        setTemplate(first);
-        setName(filled(first).name);
-        setPurpose(filled(first).purpose);
+        if (first) setDraft((d) => choose(d, first));
       },
       (problem: ErrorBody) => setLoadProblem(problem),
     );
@@ -82,7 +65,7 @@ export function NewTeamSheet({ state, onClose }: { state: StudioState; onClose: 
               type="button"
               aria-pressed={t.id === template?.id}
               className="template"
-              onClick={() => pick(t)}
+              onClick={() => setDraft((d) => choose(d, t))}
             >
               <b>{title(t.id)}</b>
               <span>{t.agents.join(", ")}</span>
@@ -93,7 +76,11 @@ export function NewTeamSheet({ state, onClose }: { state: StudioState; onClose: 
       </div>
       <label className="field">
         <span>Name</span>
-        <input value={name} placeholder="Name the team" onChange={(event) => setName(event.target.value)} />
+        <input
+          value={name}
+          placeholder="Name the team"
+          onChange={(event) => setDraft({ ...draft, name: event.target.value })}
+        />
       </label>
       <label className="field">
         <span>Purpose</span>
@@ -101,7 +88,7 @@ export function NewTeamSheet({ state, onClose }: { state: StudioState; onClose: 
           rows={3}
           value={purpose}
           placeholder="Describe what the team works on, in a paragraph."
-          onChange={(event) => setPurpose(event.target.value)}
+          onChange={(event) => setDraft({ ...draft, purpose: event.target.value })}
         />
       </label>
       <div className="field">
