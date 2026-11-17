@@ -1345,7 +1345,8 @@ from the README alone.
     Whatever the chosen scripts need and is missing is named at the start, with its fix, before anything is created.
   - `run.ts` creates a Fleet named `studio-e2e` under a temp `STUDIO_HOME`, sets its `anthropic` credential, starts
     the real broker and the real app there, sets the default model to `haiku`, runs the exit scripts in order, and
-    removes the Fleet with its drives and the folder whether they pass or fail. It prints no secret.
+    removes the Fleet with its drives, what a script made elsewhere (the branch `p2` pushes) and the folder whether
+    they pass, fail or are interrupted. It prints no secret.
   - A script drives Studio only as the owner and agents do: the owner API, the state stream, and a command run
     inside an agent's container with `a12s shell` (the agent is woken first, as the owner can; a12s opens a shell only
     in an awake computer). A check that needs no model's judgement (a 403 from the broker, a token that must not be

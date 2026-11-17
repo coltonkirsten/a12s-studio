@@ -14,6 +14,9 @@ export const ANSWER_MS = 5 * 60_000;
 type AppProcess = { stop(): Promise<void>; start(): void };
 // Runs an a12s command on the e2e Fleet, `input` on its stdin, and answers its output.
 type A12s = (args: string[], input?: string) => Promise<string>;
+// Names one thing a script makes outside the Fleet and the data folder. run.ts removes it with `remove` in its
+// cleanup, as a printed step, also when the run fails or is interrupted.
+type AtEnd = (title: string, remove: () => Promise<void>) => void;
 
 // What a script drives Studio with: the owner API and the state stream, as the UI uses them, and a shell in an
 // agent's container.
@@ -31,6 +34,7 @@ export type Studio = {
   // Wakes the agent as the owner can, then runs `command` with sh in its container and answers the output. A secret
   // goes in `input`, on the command's stdin: a12s journals the command itself.
   shell(agent: string, command: string, input?: string): Promise<string>;
+  atEnd: AtEnd;
 };
 
 const elapsed = (since: number) => `${Math.round((Date.now() - since) / 1000)}s`;
@@ -69,7 +73,7 @@ export async function ownerAsk(studio: Studio, team: string, title: string, body
   return { thread, ask: ask.id };
 }
 
-export function connectStudio(app: AppProcess, a12s: A12s): Studio {
+export function connectStudio(app: AppProcess, a12s: A12s, atEnd: AtEnd): Studio {
   let current: StudioState | null = null;
   let thread: string | null = null;
   let connection = new AbortController();
@@ -165,5 +169,6 @@ export function connectStudio(app: AppProcess, a12s: A12s): Studio {
       await api("POST", `/agents/${agent}/power`, { state: "awake" });
       return a12s(["shell", agent, "--", "sh", "-c", command], input);
     },
+    atEnd,
   };
 }

@@ -16,7 +16,7 @@ const EXPIRY_MS = 20_000;
 // which it is given in HTTP_PROXY; a shell has only A12S_PROXY.
 async function brokerGet(studio: Studio, agent: string, path: string): Promise<string> {
   const url = `${BROKER_URL}/api.github.com${path}`;
-  const output = await studio.shell(agent, `curl -s -x "$A12S_PROXY" -w '\\n%{http_code}' ${url}`);
+  const output = await studio.shell(agent, `curl -s -x "$A12S_PROXY" -w '\\n%{http_code}' '${url}'`);
   const lines = output.trimEnd().split("\n");
   const status = lines.pop() ?? "";
   try {
@@ -147,6 +147,12 @@ export async function p2(studio: Studio): Promise<void> {
 
   const branch = `e2e-${Date.now().toString(36)}`;
   await step(`${dev} clones, commits and pushes ${branch}; GitHub lists it`, async () => {
+    // Named before the agent is asked, so a run that fails or is interrupted after the push leaves no branch. GitHub
+    // answers 422 for a branch that was never pushed.
+    studio.atEnd(`Branch ${branch} is removed from GitHub`, async () => {
+      const { status } = await github("DELETE", `${repoPath}/git/refs/heads/${branch}`);
+      assert.ok(status === 204 || status === 422, `deleting ${branch} answered ${status}`);
+    });
     await studio.api("POST", `/teams/${web}/grants`, {
       host: "github.com",
       methods: ["GET", "POST"],
@@ -164,19 +170,23 @@ export async function p2(studio: Studio): Promise<void> {
     await studio.until(`a reply from ${dev}`, (s) => replyTo(s, asked.ask, dev) !== undefined, ANSWER_MS);
     const listed = await github("GET", `${repoPath}/branches/${branch}`);
     assert.equal(listed.status, 200, `GitHub does not list ${branch}`);
-    const deleted = await github("DELETE", `${repoPath}/git/refs/heads/${branch}`);
-    assert.equal(deleted.status, 204, `deleting ${branch} answered ${deleted.status}`);
   });
 
   await step(`The token is in neither ${dev}'s environment nor its files`, async () => {
     assert.ok(!(await studio.shell(dev, "env")).includes(token), `the token is in ${dev}'s environment`);
-    // The token reaches the container on grep's stdin, never in a command a12s journals. The processes' environ
-    // files include the harness's, which a shell's env does not show.
-    const found = await studio.shell(
-      dev,
-      "grep -rlF -f - /home/agent /tmp /run /proc/[0-9]*/environ 2>/dev/null; true",
-      `${token}\n`,
-    );
-    assert.equal(found.trim(), "", `the token is in ${found.trim()}`);
+    // The files that hold `text`, which reaches the container on grep's stdin, never in a command a12s journals.
+    // The processes' environ files include the harness's, which a shell's env does not show.
+    const holding = async (text: string) =>
+      (
+        await studio.shell(
+          dev,
+          "grep -rlF -f - /home/agent /tmp /run /proc/[0-9]*/environ 2>/dev/null; true",
+          `${text}\n`,
+        )
+      ).trim();
+    // A search that received nothing on stdin finds nothing, so it is first shown to find what is there.
+    assert.match(await holding("A12S_PROXY="), /\/proc\/\d+\/environ/, "the search finds no known variable");
+    const found = await holding(token);
+    assert.equal(found, "", `the token is in ${found}`);
   });
 }

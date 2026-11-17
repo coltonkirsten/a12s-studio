@@ -1,5 +1,6 @@
 // npm run e2e [-- p1 …]: the exit scripts against real Docker, a12s and Claude, in a Fleet and a data folder of their
-// own. Both are removed at the end, whether the scripts pass, fail or are interrupted.
+// own. Both are removed at the end, with what a script made elsewhere, whether the scripts pass, fail or are
+// interrupted.
 import { type ChildProcess, spawn, spawnSync } from "node:child_process";
 import { once } from "node:events";
 import { mkdirSync, mkdtempSync, openSync, readFileSync, rmSync, writeFileSync } from "node:fs";
@@ -127,7 +128,14 @@ const env = { ...inherited, STUDIO_HOME: home };
 const broker = hostProcess("packages/broker/src/main.ts", join(home, "broker.log"));
 const app = hostProcess("packages/app/src/main.ts", join(home, "app.log"));
 
+// What the scripts made outside the Fleet and the data folder, each with the step that removes it.
+const leftovers: [string, () => Promise<void>][] = [];
+
 let failed = false;
+const clean = (title: string, run: () => Promise<unknown>) =>
+  step(title, run).catch(() => {
+    failed = true;
+  });
 try {
   await Promise.race([
     interrupted,
@@ -142,7 +150,7 @@ try {
       const studio = await step("The broker and the app run and the app sees a12s", async () => {
         broker.start();
         app.start();
-        const studio = connectStudio(app, a12s);
+        const studio = connectStudio(app, a12s, (title, remove) => leftovers.push([title, remove]));
         await studio.until("a12s up", (s) => s.a12s === "up", 60_000);
         return studio;
       });
@@ -162,15 +170,10 @@ try {
   console.log("--    cleanup");
   // An interrupted a12s command ends first, so it never runs beside the one that removes the Fleet.
   if (current) await once(current, "exit");
-  const cleanup: [string, () => Promise<unknown>][] = [
-    ["The app and the broker are stopped", () => Promise.all([app.stop(), broker.stop()])],
-    [`Fleet ${FLEET} is removed with its drives`, () => a12s(["down", "--purge", "--yes"])],
-    ["The data folder is removed", async () => rmSync(home, { recursive: true, force: true })],
-  ];
-  for (const [title, run] of cleanup) {
-    await step(title, run).catch(() => {
-      failed = true;
-    });
-  }
+  await clean("The app and the broker are stopped", () => Promise.all([app.stop(), broker.stop()]));
+  await clean(`Fleet ${FLEET} is removed with its drives`, () => a12s(["down", "--purge", "--yes"]));
+  // After the Fleet, so no agent is left to make one of them again.
+  for (const [title, remove] of leftovers) await clean(title, remove);
+  await clean("The data folder is removed", async () => rmSync(home, { recursive: true, force: true }));
 }
 process.exit(failed ? 1 : 0);
