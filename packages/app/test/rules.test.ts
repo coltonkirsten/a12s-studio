@@ -6,6 +6,7 @@ import type { AgentSettings, RulesPage } from "@a12s-studio/contract/api";
 import { CALLER_HEADER, STUDIO_HOST, teamOf } from "@a12s-studio/contract/names";
 import type { FakeA12s } from "../src/a12s/fake.ts";
 import type { A12s } from "../src/a12s/port.ts";
+import { createRepo } from "../src/repo.ts";
 import { type Studio, studio } from "./studio.ts";
 
 async function setup(t: { after(fn: () => unknown): void }, opts: Parameters<typeof studio>[0] = {}): Promise<Studio> {
@@ -102,6 +103,24 @@ test("no agent route writes the owner rules", async (t) => {
     assert.equal((await s.raw(["web-lead"], method, "/rules/owner", { body: "x" })).status, 404, method);
     assert.equal((await s.raw(["web-lead"], method, "/rules", { body: "x" })).status, 404, method);
   }
+  assert.equal(count(s), before);
+});
+
+test("the store holds the wall too: no role for another team's agent or a removed one, no owner rules through a team", async (t) => {
+  const s = await setup(t);
+  const repo = createRepo(s.db);
+  const before = count(s);
+  // A role is written only for a current agent of the repo's own team, whatever the code above the store does.
+  assert.throws(() => repo.forTeam("notes").roleRules("web-dev").insert("Mine now.", "notes-lead", 1));
+  assert.throws(() => repo.forTeam("notes").roleRules("notes-nobody").insert("Mine now.", "notes-lead", 1));
+  assert.equal("insert" in repo.forTeam("web").ownerRules(), false);
+  assert.equal(count(s), before);
+
+  // A removed teammate is not found, like one that never existed, and its history gets no new version.
+  await s.owner("DELETE", "/api/agents/web-dev");
+  const answer = await s.tool("web-lead", "rules", { action: "set", layer: "role", agent: "dev", body: "Back." });
+  assert.equal(answer.error?.code, "not_found");
+  assert.throws(() => repo.forTeam("web").roleRules("web-dev").insert("Back.", "web-lead", 1));
   assert.equal(count(s), before);
 });
 

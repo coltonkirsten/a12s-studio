@@ -1336,8 +1336,8 @@
 }
 
 .tag.now {
-  background: var(--accent-soft, var(--fill-2));
-  color: var(--accent-text, var(--text-2));
+  background: var(--accent-soft);
+  color: var(--accent-text);
 }
 
 .version-count {
