@@ -8,6 +8,25 @@ const MIN_A12S = [0, 11, 2];
 export type Probes = { docker: boolean; a12s: string | null; busyPorts: number[] };
 export type Problem = { what: string; fix: string };
 
+// The variables a run reads, with the scripts that need them; `scripts: null` means every run.
+const VARIABLES: { name: string; scripts: string[] | null; fix: string }[] = [
+  {
+    name: "CLAUDE_CODE_OAUTH_TOKEN",
+    scripts: null,
+    fix: "Run claude setup-token, then export CLAUDE_CODE_OAUTH_TOKEN with the token it prints.",
+  },
+  {
+    name: "E2E_GITHUB_REPO",
+    scripts: ["p2"],
+    fix: "Export E2E_GITHUB_REPO as <owner>/<repo> of a throwaway private repository.",
+  },
+  {
+    name: "E2E_GITHUB_TOKEN",
+    scripts: ["p2"],
+    fix: "Export E2E_GITHUB_TOKEN with a fine-grained token for that repository only, contents read and write.",
+  },
+];
+
 function atLeast(version: string, minimum: number[]): boolean {
   const parts = version.split(".").map(Number);
   for (const [i, want] of minimum.entries()) {
@@ -17,8 +36,8 @@ function atLeast(version: string, minimum: number[]): boolean {
   return true;
 }
 
-// Every reason the run cannot start, so one attempt names them all.
-export function missing(env: Record<string, string | undefined>, probes: Probes): Problem[] {
+// Every reason a run of the chosen scripts cannot start, so one attempt names them all.
+export function missing(env: Record<string, string | undefined>, probes: Probes, chosen: string[]): Problem[] {
   const problems: Problem[] = [];
   if (!probes.docker) problems.push({ what: "Docker is not running.", fix: "Start Docker Desktop." });
   if (probes.a12s === null) {
@@ -35,11 +54,9 @@ export function missing(env: Record<string, string | undefined>, probes: Probes)
       fix: "Stop the Studio on this Mac: launchctl bootout gui/$(id -u)/com.a12s-studio.app, then …broker.",
     });
   }
-  if (!env.CLAUDE_CODE_OAUTH_TOKEN) {
-    problems.push({
-      what: "CLAUDE_CODE_OAUTH_TOKEN is not set.",
-      fix: "Run claude setup-token, then export CLAUDE_CODE_OAUTH_TOKEN with the token it prints.",
-    });
+  for (const { name, scripts, fix } of VARIABLES) {
+    const needed = scripts === null || scripts.some((script) => chosen.includes(script));
+    if (needed && !env[name]) problems.push({ what: `${name} is not set.`, fix });
   }
   return problems;
 }

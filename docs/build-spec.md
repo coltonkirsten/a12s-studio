@@ -1339,16 +1339,18 @@ from the README alone.
   running Fleet (one haiku agent, removed at the end). Manual, never in CI.
 - **End-to-end against real a12s is manual, never in CI.** `npm run e2e` (`packages/e2e`) is run before each phase
   is shown. `npm run e2e -- p2` runs one script.
-  - It needs Docker, a12s, a Claude token in `CLAUDE_CODE_OAUTH_TOKEN`, a throwaway GitHub repository and a
-    fine-grained token for it in `E2E_GITHUB_REPO` and `E2E_GITHUB_TOKEN`, and the three Studio ports free. The ports
-    are constants, so a Studio installed on the same Mac is stopped while it runs. Whatever is missing is named at
-    the start, with its fix, before anything is created.
+  - It needs Docker, a12s, a Claude token in `CLAUDE_CODE_OAUTH_TOKEN` and the three Studio ports free; `p2` also
+    needs a throwaway GitHub repository and a fine-grained token for it in `E2E_GITHUB_REPO` (`<owner>/<repo>`) and
+    `E2E_GITHUB_TOKEN`. The ports are constants, so a Studio installed on the same Mac is stopped while it runs.
+    Whatever the chosen scripts need and is missing is named at the start, with its fix, before anything is created.
   - `run.ts` creates a Fleet named `studio-e2e` under a temp `STUDIO_HOME`, sets its `anthropic` credential, starts
     the real broker and the real app there, sets the default model to `haiku`, runs the exit scripts in order, and
-    removes the Fleet with its drives and the folder whether they pass or fail. It prints no secret.
+    removes the Fleet with its drives, what a script made elsewhere (the branch `p2` pushes) and the folder whether
+    they pass, fail or are interrupted. It prints no secret.
   - A script drives Studio only as the owner and agents do: the owner API, the state stream, and a command run
-    inside an agent's container with `a12s shell`. A check that needs no model's judgement (a 403 from the broker,
-    a token that must not be on disk) is made with such a command, never by asking an agent.
+    inside an agent's container with `a12s shell` (the agent is woken first, as the owner can; a12s opens a shell only
+    in an awake computer). A check that needs no model's judgement (a 403 from the broker, a token that must not be
+    on disk) is made with such a command, never by asking an agent.
 
   | Script | Shows |
   |---|---|
