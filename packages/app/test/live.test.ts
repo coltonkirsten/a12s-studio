@@ -216,30 +216,11 @@ test("a Turn already running when the app starts is stored whole, from a12s", as
   const turn = a12s.startTurn("web-lead");
   a12s.emit({ type: "text.delta", agent: "web-lead", at: Date.now(), turn, text: "It is " });
 
-  // Like real a12s, the Turn is not in the agent's history the moment its turn.finished goes out.
-  let early = false;
-  const s = await studio({
-    a12s,
-    dbFile: first.dbFile,
-    live: true,
-    wrap: (fake) => ({
-      ...fake,
-      forTeam: (token) => ({
-        ...fake.forTeam(token),
-        async turns(name, limit) {
-          const turns = await fake.forTeam(token).turns(name, limit);
-          if (!early) return turns;
-          early = false;
-          return turns.filter((found) => found.id !== turn);
-        },
-      }),
-    }),
-  });
+  const s = await studio({ a12s, dbFile: first.dbFile, live: true });
   t.after(() => s.close());
   await until(() => s.app.live.agent("web-lead")?.phase === "Busy");
   a12s.emit({ type: "text.delta", agent: "web-lead", at: Date.now(), turn, text: "4." });
   await until(() => agentView(s, "web-lead")?.turn?.text === "4.");
-  early = true;
   a12s.finishTurn("web-lead");
 
   await until(() => s.app.repo.turnTeam(turn) === "web");

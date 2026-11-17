@@ -27,8 +27,6 @@ export type Live = ReturnType<typeof createLive>;
 
 const RETRY_MS = 1000;
 const RESYNC_TURNS = 20;
-const FETCH_TRIES = 5;
-const FETCH_WAIT_MS = 200;
 const POST_AGAIN =
   "a12s Studio could not be reached during part of your last Turn, and a Studio tool call in it failed. " +
   "What you posted then was not received. Use read to see what did arrive, and post again what is missing.";
@@ -231,19 +229,14 @@ export function createLive(deps: {
     }
   }
 
-  // A Turn this app did not follow whole: a12s has its text, the Messages it delivered and its tool calls. a12s
-  // sends turn.finished just before it stores the Turn, so the first read can come too early.
+  // A Turn this app did not follow whole: a12s has its text, the Messages it delivered and its tool calls, stored
+  // before it sends turn.finished.
   async function fetchTurn(scoped: TeamRepo, agent: string, turn: string): Promise<TurnRecord | undefined> {
     const token = scoped.team()?.a12sToken;
     if (!token) return undefined;
-    for (let attempt = 1; ; attempt++) {
-      const found = (await a12s.forTeam(token).turns(agent, RESYNC_TURNS)).find((t) => t.id === turn);
-      if (found) return found;
-      if (attempt === FETCH_TRIES) break;
-      await new Promise((resolve) => setTimeout(resolve, FETCH_WAIT_MS));
-    }
-    console.error(`live: Turn ${turn} of ${agent} is not in its history; the next resync stores it.`);
-    return undefined;
+    const found = (await a12s.forTeam(token).turns(agent, RESYNC_TURNS)).find((t) => t.id === turn);
+    if (!found) console.error(`live: Turn ${turn} of ${agent} finished but is not in its a12s history.`);
+    return found;
   }
 
   // Everything an event could have told us, asked for directly: after a gap, and on every new feed (app start).
