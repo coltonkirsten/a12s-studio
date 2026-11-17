@@ -2,21 +2,18 @@ import type { AgentView, MessageView, StudioState, TeamView } from "@a12s-studio
 import { type CSSProperties, useState } from "react";
 import { api, useAction } from "../api.ts";
 import { displayName } from "../logic/names.ts";
-import { href, type Route } from "../logic/route.ts";
+import { href, type Route, settingsHref } from "../logic/route.ts";
 import { shortTime } from "../logic/time.ts";
 import { Composer } from "../parts/composer.tsx";
 import { Conversation, StatusChip } from "../parts/conversation.tsx";
 import { Icon } from "../parts/icons.tsx";
 import { Dot, doing } from "../parts/presence.tsx";
 import { Problem } from "../parts/problem.tsx";
-import { Sheet } from "../parts/sheet.tsx";
-import { Switch } from "../parts/switch.tsx";
 
 type Props = { state: StudioState; team: TeamView; route: Route; onHire: () => void };
 
 export function TeamScreen({ state, team, route, onHire }: Props) {
   const [menu, setMenu] = useState(false);
-  const [deleting, setDeleting] = useState(false);
   const now = Date.now();
   const open = state.open && state.open.id === route.thread ? state.open : null;
   const questions: MessageView[] = [];
@@ -51,23 +48,14 @@ export function TeamScreen({ state, team, route, onHire }: Props) {
                   >
                     Hire an agent…
                   </button>
-                  <button
-                    type="button"
-                    role="menuitem"
-                    className="danger"
-                    onClick={() => {
-                      setMenu(false);
-                      setDeleting(true);
-                    }}
-                  >
-                    Delete team…
-                  </button>
+                  <a role="menuitem" href={settingsHref(team.id)}>
+                    Team settings
+                  </a>
                 </div>
               </div>
             )}
           </div>
           {team.purpose && <p className="team-purpose">{team.purpose}</p>}
-          <Switch label="Pause team" on={team.paused} set={(paused) => api.patchTeam(team.id, { paused })} />
         </header>
 
         <div className="section-head">
@@ -126,8 +114,6 @@ export function TeamScreen({ state, team, route, onHire }: Props) {
           </div>
         )}
       </section>
-
-      {deleting && <DeleteTeam team={team} onClose={() => setDeleting(false)} />}
     </div>
   );
 }
@@ -184,27 +170,5 @@ function AgentRow({ agent, lead }: { agent: AgentView; lead: boolean }) {
         </div>
       )}
     </div>
-  );
-}
-
-function DeleteTeam({ team, onClose }: { team: TeamView; onClose: () => void }) {
-  const action = useAction();
-  return (
-    <Sheet title={`Delete ${team.name}?`} onClose={onClose}>
-      <p className="sheet-text">Its agents and threads are removed. This cannot be undone.</p>
-      <Problem problem={action.problem} />
-      <div className="sheet-actions">
-        <button type="button" className="button quiet" onClick={onClose}>
-          Cancel
-        </button>
-        <button
-          type="button"
-          className={action.pending ? "button danger-fill pending" : "button danger-fill"}
-          onClick={() => action.run(() => api.deleteTeam(team.id))}
-        >
-          Delete team
-        </button>
-      </div>
-    </Sheet>
   );
 }

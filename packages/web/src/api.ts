@@ -11,6 +11,13 @@ import type {
   Template,
   WriteResult,
 } from "@a12s-studio/contract/api";
+import type {
+  AccessView,
+  ApproveBody,
+  AuditPage,
+  CreateGrantBody,
+  PutCredentialBody,
+} from "@a12s-studio/contract/broker-admin";
 import { createContext, useCallback, useContext, useEffect, useRef, useState } from "react";
 
 const UNREACHABLE: ErrorBody = {
@@ -21,6 +28,10 @@ const UNREACHABLE: ErrorBody = {
 
 function isErrorBody(value: unknown): value is ErrorBody {
   return typeof value === "object" && value !== null && "message" in value && typeof value.message === "string";
+}
+
+function toProblem(error: unknown): ErrorBody {
+  return isErrorBody(error) ? error : { code: "error", message: String(error) };
 }
 
 async function call(method: string, path: string, body?: unknown): Promise<unknown> {
@@ -48,16 +59,19 @@ async function write(method: string, path: string, body?: unknown): Promise<Writ
   return { rev: data.rev, id: "id" in data && typeof data.id === "string" ? data.id : undefined };
 }
 
+/** A read's answer, once each named field is the list it should be. */
+async function read<T>(path: string, lists: string[], what: string): Promise<T> {
+  const data = await call("GET", path);
+  if (typeof data !== "object" || data === null || !lists.every((key) => Array.isArray(Reflect.get(data, key)))) {
+    throw { code: "bad_response", message: `Studio sent no ${what}.` } satisfies ErrorBody;
+  }
+  return data as T;
+}
+
 const at = encodeURIComponent;
 
 export const api = {
-  async templates(): Promise<Template[]> {
-    const data = await call("GET", "/templates");
-    if (typeof data !== "object" || data === null || !("templates" in data) || !Array.isArray(data.templates)) {
-      throw { code: "bad_response", message: "Studio sent no templates." } satisfies ErrorBody;
-    }
-    return data.templates as Template[];
-  },
+  templates: async () => (await read<{ templates: Template[] }>("/templates", ["templates"], "templates")).templates,
   createTeam: (body: CreateTeamBody) => write("POST", "/teams", body),
   patchTeam: (team: string, body: PatchTeamBody) => write("PATCH", `/teams/${at(team)}`, body),
   deleteTeam: (team: string) => write("DELETE", `/teams/${at(team)}`),
@@ -69,7 +83,24 @@ export const api = {
   post: (thread: string, body: PostMessageBody) => write("POST", `/threads/${at(thread)}/messages`, body),
   patchThread: (thread: string, body: PatchThreadBody) => write("PATCH", `/threads/${at(thread)}`, body),
   patchSettings: (body: PatchSettingsBody) => write("PATCH", "/settings", body),
+  access: (team: string) =>
+    read<AccessView>(`/teams/${at(team)}/access`, ["credentials", "grants", "requests"], "access"),
+  audit: (team: string, before?: number) =>
+    read<AuditPage>(`/teams/${at(team)}/audit${before === undefined ? "" : `?before=${before}`}`, ["entries"], "audit"),
+  putCredential: (team: string, host: string, body: PutCredentialBody) =>
+    write("PUT", `/teams/${at(team)}/credentials/${at(host)}`, body),
+  deleteCredential: (team: string, host: string) => write("DELETE", `/teams/${at(team)}/credentials/${at(host)}`),
+  grant: (team: string, body: CreateGrantBody) => write("POST", `/teams/${at(team)}/grants`, body),
+  revoke: (team: string, grant: string) => write("DELETE", `/teams/${at(team)}/grants/${at(grant)}`),
+  approve: (team: string, request: string, body: ApproveBody) =>
+    write("POST", `/teams/${at(team)}/requests/${at(request)}/approve`, body),
+  deny: (team: string, request: string) => write("POST", `/teams/${at(team)}/requests/${at(request)}/deny`),
 };
+
+/** Writes one after another; the last one's result says when all of them have arrived. */
+export function inOrder(writes: (() => Promise<WriteResult>)[]): Promise<WriteResult> {
+  return writes.reduce((done, next) => done.then(next), Promise.resolve<WriteResult>({ rev: 0 }));
+}
 
 /** The rev of the state on screen, so an action can tell when its write has arrived. */
 export const Rev = createContext(0);
@@ -99,11 +130,31 @@ export function useAction(): Action {
     setProblem(null);
     setSending(true);
     write()
-      .then(setWaiting, (error: unknown) =>
-        setProblem(isErrorBody(error) ? error : { code: "error", message: String(error) }),
-      )
+      .then(setWaiting, (error: unknown) => setProblem(toProblem(error)))
       .finally(() => setSending(false));
   }, []);
 
   return { pending: sending || waiting !== null, problem, run };
+}
+
+export type AccessState = { view: AccessView | null; rev: number; problem: ErrorBody | null };
+
+/**
+ * A team's credentials, grants and requests, read again whenever the state moves on. `rev` is the state the read
+ * started from: below a `Rev` of that value, a write counts as finished only once the access on screen includes it.
+ */
+export function useAccess(team: string): AccessState {
+  const rev = useContext(Rev);
+  const [access, setAccess] = useState<AccessState>({ view: null, rev: 0, problem: null });
+  useEffect(() => {
+    let current = true;
+    api.access(team).then(
+      (view) => current && setAccess({ view, rev, problem: null }),
+      (error: unknown) => current && setAccess((a) => ({ ...a, problem: toProblem(error) })),
+    );
+    return () => {
+      current = false;
+    };
+  }, [team, rev]);
+  return access;
 }

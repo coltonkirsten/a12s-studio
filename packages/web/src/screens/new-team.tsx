@@ -1,10 +1,11 @@
 import type { ErrorBody, Template } from "@a12s-studio/contract/api";
-import type { StudioState } from "@a12s-studio/contract/state";
+import type { StudioState, TeamView } from "@a12s-studio/contract/state";
 import { useEffect, useState } from "react";
-import { api, useAction } from "../api.ts";
+import { api, useAccess, useAction } from "../api.ts";
 import { choose, type Draft, EMPTY_DRAFT } from "../logic/draft.ts";
 import { title } from "../logic/names.ts";
 import { href } from "../logic/route.ts";
+import { Access } from "../parts/access/access.tsx";
 import { Problem } from "../parts/problem.tsx";
 import { Sheet } from "../parts/sheet.tsx";
 
@@ -21,6 +22,18 @@ const ACCENTS = [
 ] as const;
 
 export function NewTeamSheet({ state, onClose }: { state: StudioState; onClose: () => void }) {
+  const [created, setCreated] = useState<string | null>(null);
+  const team = state.teams.find((t) => t.id === created);
+  return team ? (
+    <Baseline team={team} onClose={onClose} />
+  ) : (
+    <TeamForm state={state} onClose={onClose} created={setCreated} />
+  );
+}
+
+type FormProps = { state: StudioState; onClose: () => void; created: (team: string) => void };
+
+function TeamForm({ state, onClose, created }: FormProps) {
   const [draft, setDraft] = useState<Draft>(EMPTY_DRAFT);
   const [accent, setAccent] = useState<string>(
     ACCENTS.find((a) => !state.teams.some((t) => t.accent === a)) ?? ACCENTS[0],
@@ -48,8 +61,9 @@ export function NewTeamSheet({ state, onClose }: { state: StudioState; onClose: 
     action.run(
       () => api.createTeam({ name: name.trim(), purpose: purpose.trim(), accent, template: template.id }),
       ({ id }) => {
-        onClose();
-        if (id) location.hash = href(id);
+        if (!id) return onClose();
+        location.hash = href(id);
+        created(id);
       },
     );
   }
@@ -58,13 +72,13 @@ export function NewTeamSheet({ state, onClose }: { state: StudioState; onClose: 
     <Sheet title="New team" onClose={onClose}>
       <div className="field">
         <span>Start from</span>
-        <fieldset className="templates" aria-label="Template">
+        <fieldset className="choices" aria-label="Template">
           {templates.map((t) => (
             <button
               key={t.id}
               type="button"
               aria-pressed={t.id === template?.id}
-              className="template"
+              className="choice"
               onClick={() => setDraft((d) => choose(d, t))}
             >
               <b>{title(t.id)}</b>
@@ -119,6 +133,26 @@ export function NewTeamSheet({ state, onClose }: { state: StudioState; onClose: 
           onClick={create}
         >
           Create team
+        </button>
+      </div>
+    </Sheet>
+  );
+}
+
+/** The access a team starts with. Agents ask for anything more in Needs You. */
+function Baseline({ team, onClose }: { team: TeamView; onClose: () => void }) {
+  const access = useAccess(team.id);
+  const set = Boolean(access.view?.credentials.length || access.view?.grants.length);
+  return (
+    <Sheet title={`What can ${team.name} reach?`} onClose={onClose}>
+      <p className="sheet-text">
+        Give the team a credential and grants for the hosts it needs from day one, such as the repositories it works on.
+        Anything more, its agents ask you for.
+      </p>
+      <Access team={team.id} access={access} />
+      <div className="sheet-actions">
+        <button type="button" className={set ? "button primary" : "button quiet"} onClick={onClose}>
+          {set ? "Done" : "Skip for now"}
         </button>
       </div>
     </Sheet>

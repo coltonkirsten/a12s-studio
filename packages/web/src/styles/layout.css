@@ -144,7 +144,7 @@
   margin-bottom: 8px;
 }
 
-/* Pages: Needs You */
+/* Pages: Needs You, Team settings */
 
 .page {
   flex: 1;
@@ -165,6 +165,20 @@
   font-weight: 700;
   letter-spacing: -0.01em;
   margin-bottom: 24px;
+}
+
+.back.always {
+  display: inline-flex;
+}
+
+.settings-section {
+  margin-bottom: 36px;
+}
+
+.settings-section > h2 {
+  margin-bottom: 12px;
+  font-size: var(--size-title);
+  font-weight: 600;
 }
 
 /* Team: list column and conversation column */
