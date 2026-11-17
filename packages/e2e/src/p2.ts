@@ -38,7 +38,7 @@ const accessCard = (state: StudioState, team: string, path: string) =>
 
 const accessAsk = (path: string) =>
   `Use the access tool to request GET on host api.github.com for exactly the path ${path}, with the reason ` +
-  `"read the repository for the owner". Then answer me with the word: requested`;
+  `"read the repository for the owner". Then answer me with a post to owner holding the word: requested`;
 
 // A further message from the owner to dev in an open thread; answers the message's id.
 async function askDev(studio: Studio, thread: string, body: string): Promise<string> {
@@ -114,7 +114,7 @@ export async function p2(studio: Studio): Promise<void> {
     const asked = await askDev(
       studio,
       thread,
-      `Did the owner approve or deny your request for ${branchesPath}? Answer me with the one word.`,
+      `Did the owner approve or deny your request for ${branchesPath}? Answer me with a post to owner holding the one word.`,
     );
     const state = await studio.until(`${dev}'s answer`, (s) => answerFrom(s, dev, asked) !== undefined, ANSWER_MS);
     const answer = answerFrom(state, dev, asked)?.body ?? "";
@@ -163,7 +163,7 @@ export async function p2(studio: Studio): Promise<void> {
       web,
       "Push a branch",
       `Clone https://github.com/${repo}.git, add a file named ${branch}.txt holding one line of text, commit it, ` +
-        `and push the commit as a new branch named ${branch}. Then answer me with the word: pushed`,
+        `and push the commit as a new branch named ${branch}. Then answer me with a post to owner holding the word: pushed`,
       "dev",
     );
     await studio.open(asked.thread);
