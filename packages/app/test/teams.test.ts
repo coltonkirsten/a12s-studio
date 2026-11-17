@@ -20,16 +20,16 @@ test("the templates list their brief and agents, lead first", async (t) => {
   assert.deepEqual(
     templates.map(({ id, agents }) => ({ id, agents })),
     [
+      { id: "blank", agents: ["lead"] },
       { id: "research-notes", agents: ["lead", "researcher"] },
       { id: "website", agents: ["lead", "dev"] },
     ],
   );
-  for (const template of templates) assert.ok(template.purpose.length > 0);
 });
 
 test("creating a team makes its token, its agents and its rows", async (t) => {
   const s = await setup(t);
-  const team = await s.app.teams.createTeam({ slug: "web", ...body });
+  const team = await s.app.teams.createTeam({ ...body });
   assert.equal(team.leadAgentId, "web-lead");
   assert.equal(team.dailyBudgetUsd, 25);
   const scoped = s.app.repo.forTeam("web");
@@ -48,16 +48,28 @@ test("creating a team makes its token, its agents and its rows", async (t) => {
   await assert.rejects(s.a12s.forTeam(team.a12sToken).wake("other-lead"), { code: "out_of_prefix" });
 });
 
-test("a team name must be a free, unreserved slug, and a template must exist", async (t) => {
+test("a team's slug comes from its name, is never reused, and a template must exist", async (t) => {
   const s = await setup(t);
-  for (const slug of ["Web", "w", "web-site", "1web", "studio", "owner", "a12s"]) {
-    await assert.rejects(s.app.teams.createTeam({ slug, ...body }), { code: "bad_slug" }, slug);
-  }
-  await assert.rejects(s.app.teams.createTeam({ slug: "web", ...body, template: "../teams" }), { code: "not_found" });
-  await s.app.teams.createTeam({ slug: "web", ...body });
-  await assert.rejects(s.app.teams.createTeam({ slug: "web", ...body }), { code: "slug_used" });
+  await assert.rejects(s.app.teams.createTeam({ ...body, template: "../teams" }), { code: "not_found" });
+  assert.equal((await s.app.teams.createTeam(body)).id, "web");
+  assert.equal((await s.app.teams.createTeam(body)).id, "web2");
   await s.app.teams.deleteTeam("web");
-  await assert.rejects(s.app.teams.createTeam({ slug: "web", ...body }), { code: "slug_used" });
+  assert.equal((await s.app.teams.createTeam(body)).id, "web3");
+  assert.equal((await s.app.teams.createTeam({ ...body, name: "Owner" })).id, "owner2");
+});
+
+test("the blank template makes a team of one lead", async (t) => {
+  const s = await setup(t);
+  const blank = s.app.teams.templates().find((x) => x.id === "blank");
+  assert.deepEqual(blank && { purpose: blank.purpose, agents: blank.agents }, { purpose: "", agents: ["lead"] });
+  const team = await s.app.teams.createTeam({ ...body, template: "blank" });
+  assert.deepEqual(
+    s.app.repo
+      .forTeam(team.id)
+      .agents()
+      .map((a) => a.id),
+    ["web-lead"],
+  );
 });
 
 test("a team whose agents cannot all be created leaves nothing behind", async (t) => {
@@ -70,17 +82,17 @@ test("a team whose agents cannot all be created leaves nothing behind", async (t
     },
   });
   const s = await setup(t, { wrap });
-  await assert.rejects(s.app.teams.createTeam({ slug: "web", ...body }), { code: "unreachable" });
+  await assert.rejects(s.app.teams.createTeam({ ...body }), { code: "unreachable" });
   assert.deepEqual(s.app.repo.teams(), []);
   assert.equal(s.app.repo.teamSlugUsed("web"), false);
   assert.equal(s.a12s.agents.size, 0);
-  await s.app.teams.createTeam({ slug: "web", ...body });
+  await s.app.teams.createTeam({ ...body });
   assert.equal(s.app.repo.forTeam("web").agents().length, 2);
 });
 
 test("hiring checks the name and uses the hire defaults", async (t) => {
   const s = await setup(t);
-  await s.app.teams.createTeam({ slug: "web", ...body });
+  await s.app.teams.createTeam({ ...body });
   const qa = await s.app.teams.hire("web", { slug: "qa", role: "Tests releases.", model: "haiku" });
   assert.deepEqual([qa.id, qa.model, qa.sleepAfterIdle], ["web-qa", "haiku", "15m"]);
   assert.equal(s.a12s.agents.get("web-qa")?.spec.harness.model, "haiku");
@@ -95,7 +107,7 @@ test("hiring checks the name and uses the hire defaults", async (t) => {
 
 test("firing removes the agent computer, its wakes and its undelivered messages; the lead stays", async (t) => {
   const s = await setup(t);
-  await s.app.teams.createTeam({ slug: "web", ...body });
+  await s.app.teams.createTeam({ ...body });
   await s.app.teams.pause("web");
   const asked = await s.tool("web-lead", "post", { kind: "ask", to: "dev", title: "T", body: "b" });
   s.db
@@ -127,7 +139,7 @@ test("deleting a team removes its agents and token and can be run again after a 
     },
   });
   const s = await setup(t, { wrap });
-  const team = await s.app.teams.createTeam({ slug: "web", ...body });
+  const team = await s.app.teams.createTeam({ ...body });
   await assert.rejects(s.app.teams.deleteTeam("web"), { code: "unreachable" });
   assert.ok(s.app.repo.forTeam("web").team(), "the team stays when a step fails");
   await s.app.teams.deleteTeam("web");

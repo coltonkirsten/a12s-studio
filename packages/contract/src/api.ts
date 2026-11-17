@@ -8,7 +8,7 @@ export type WriteResult = { rev: number; id?: string };
 export type Template = { id: string; purpose: string; agents: string[] };
 export type TemplatesResponse = { templates: Template[] };
 
-export type CreateTeamBody = { slug: string; name: string; purpose: string; accent: string; template: string };
+export type CreateTeamBody = { name: string; purpose: string; accent: string; template: string };
 
 export type PatchTeamBody = {
   name?: string;

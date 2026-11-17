@@ -75,7 +75,6 @@ test("stream: a state on connect, then one after each write, with rising revs", 
   const start = stream.last().rev;
 
   const created = await s.owner("POST", "/api/teams", {
-    slug: "web",
     name: "Web",
     purpose: "The site.",
     accent: "#007aff",

@@ -1,7 +1,7 @@
 import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { CreateTeamBody, HireBody, PatchTeamBody, Template } from "@a12s-studio/contract/api";
-import { AGENT_SLUG, agentId, RESERVED_TEAM_SLUGS, TEAM_SLUG } from "@a12s-studio/contract/names";
+import { AGENT_SLUG, agentId, teamSlug } from "@a12s-studio/contract/names";
 import { type A12s, A12sError } from "./a12s/port.ts";
 import { agentSpec } from "./a12s/spec.ts";
 import type { Dispatcher } from "./dispatcher.ts";
@@ -120,32 +120,22 @@ export function createTeams(deps: { repo: Repo; a12s: A12s; dispatcher: Dispatch
 
     // All a12s work first and then one transaction, so a failure leaves no half-made team behind.
     async createTeam(input: CreateTeamBody): Promise<Team> {
-      if (!TEAM_SLUG.test(input.slug) || RESERVED_TEAM_SLUGS.includes(input.slug)) {
-        throw new StudioError(
-          400,
-          "bad_slug",
-          `"${input.slug}" is not a usable team name.`,
-          `Use a lower-case letter, then 1 to 19 letters or digits; not ${RESERVED_TEAM_SLUGS.join(", ")}.`,
-        );
-      }
-      if (repo.teamSlugUsed(input.slug)) {
-        throw new StudioError(409, "slug_used", `There has been a team named "${input.slug}".`, "Pick another name.");
-      }
+      const id = teamSlug(input.name, repo.teamSlugUsed);
       const known = templateIds();
       if (!known.includes(input.template)) {
         throw new StudioError(404, "not_found", `No template "${input.template}".`, `Use one of: ${known.join(", ")}.`);
       }
       const { roles } = readTemplate(input.template);
       const settings = repo.settings();
-      const scoped = repo.forTeam(input.slug);
-      const agents = roles.map(({ slug, role }) => newAgent(scoped, input.slug, slug, role, settings.defaultModel));
-      const token = await a12s.createToken(input.slug);
+      const scoped = repo.forTeam(id);
+      const agents = roles.map(({ slug, role }) => newAgent(scoped, id, slug, role, settings.defaultModel));
+      const token = await a12s.createToken(id);
       const team: Team = {
-        id: input.slug,
+        id,
         name: input.name,
         purpose: input.purpose,
         accent: input.accent,
-        leadAgentId: agentId(input.slug, "lead"),
+        leadAgentId: agentId(id, "lead"),
         dailyBudgetUsd: settings.defaultDailyBudgetUsd,
         paused: false,
         a12sToken: token,
