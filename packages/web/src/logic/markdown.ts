@@ -23,6 +23,8 @@ function image({ src, alt }: { src?: string; alt?: string }): ReactNode {
 /** How every agent message body is parsed: no HTML, safeHref the only judge of an address. */
 export const markdownOptions: MarkdownToJSX.Options = {
   disableParsingRawHTML: true,
+  // A body that opens with a block between two --- lines is words to show, not settings to hide.
+  disableFrontmatter: true,
   sanitizer: safeHref,
   // A heading of an agent's must not take an id the page uses.
   slugify: () => "",

@@ -46,12 +46,17 @@ test("an HTML tag in a body is shown as text, never made an element", () => {
     '<img src=x onerror="alert(1)">',
     '<a href="https://example.com" onclick="alert(1)">x</a>',
     '<div onmouseover="alert(1)">hover</div>',
+    "<svg onload=alert(1)></svg>",
+    "<style>body{display:none}</style>",
+    '<base href="https://example.com/">',
+    '<form action="https://example.com"><input autofocus onfocus="alert(1)"></form>',
+    "<!-- a comment -->",
   ];
   each((render, name) => {
     for (const tag of tags) {
-      for (const text of [tag, `Before ${tag} after`, `- item\n\n${tag}`]) {
+      for (const text of [tag, `Before ${tag} after`, `- item\n\n${tag}`, `> ${tag}`, `| a |\n|---|\n| ${tag} |`]) {
         const html = render(text);
-        assert.doesNotMatch(html, /<(script|iframe|img|div)\b/i, `${name}: ${text}`);
+        assert.doesNotMatch(html, /<(script|iframe|img|div|svg|style|base|form|input|!--)/i, `${name}: ${text}`);
         assert.doesNotMatch(html, /<[^>]*\son\w+=/i, `${name}: ${text}`);
         assert.match(html, /&lt;/, `${name}: ${text}`);
       }
@@ -65,6 +70,9 @@ test("links to anything but a web or mail address keep their words and lose the 
     "JAVASCRIPT:alert(1)",
     "JaVaScRiPt:alert(1)",
     "%20javascript:alert(1)",
+    "java\tscript:alert(1)",
+    "&#106;avascript:alert(1)",
+    "javascript&colon;alert(1)",
     "data:text/html;base64,PHNjcmlwdD4=",
     "DATA:text/html,x",
     "vbscript:msgbox(1)",
@@ -75,7 +83,14 @@ test("links to anything but a web or mail address keep their words and lose the 
   ];
   each((render, name) => {
     for (const target of targets) {
-      for (const text of [`[open me](${target})`, `[open me](  ${target})`, `[open me][r]\n\n[r]: ${target}`]) {
+      for (const text of [
+        `[open me](${target})`,
+        `[open me](  ${target})`,
+        `[open me](<${target}>)`,
+        `[open me][r]\n\n[r]: ${target}`,
+        `![open me][r]\n\n[r]: ${target}`,
+        `open me <${target}>`,
+      ]) {
         const html = render(text);
         assert.doesNotMatch(html, /href=/, `${name}: ${text}`);
         assert.match(html, /open me/, `${name}: ${text}`);
@@ -104,6 +119,16 @@ test("image syntax makes a link labelled with its alt text, never an image", () 
     const dropped = render("![tracker](javascript:alert(1))");
     assert.doesNotMatch(dropped, /<img|href=/i, name);
     assert.match(dropped, /tracker/, name);
+    const linked = render("[![badge](https://example.com/badge.svg)](javascript:alert(1))");
+    assert.doesNotMatch(linked, /<img|javascript/i, name);
+  });
+});
+
+test("a body that opens with a block between two rules is shown, not read as settings", () => {
+  each((render, name) => {
+    const html = render("---\nstatus: done\nnext: deploy\n---\n\nThe rest.");
+    for (const words of ["status: done", "next: deploy", "The rest."])
+      assert.ok(html.includes(words), `${name}: ${words}`);
   });
 });
 

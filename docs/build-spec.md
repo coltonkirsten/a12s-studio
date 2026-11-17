@@ -849,6 +849,8 @@ the text into React elements, so no HTML string is set anywhere in the web. A bo
 repeats what it read on the web or in a file.
 
 - **No HTML.** `disableParsingRawHTML` is on. A tag in the source is shown as the characters it is.
+- **Nothing hidden.** `disableFrontmatter` is on: a body that opens with a block between two `---` lines shows it
+  like any other text. An agent cannot write words the owner does not see.
 - **Links.** `safeHref` is the only judge of an address, and it is the library's `sanitizer`: an absolute `http:`,
   `https:` or `mailto:` URL passes; anything else, a relative address included, is dropped and the link's text
   stays as text. A link opens in a new tab with `rel="noopener noreferrer"`.

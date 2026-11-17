@@ -103,10 +103,15 @@ function lostCalls(turn: TurnRecord): boolean {
   return turn.tools.some((call) => call.isError && call.name.startsWith(TOOL_PREFIX));
 }
 
-// The "doing now" line for a tool call that is not a sub-agent's.
+// A tool call's input is whatever the harness sent: a field counts only when it is a string.
+function inputString(input: unknown, key: string): string {
+  const value = typeof input === "object" && input !== null ? (input as Record<string, unknown>)[key] : undefined;
+  return typeof value === "string" ? value : "";
+}
+
+// The "doing now" line for a tool call, the agent's own or a sub-agent's.
 export function doingNow(tool: string, input: unknown): string {
-  const args = (typeof input === "object" && input !== null ? input : {}) as Record<string, unknown>;
-  const str = (key: string) => (typeof args[key] === "string" ? (args[key] as string) : "");
+  const str = (key: string) => inputString(input, key);
   const file = (key: string) => basename(str(key)) || "a file";
   switch (tool) {
     case "Read":
@@ -258,12 +263,9 @@ export function createLive(deps: {
         rec.tools.add(ev.id);
         rec.line = doingNow(ev.name, ev.input);
         if (ev.name === "Agent" || ev.name === "Task") {
-          const { description } = (typeof ev.input === "object" && ev.input !== null ? ev.input : {}) as {
-            description?: unknown;
-          };
           rec.work.set(ev.id, {
             kind: "agent",
-            description: typeof description === "string" ? description : "",
+            description: inputString(ev.input, "description"),
             threadId: rec.turn?.threadId ?? null,
             startedAt: ev.at,
             line: null,
