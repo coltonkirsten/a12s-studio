@@ -1,4 +1,4 @@
-import type { StudioState, TeamView } from "@a12s-studio/contract/state";
+import type { TeamView } from "@a12s-studio/contract/state";
 import { type CSSProperties, useState } from "react";
 import { api, useAccess, useAction } from "../api.ts";
 import { href } from "../logic/route.ts";
@@ -9,7 +9,7 @@ import { Problem } from "../parts/problem.tsx";
 import { Sheet } from "../parts/sheet.tsx";
 import { Switch } from "../parts/switch.tsx";
 
-export function TeamSettings({ state, team }: { state: StudioState; team: TeamView }) {
+export function TeamSettings({ team }: { team: TeamView }) {
   const [deleting, setDeleting] = useState(false);
   const access = useAccess(team.id);
   return (
@@ -28,7 +28,6 @@ export function TeamSettings({ state, team }: { state: StudioState; team: TeamVi
 
       <section className="settings-section">
         <h2>Access</h2>
-        {state.broker === "down" && <p className="part-hint">The broker is not answering, so access cannot be read.</p>}
         <Access team={team.id} access={access} />
       </section>
 

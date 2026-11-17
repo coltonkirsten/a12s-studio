@@ -1,5 +1,5 @@
-// Development only: stands in for the app on 127.0.0.1:7400 with a recorded state, so the UI can be built and
-// looked at before the real owner API exists. Vite never bundles this folder.
+// Development only: stands in for the app's owner API with a recorded state, so every state of the UI can be
+// looked at without Docker, a12s or a login. Vite never bundles this folder.
 import { createServer, type ServerResponse } from "node:http";
 import type { ErrorBody, Template } from "@a12s-studio/contract/api";
 import type {
@@ -25,9 +25,9 @@ const MIN = 60_000;
 const DAY = 24 * 60 * MIN;
 const now = Date.now();
 let rev = 1;
-const AUDIT_PAGE = 25;
-// Beside an installed Studio, which holds the owner port, the fixture and Vite agree on another one.
-const port = Number(process.env.STUDIO_OWNER_PORT ?? OWNER_PORT);
+const AUDIT_PAGE = 50;
+// Beside a running Studio, which holds the owner port, FIXTURE_PORT moves the fixture and Vite's proxy to another.
+const port = Number(process.env.FIXTURE_PORT ?? OWNER_PORT);
 let seq = 0;
 
 function agent(
@@ -297,7 +297,9 @@ function needsYou(): NeedsYouItem[] {
       items.push({ kind: "credential_rejected", teamId, host: c.host, at: c.rejectedAt ?? now });
     }
     for (const g of a.grants) {
-      if (g.revokedAt !== null || g.expiresAt === null || g.expiresAt - Date.now() > 3 * DAY) continue;
+      if (g.revokedAt !== null || g.expiresAt === null) continue;
+      const left = g.expiresAt - Date.now();
+      if (left <= 0 || left > 3 * DAY) continue;
       items.push({
         kind: "grant_expiring",
         teamId,
@@ -435,7 +437,7 @@ function accessWrite(
   sub: string,
   item: string,
   verb?: string,
-): void {
+): string | undefined {
   const a = teamAccess(team);
   if (sub === "credentials" && method === "PUT") {
     const body = b as PutCredentialBody;
@@ -455,20 +457,23 @@ function accessWrite(
     audit(a, { action: "credential.set", host: item });
   }
   if (sub === "credentials" && method === "DELETE") {
+    if (!a.credentials.some((c) => c.host === item)) {
+      throw new Refusal({ code: "not_found", message: "There is no such credential." });
+    }
     a.credentials = a.credentials.filter((c) => c.host !== item);
     for (const g of a.grants) if (g.host === item && g.revokedAt === null) g.revokedAt = Date.now();
     audit(a, { action: "credential.delete", host: item });
   }
-  if (sub === "grants" && method === "POST") addGrant(a, b as CreateGrantBody, null);
+  if (sub === "grants" && method === "POST") return addGrant(a, b as CreateGrantBody, null).id;
   if (sub === "grants" && method === "DELETE") {
     const g = a.grants.find((x) => x.id === item);
-    if (!g) throw new Refusal({ code: "not_found", message: "No such grant." });
+    if (!g) throw new Refusal({ code: "not_found", message: "There is no such grant." });
     g.revokedAt = Date.now();
     audit(a, { action: "grant.revoke", host: g.host, grantId: g.id });
   }
   if (sub === "requests") {
     const r = a.requests.find((x) => x.id === item);
-    if (!r) throw new Refusal({ code: "not_found", message: "No such request." });
+    if (!r) throw new Refusal({ code: "not_found", message: "There is no such request." });
     if (r.status !== "pending")
       throw new Refusal({ code: "already_decided", message: "This request was already decided." });
     if (verb === "approve" && !a.credentials.some((c) => c.host === r.host)) {
@@ -483,13 +488,13 @@ function accessWrite(
     if (verb === "approve") addGrant(a, { ...r, expiresAt: (b as ApproveBody).expiresAt }, r.id);
     audit(a, { action: verb === "approve" ? "request.approve" : "request.deny", host: r.host });
   }
+  return undefined;
 }
 
 function write(b: Record<string, unknown>, path: string, method: string): string | undefined {
   const [, kind, id, sub, item, verb] = path.split("/").slice(1).map(decodeURIComponent);
   if (kind === "teams" && id && ["credentials", "grants", "requests"].includes(String(sub))) {
-    accessWrite(id, b, method, String(sub), item ?? "", verb);
-    return undefined;
+    return accessWrite(id, b, method, String(sub), item ?? "", verb);
   }
   if (method === "PATCH" && kind === "settings") Object.assign(settings, b);
   if (method === "PATCH" && kind === "teams") Object.assign(teams.find((t) => t.id === id) ?? {}, b);
