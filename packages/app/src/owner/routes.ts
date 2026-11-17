@@ -1,20 +1,25 @@
 import type { ServerResponse } from "node:http";
 import type { WriteResult } from "@a12s-studio/contract/api";
+import type { AccessRequest } from "@a12s-studio/contract/broker-admin";
 import { teamOf } from "@a12s-studio/contract/names";
 import { z } from "zod";
 import type { A12s } from "../a12s/port.ts";
+import type { BrokerClient } from "../broker-client.ts";
 import type { Dispatcher } from "../dispatcher.ts";
 import { StudioError } from "../errors.ts";
 import type { Live } from "../live.ts";
 import type { Repo, Team, TeamRepo } from "../repo.ts";
-import { BODY_MAX, changeThread, ownerPost, ownerThread, TITLE_MAX } from "../router.ts";
+import { BODY_MAX, changeThread, ownerPost, ownerThread, systemNote, TITLE_MAX } from "../router.ts";
+import type { Scheduler } from "../scheduler.ts";
 import { deriveState, messagesPage, type Stream } from "../state.ts";
 import type { createTeams } from "../teams.ts";
 
 export type OwnerDeps = {
   repo: Repo;
   a12s: A12s;
+  broker: BrokerClient;
   dispatcher: Dispatcher;
+  scheduler: Scheduler;
   teams: ReturnType<typeof createTeams>;
   live: Live;
   stream: Stream;
@@ -68,7 +73,28 @@ const schemas = {
     defaultSleepAfterIdle: z.string().min(1).max(20).optional(),
     defaultCompactMinTokens: z.int().min(0).optional(),
   }),
+  // The broker checks hosts, methods, patterns and the secret's form; these only give the bodies their shape.
+  credential: z.strictObject({
+    scheme: z.enum(["bearer", "basic", "header"]),
+    username: z.string().optional(),
+    headerName: z.string().optional(),
+    secret: z.string().min(1),
+  }),
+  grant: z.strictObject({
+    host: z.string(),
+    methods: z.array(z.string()).min(1),
+    paths: z.array(z.string()).min(1),
+    expiresAt: z.int().optional(),
+  }),
+  approve: z.strictObject({ expiresAt: z.int().optional() }),
 };
+
+// Section 9.4: the requesting agent hears the decision with its next message.
+function decisionNote(request: AccessRequest, expiresAt: number | undefined): string {
+  const reach = `${request.methods.join(", ")} ${request.host} ${request.paths.join(", ")}`;
+  if (request.status === "denied") return `Access denied: ${reach}.`;
+  return `Access approved: ${reach}${expiresAt === undefined ? "" : `, until ${new Date(expiresAt).toISOString()}`}.`;
+}
 
 function parse<S extends z.ZodType>(schema: S, body: unknown): z.output<S> {
   const result = schema.safeParse(body);
@@ -84,8 +110,14 @@ function parse<S extends z.ZodType>(schema: S, body: unknown): z.output<S> {
 }
 
 export function ownerRoutes(deps: OwnerDeps): Route[] {
-  const { repo, a12s, dispatcher, teams, live, stream } = deps;
+  const { repo, a12s, broker, dispatcher, scheduler, teams, stream } = deps;
   const written = (id?: string): WriteResult => ({ rev: stream.rev(), ...(id === undefined ? {} : { id }) });
+  // A change in the broker can add or remove a Needs You card, so the attention answer is read again before the
+  // route answers: the state at the returned rev already shows the change.
+  const relayed = async (id?: string): Promise<WriteResult> => {
+    await scheduler.refresh();
+    return written(id);
+  };
 
   function team(id: string | undefined): { team: Team; scoped: TeamRepo } {
     const scoped = repo.forTeam(id ?? "");
@@ -93,6 +125,9 @@ export function ownerRoutes(deps: OwnerDeps): Route[] {
     if (!found) throw new StudioError(404, "not_found", `No team ${id}.`, "Pick a team from the sidebar.");
     return { team: found, scoped };
   }
+
+  // Only a team the app knows is asked of the broker, and each call names that one team.
+  const teamBroker = (id: string | undefined) => broker.forTeam(team(id).team.id);
 
   // A thread id does not name its team; the team is looked up, then everything goes through its scoped repo.
   function threadTeam(id: string): TeamRepo {
@@ -112,7 +147,7 @@ export function ownerRoutes(deps: OwnerDeps): Route[] {
     {
       method: "GET",
       path: /^\/stream$/,
-      run: ({ query, res }) => stream.connect(res, () => deriveState(repo, live, query.get("thread"))),
+      run: ({ query, res }) => stream.connect(res, () => deriveState(deps, query.get("thread"))),
     },
     { method: "GET", path: /^\/templates$/, run: () => ({ templates: teams.templates() }) },
     {
@@ -249,6 +284,71 @@ export function ownerRoutes(deps: OwnerDeps): Route[] {
         }
         return written();
       },
+    },
+    {
+      method: "GET",
+      path: /^\/teams\/([^/]+)\/access$/,
+      run: ({ params }) => teamBroker(params[0]).access(),
+    },
+    {
+      method: "PUT",
+      path: /^\/teams\/([^/]+)\/credentials\/([^/]+)$/,
+      async run({ params, body }) {
+        const input = parse(schemas.credential, body);
+        await teamBroker(params[0]).putCredential(params[1] ?? "", input);
+        return relayed();
+      },
+    },
+    {
+      method: "DELETE",
+      path: /^\/teams\/([^/]+)\/credentials\/([^/]+)$/,
+      async run({ params }) {
+        await teamBroker(params[0]).deleteCredential(params[1] ?? "");
+        return relayed();
+      },
+    },
+    {
+      method: "POST",
+      path: /^\/teams\/([^/]+)\/grants$/,
+      async run({ params, body }) {
+        const input = parse(schemas.grant, body);
+        const grant = await teamBroker(params[0]).createGrant(input);
+        return relayed(grant.id);
+      },
+    },
+    {
+      method: "DELETE",
+      path: /^\/teams\/([^/]+)\/grants\/([^/]+)$/,
+      async run({ params }) {
+        await teamBroker(params[0]).revokeGrant(params[1] ?? "");
+        return relayed();
+      },
+    },
+    {
+      method: "POST",
+      path: /^\/teams\/([^/]+)\/requests\/([^/]+)\/approve$/,
+      async run({ params, body }) {
+        const { expiresAt } = parse(schemas.approve, body);
+        const { team: found, scoped } = team(params[0]);
+        const request = await broker.forTeam(found.id).approve(params[1] ?? "", { expiresAt });
+        systemNote(scoped, request.agentId, decisionNote(request, expiresAt));
+        return relayed();
+      },
+    },
+    {
+      method: "POST",
+      path: /^\/teams\/([^/]+)\/requests\/([^/]+)\/deny$/,
+      async run({ params }) {
+        const { team: found, scoped } = team(params[0]);
+        const request = await broker.forTeam(found.id).deny(params[1] ?? "");
+        systemNote(scoped, request.agentId, decisionNote(request, undefined));
+        return relayed();
+      },
+    },
+    {
+      method: "GET",
+      path: /^\/teams\/([^/]+)\/audit$/,
+      run: ({ params, query }) => teamBroker(params[0]).audit(query.get("before")),
     },
   ];
 }

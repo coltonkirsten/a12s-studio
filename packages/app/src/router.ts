@@ -221,6 +221,11 @@ export function systemAsk(team: TeamRepo, agentId: string, body: string): Messag
   return insert(team, { threadId: null, kind: "ask", fromId: "system", toId: agentId, askId: null, body });
 }
 
+// It wakes nobody: it rides along with the agent's next ask or reply.
+export function systemNote(team: TeamRepo, agentId: string, body: string): MessageId {
+  return insert(team, { threadId: null, kind: "note", fromId: "system", toId: agentId, askId: null, body });
+}
+
 // Section 5.5: an agent that answered the owner in plain output, without posting, still leaves its answer in the
 // thread. The ask stays open for a real reply.
 export function onTurnFinished(team: TeamRepo, turn: FinishedTurn): void {

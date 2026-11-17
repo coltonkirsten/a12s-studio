@@ -55,6 +55,8 @@ const MAX_ITEMS = 50;
 const WARN_AHEAD_MS = 3 * 24 * 60 * 60 * 1000;
 const AUDIT_PAGE = 50;
 const AUDIT_PAGE_MAX = 200;
+// A misled agent must not be able to flood Needs You.
+const MAX_PENDING = 10;
 // Never the nonce or the ciphertext: a view is built from these columns only.
 const CREDENTIAL_COLUMNS = "team_id, host, scheme, username, header_name, created_at, updated_at, rejected_at";
 // Printable and on one line, so a stored value is always a legal header value.
@@ -266,6 +268,14 @@ function routes({ db, vault, now }: AdminDeps): Route[] {
       const to = reach(input);
       const reason = text(input.reason, "reason");
       const days = input.days === undefined ? null : count(input.days, "days");
+      if (all("SELECT 1 FROM requests WHERE team_id = ? AND status = 'pending'", team).length >= MAX_PENDING) {
+        throw new Refusal(
+          409,
+          "too_many_pending",
+          `Team ${team} already has ${MAX_PENDING} requests waiting for the owner.`,
+          "Wait for the owner to decide on them, then request again.",
+        );
+      }
       const id = newId("rq_");
       run(
         `INSERT INTO requests (id, team_id, agent_id, host, methods, paths, reason, days, status, created_at)
@@ -309,7 +319,8 @@ function routes({ db, vault, now }: AdminDeps): Route[] {
     route("GET", "/attention", (): Attention => {
       const withTeam = <Row extends { team_id: string }, View>(rows: Row[], view: (row: Row) => View) =>
         rows.map((row) => ({ ...view(row), teamId: row.team_id }));
-      const expiring = `SELECT * FROM grants WHERE revoked_at IS NULL AND warned_at IS NULL
+      // Warned grants stay listed: the warning goes to the lead once, the owner's card stays until the grant ends.
+      const expiring = `SELECT * FROM grants WHERE revoked_at IS NULL
                         AND expires_at > ? AND expires_at <= ? ORDER BY expires_at`;
       const rejected = `SELECT ${CREDENTIAL_COLUMNS} FROM credentials WHERE rejected_at IS NOT NULL ORDER BY rejected_at`;
       return {

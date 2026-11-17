@@ -204,7 +204,7 @@ test("approving for a host without a credential is refused with a fix that names
   assert.equal((await broker.admin("POST", `/teams/web/requests/${asked.body.id}/approve`)).status, 200);
 });
 
-test("attention lists pending requests and the grants that expire within three days and are not warned", async (t) => {
+test("attention lists pending requests and the grants that expire within three days, warned or not", async (t) => {
   const broker = await startBroker(t);
   const { now } = broker.clock;
   await broker.credential("web");
@@ -238,15 +238,42 @@ test("attention lists pending requests and the grants that expire within three d
   assert.deepEqual(await attention(), expected);
 
   assert.equal((await broker.admin("POST", `/grants/${sooner.id}/warned`)).status, 204);
-  expected.expiring.shift();
   assert.deepEqual(await attention(), expected);
-  const { body } = await broker.admin<AccessView>("GET", "/teams/ops/access");
-  assert.equal(body.grants.find((g: Grant) => g.id === sooner.id)?.warnedAt, now);
+  const { body } = await broker.admin<Attention>("GET", "/attention");
+  assert.deepEqual(
+    body.expiring.map((g: Grant) => [g.id, g.warnedAt]),
+    [
+      [sooner.id, now],
+      [soon.id, null],
+    ],
+  );
 
   // Time moves one grant out of the window (it has run out) and the next one in.
   broker.clock.now = now + 3 * DAY;
   expected.expiring = [["web", later.id]];
   assert.deepEqual(await attention(), expected);
+});
+
+test("a team has at most ten pending requests; a decision makes room for another", async (t) => {
+  const broker = await startBroker(t);
+  const ask = (team = "web") =>
+    broker.admin<AccessRequest & { code?: string; fix?: string }>("POST", `/teams/${team}/requests`, {
+      ...wish,
+      agentId: `${team}-dev`,
+    });
+  const first = await ask();
+  for (let i = 1; i < 10; i++) assert.equal((await ask()).status, 200);
+  const before = broker.auditAfter(0).length;
+
+  const refused = await ask();
+  assert.deepEqual([refused.status, refused.body.code], [409, "too_many_pending"]);
+  assert.match(refused.body.fix ?? "", /Wait for the owner to decide/);
+  assert.equal(broker.auditAfter(0).length, before);
+  assert.equal((await ask("ops")).status, 200);
+
+  await broker.admin("POST", `/teams/web/requests/${first.body.id}/deny`);
+  assert.equal((await ask()).status, 200);
+  assert.equal((await ask()).status, 409);
 });
 
 test("the audit log is paged newest first and shows one team only", async (t) => {

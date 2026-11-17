@@ -47,6 +47,7 @@ const a12s = realA12s(controller);
 const app = createApp({
   db,
   a12s,
+  brokerSocket: join(home, "broker", "admin.sock"),
   templatesDir: fileURLToPath(new URL("../../../teams", import.meta.url)),
   webDir: fileURLToPath(new URL("../../web/dist", import.meta.url)),
   ownerLogin: config.ownerLogin,
@@ -86,6 +87,7 @@ void (async () => {
 // Its first resync stores what happened while the app was stopped and runs the dispatcher, which delivers whatever
 // was committed but not yet sent.
 app.live.start();
+app.scheduler.start();
 
 let stopping = false;
 async function shutdown(signal: string): Promise<void> {
@@ -93,6 +95,7 @@ async function shutdown(signal: string): Promise<void> {
   stopping = true;
   console.log(`a12s Studio: ${signal}, stopping.`);
   app.stream.close();
+  await app.scheduler.stop();
   await app.live.stop();
   for (const server of [app.ownerServer, app.agentServer]) server.closeAllConnections();
   await Promise.all([app.ownerServer, app.agentServer].map((s) => new Promise((r) => s.close(r))));

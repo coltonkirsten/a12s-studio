@@ -7,10 +7,12 @@ import type {
   TeamView,
   ThreadView,
 } from "@a12s-studio/contract/state";
+import type { BrokerClient } from "./broker-client.ts";
 import { blockedReason } from "./dispatcher.ts";
 import { type Live, presenceOf } from "./live.ts";
 import type { Message, Repo, TeamRepo } from "./repo.ts";
 import { boardStatus } from "./router.ts";
+import type { Scheduler } from "./scheduler.ts";
 
 const COALESCE_MS = 50;
 const THREADS = 200;
@@ -44,9 +46,16 @@ function localMidnight(now: number): number {
   return day.getTime();
 }
 
-// StudioState without its rev, from the database and the live agent records. `thread` is the open thread, if any.
-export function deriveState(repo: Repo, live: Live, thread: string | null): Omit<StudioState, "rev"> {
+type Sources = { repo: Repo; live: Live; broker: Pick<BrokerClient, "up">; scheduler: Pick<Scheduler, "attention"> };
+
+// StudioState without its rev, from the database, the live agent records and the broker's last attention answer.
+// `thread` is the open thread, if any.
+export function deriveState(
+  { repo, live, broker, scheduler }: Sources,
+  thread: string | null,
+): Omit<StudioState, "rev"> {
   const settings = repo.settings();
+  const attention = scheduler.attention();
   const since = localMidnight(Date.now());
   const needsYou: NeedsYouItem[] = [];
   const teams: TeamView[] = repo.teams().map((team) => {
@@ -66,6 +75,21 @@ export function deriveState(repo: Repo, live: Live, thread: string | null): Omit
         error: t.error,
         at: t.finishedAt,
       });
+    }
+    for (const { teamId, ...request } of attention.requests) {
+      if (teamId !== team.id) continue;
+      const hostHasCredential = attention.credentialHosts[teamId]?.includes(request.host) ?? false;
+      needsYou.push({ kind: "access_request", teamId, request, hostHasCredential });
+    }
+    for (const { teamId, host, rejectedAt } of attention.rejected) {
+      if (teamId === team.id && rejectedAt !== null) {
+        needsYou.push({ kind: "credential_rejected", teamId, host, at: rejectedAt });
+      }
+    }
+    for (const { teamId, id, host, paths, expiresAt } of attention.expiring) {
+      if (teamId === team.id && expiresAt !== null) {
+        needsYou.push({ kind: "grant_expiring", teamId, grantId: id, host, paths, expiresAt });
+      }
     }
     const spent = scoped.spentSince(since);
     return {
@@ -131,7 +155,14 @@ export function deriveState(repo: Repo, live: Live, thread: string | null): Omit
       ...messagesPage(repo.forTeam(teamId), thread),
     };
   }
-  return { a12s: live.up() ? "up" : "down", broker: "down", settings, teams, needsYou, open };
+  return {
+    a12s: live.up() ? "up" : "down",
+    broker: broker.up() ? "up" : "down",
+    settings,
+    teams,
+    needsYou,
+    open,
+  };
 }
 
 type Client = { res: ServerResponse; build: () => Omit<StudioState, "rev"> };
