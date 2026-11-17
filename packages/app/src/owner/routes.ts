@@ -126,6 +126,9 @@ export function ownerRoutes(deps: OwnerDeps): Route[] {
     return { team: found, scoped };
   }
 
+  // Only a team the app knows is asked of the broker, and each call names that one team.
+  const teamBroker = (id: string | undefined) => broker.forTeam(team(id).team.id);
+
   // A thread id does not name its team; the team is looked up, then everything goes through its scoped repo.
   function threadTeam(id: string): TeamRepo {
     const teamId = repo.threadTeam(id);
@@ -285,14 +288,14 @@ export function ownerRoutes(deps: OwnerDeps): Route[] {
     {
       method: "GET",
       path: /^\/teams\/([^/]+)\/access$/,
-      run: ({ params }) => broker.forTeam(team(params[0]).team.id).access(),
+      run: ({ params }) => teamBroker(params[0]).access(),
     },
     {
       method: "PUT",
       path: /^\/teams\/([^/]+)\/credentials\/([^/]+)$/,
       async run({ params, body }) {
         const input = parse(schemas.credential, body);
-        await broker.forTeam(team(params[0]).team.id).putCredential(params[1] ?? "", input);
+        await teamBroker(params[0]).putCredential(params[1] ?? "", input);
         return relayed();
       },
     },
@@ -300,7 +303,7 @@ export function ownerRoutes(deps: OwnerDeps): Route[] {
       method: "DELETE",
       path: /^\/teams\/([^/]+)\/credentials\/([^/]+)$/,
       async run({ params }) {
-        await broker.forTeam(team(params[0]).team.id).deleteCredential(params[1] ?? "");
+        await teamBroker(params[0]).deleteCredential(params[1] ?? "");
         return relayed();
       },
     },
@@ -309,7 +312,7 @@ export function ownerRoutes(deps: OwnerDeps): Route[] {
       path: /^\/teams\/([^/]+)\/grants$/,
       async run({ params, body }) {
         const input = parse(schemas.grant, body);
-        const grant = await broker.forTeam(team(params[0]).team.id).createGrant(input);
+        const grant = await teamBroker(params[0]).createGrant(input);
         return relayed(grant.id);
       },
     },
@@ -317,7 +320,7 @@ export function ownerRoutes(deps: OwnerDeps): Route[] {
       method: "DELETE",
       path: /^\/teams\/([^/]+)\/grants\/([^/]+)$/,
       async run({ params }) {
-        await broker.forTeam(team(params[0]).team.id).revokeGrant(params[1] ?? "");
+        await teamBroker(params[0]).revokeGrant(params[1] ?? "");
         return relayed();
       },
     },
@@ -345,7 +348,7 @@ export function ownerRoutes(deps: OwnerDeps): Route[] {
     {
       method: "GET",
       path: /^\/teams\/([^/]+)\/audit$/,
-      run: ({ params, query }) => broker.forTeam(team(params[0]).team.id).audit(query.get("before")),
+      run: ({ params, query }) => teamBroker(params[0]).audit(query.get("before")),
     },
   ];
 }

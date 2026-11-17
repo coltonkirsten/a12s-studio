@@ -807,8 +807,8 @@ The access routes relay to the broker's admin socket (section 9.5) and pass its 
 answers the broker's `AccessView` and `GET …/audit` its `AuditPage`; the writes answer `{ rev }`, `POST …/grants`
 with the new grant's `id`. A write that can change a Needs You card (all of them) reads the broker's attention items
 again before it answers, so the state at its `rev` shows the change. A credential's `secret` passes through the
-app's memory once and is never logged or stored by the app. Removing or clearing inbox Messages also marks the matching Studio
-messages `none`.
+app's memory once and is never logged or stored by the app. Removing or clearing inbox Messages also marks the
+matching Studio messages `none`.
 
 ## 8. Templates
 

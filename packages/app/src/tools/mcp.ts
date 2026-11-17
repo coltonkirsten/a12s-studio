@@ -21,7 +21,7 @@ export type ToolContext = {
   a12s: TeamA12s;
   broker: TeamBroker;
   dispatcher: Dispatcher;
-  scheduler: Scheduler;
+  scheduler: Pick<Scheduler, "refresh">;
 };
 
 export type Tool<S extends ZodRawShape> = {

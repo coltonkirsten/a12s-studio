@@ -8,7 +8,7 @@ import { systemNote } from "./router.ts";
 const TICK_MS = 30_000;
 
 // The broker's last attention answer, and for each team with a pending request the hosts it has a credential for.
-export type BrokerAttention = Attention & { credentialHosts: Record<string, string[]> };
+type BrokerAttention = Attention & { credentialHosts: Record<string, string[]> };
 
 const NOTHING: BrokerAttention = { requests: [], expiring: [], rejected: [], credentialHosts: {} };
 

@@ -3,6 +3,7 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { type TestContext, test } from "node:test";
+import { format } from "node:util";
 import { HOST, SECRET, startBroker } from "@a12s-studio/broker/test/harness.ts";
 import type { AccessView, AuditPage } from "@a12s-studio/contract/broker-admin";
 import type { NeedsYouItem } from "@a12s-studio/contract/state";
@@ -83,6 +84,9 @@ test("access list: live grants and pending requests of the caller's team only", 
   await broker.grant("web", { paths: ["/v1/items/**"] });
   const revoked = await broker.grant("web", { paths: ["/v1/old"] });
   await broker.admin("DELETE", `/teams/web/grants/${revoked.id}`);
+  // Run out by the app's clock, though the broker's sweep has not stamped it yet.
+  await broker.grant("web", { paths: ["/v1/gone"], expiresAt: broker.clock.now + 1000 });
+  t.mock.timers.enable({ apis: ["Date"], now: broker.clock.now + 2000 });
   const asked = await s.tool("web-dev", "access", wish);
 
   assert.deepEqual(await s.tool("web-lead", "access", { action: "list" }), {
@@ -205,7 +209,8 @@ test("a stored secret appears in no app log line, response or state", async (t) 
   const { broker, s } = await withBroker(t);
   const logged: string[] = [];
   for (const method of ["log", "error", "warn", "info", "debug"] as const) {
-    t.mock.method(console, method, (...args: unknown[]) => logged.push(args.map(String).join(" ")));
+    // Formatted the way the console prints it, so a secret inside a logged object is seen too.
+    t.mock.method(console, method, (...args: unknown[]) => logged.push(format(...args)));
   }
   const answers: unknown[] = [];
   const owner = async (method: string, path: string, body?: unknown) => {
