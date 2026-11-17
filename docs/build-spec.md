@@ -62,7 +62,7 @@ fleet/fleet.yaml       written once by setup; names the Fleet, nothing else
 
 `STUDIO_HOME` overrides the folder (tests use a temp dir). Ports are constants in code, not settings.
 
-**Install** (`scripts/setup.sh [--owner-login <login>]`, idempotent): checks Docker, a12s 0.11.0+ and Node 24+;
+**Install** (`scripts/setup.sh [--owner-login <login>]`, idempotent): checks Docker, a12s 0.11.1+ and Node 24+;
 when the Fleet `studio` has never been started, writes `fleet/fleet.yaml` (`metadata.name: studio`, no agent
 computers) and runs `a12s up` once to start the Controller; prints the `a12s creds set anthropic` command when the
 Controller has no `anthropic` credential; writes `config.json` (asking for the owner's Tailscale login unless given);
@@ -718,7 +718,7 @@ later; every feed that becomes ready is followed by a resync.
 | `text.delta` | Appends to the Turn's text and emits `live`. If no tool is running, line: "Writing". |
 | `tool.started` (no `parent`) | Sets the line from the table below. Calls with a `parent` (a sub-agent's) are ignored for the line. |
 | `tool.finished` | Nothing for the line; the inspector's log shows it. |
-| `turn.finished` | Writes the `turns` row (section 7.4), applies sections 5.5 and 5.6, clears the line and text, runs the dispatcher. A Turn followed whole (every event from `turn.started` on, no resync since) is stored from its events; any other is read from a12s `turns`, which has all its text, Messages and tool calls (read again for up to a second: a12s sends the event just before it stores the Turn). |
+| `turn.finished` | Writes the `turns` row (section 7.4), applies sections 5.5 and 5.6, clears the line and text, runs the dispatcher. A Turn followed whole (every event from `turn.started` on, no resync since) is stored from its events; any other is read from a12s `turns`, which has all its text, Messages and tool calls; a12s stores the Turn before it sends the event. |
 | `service.phase` | For an add-on instance, its status: `Ready` → ready; `Error` or `Unhealthy` → error (with its message); any other → starting. Other Services are ignored. |
 | `gap`, or a new feed | Resync: `status()` for phases; for each agent, recent Turns not yet in `turns`, stored the same way; for each `sent` message, its a12s state; `services()` for add-on statuses. Running Turns are no longer whole. |
 
