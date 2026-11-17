@@ -12,6 +12,7 @@ import { access } from "./access.ts";
 import { post } from "./post.ts";
 import { read } from "./read.ts";
 import { roster } from "./roster.ts";
+import { rules } from "./rules.ts";
 import { schedule } from "./schedule.ts";
 import { updateThread } from "./update_thread.ts";
 
@@ -72,6 +73,7 @@ export function mcpServer(ctx: ToolContext): McpServer {
   register(server, ctx, read);
   register(server, ctx, updateThread);
   register(server, ctx, roster);
+  register(server, ctx, rules);
   register(server, ctx, schedule);
   register(server, ctx, access);
   return server;

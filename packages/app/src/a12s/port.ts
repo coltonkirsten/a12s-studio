@@ -38,6 +38,9 @@ export type ExternalService = {
   healthPath?: string;
 };
 
+// Claude Code's hook settings: a group runs its commands for the events its matcher names (all, without one).
+type HookGroup = { matcher?: string; hooks: { type: "command"; command: string; timeout?: number }[] };
+
 export type AgentSpec = {
   harness: {
     kind: "claude-code";
@@ -45,7 +48,8 @@ export type AgentSpec = {
     model: string;
     settings: {
       hooks: {
-        SessionStart: { matcher: string; hooks: { type: "command"; command: string }[] }[];
+        SessionStart: HookGroup[];
+        UserPromptSubmit: HookGroup[];
       };
     };
   };

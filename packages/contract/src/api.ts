@@ -32,6 +32,12 @@ export type PatchAgentBody = {
 // The six fields PATCH /agents/:agent takes, as they are now; cpu and memory are null for a12s's default.
 export type AgentSettings = Required<PatchAgentBody>;
 
+// One version of the owner rules, a team's rules or a role; author is "owner" or the id of the lead that wrote it.
+export type RuleVersion = { id: number; body: string; author: string; at: number };
+// Newest first; the first version of the first page is the text now.
+export type RulesPage = { versions: RuleVersion[]; hasMore: boolean };
+export type PutRulesBody = { body: string };
+
 export type PowerBody = { state: "awake" | "asleep" };
 
 export type NewThreadBody = { title?: string; body: string; to?: string };

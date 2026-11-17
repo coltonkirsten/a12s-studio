@@ -13,6 +13,7 @@ import { blockedReason, freeDiskGb, overBudget } from "./dispatcher.ts";
 import { type Live, presenceOf } from "./live.ts";
 import type { Message, Repo, TeamRepo } from "./repo.ts";
 import { boardStatus } from "./router.ts";
+import { roleLine } from "./rules.ts";
 import type { Scheduler } from "./scheduler.ts";
 
 const COALESCE_MS = 50;
@@ -130,7 +131,7 @@ export function deriveState(
         return {
           id: agent.id,
           slug: agent.slug,
-          roleLine: agent.role.split("\n")[0] ?? "",
+          roleLine: roleLine(scoped, agent.id),
           model: agent.model,
           presence,
           ...(waitingFor ? { waitingFor } : {}),

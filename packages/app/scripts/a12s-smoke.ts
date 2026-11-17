@@ -9,7 +9,12 @@ if (!fleet) throw new Error("Usage: node packages/app/scripts/a12s-smoke.ts <fle
 const team = "smoke";
 const agent = `${team}-lead`;
 const spec: AgentSpec = {
-  harness: { kind: "claude-code", version: "2.1.280", model: "haiku", settings: { hooks: { SessionStart: [] } } },
+  harness: {
+    kind: "claude-code",
+    version: "2.1.280",
+    model: "haiku",
+    settings: { hooks: { SessionStart: [], UserPromptSubmit: [] } },
+  },
   image: "slim",
   credentials: ["anthropic"],
   instructions: "You are a smoke test. Answer in one word.",

@@ -9,6 +9,7 @@ import { Icon } from "../parts/icons.tsx";
 import { Problem } from "../parts/problem.tsx";
 import { Sheet } from "../parts/sheet.tsx";
 import { Switch } from "../parts/switch.tsx";
+import { Versions } from "../parts/versions.tsx";
 import { LimitField } from "./settings.tsx";
 
 export function TeamSettings({ team }: { team: TeamView }) {
@@ -26,6 +27,16 @@ export function TeamSettings({ team }: { team: TeamView }) {
       <section className="settings-section">
         <h2>Brief</h2>
         <Brief key={team.purpose} team={team} />
+      </section>
+
+      <section className="settings-section">
+        <h2>Rules</h2>
+        <Versions
+          id={team.id}
+          label="How this team works. You and the team's lead write them; each agent gets a change with its next message."
+          load={(before) => api.teamRules(team.id, before)}
+          save={(body) => api.putTeamRules(team.id, body)}
+        />
       </section>
 
       <section className="settings-section">

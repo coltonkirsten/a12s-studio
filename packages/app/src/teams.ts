@@ -9,6 +9,7 @@ import type { Dispatcher } from "./dispatcher.ts";
 import { StudioError } from "./errors.ts";
 import type { Agent, Repo, Team, TeamRepo } from "./repo.ts";
 import { systemMessage } from "./router.ts";
+import { checkBody, write } from "./rules.ts";
 
 // Names that mean something else wherever an agent can be addressed.
 const RESERVED_AGENT_SLUGS = ["owner", "system"];
@@ -53,7 +54,8 @@ export function createTeams(deps: {
       .sort((a, b) => Number(b === "blank") - Number(a === "blank") || a.localeCompare(b));
   }
 
-  function newAgent(scoped: TeamRepo, teamId: string, slug: string, role: string, model: string): Agent {
+  // The agent's row and its role, checked before any a12s work so a refusal leaves nothing behind.
+  function newAgent(scoped: TeamRepo, teamId: string, slug: string, role: string, model: string) {
     if (!AGENT_SLUG.test(slug) || RESERVED_AGENT_SLUGS.includes(slug)) {
       throw new StudioError(
         400,
@@ -66,11 +68,10 @@ export function createTeams(deps: {
       throw new StudioError(409, "slug_used", `${teamId} has had an agent named "${slug}".`, "Pick another name.");
     }
     const settings = repo.settings();
-    return {
+    const agent: Agent = {
       id: agentId(teamId, slug),
       teamId,
       slug,
-      role,
       model,
       sleepAfterIdle: settings.defaultSleepAfterIdle,
       compactMinTokens: settings.defaultCompactMinTokens,
@@ -78,6 +79,13 @@ export function createTeams(deps: {
       memory: null,
       createdAt: Date.now(),
     };
+    return { agent, role: checkBody("role", role) };
+  }
+
+  // An agent's row and its first role version, written together.
+  function insertAgent(scoped: TeamRepo, agent: Agent, role: string): void {
+    scoped.insertAgent(agent);
+    write(scoped.roleRules(agent.id), role, "owner");
   }
 
   // Removing an agent computer that is already gone counts as done, so a failed delete can be run again.
@@ -142,7 +150,7 @@ export function createTeams(deps: {
       const { roles } = readTemplate(input.template);
       const settings = repo.settings();
       const scoped = repo.forTeam(id);
-      const agents = roles.map(({ slug, role }) => newAgent(scoped, id, slug, role, settings.defaultModel));
+      const hired = roles.map(({ slug, role }) => newAgent(scoped, id, slug, role, settings.defaultModel));
       creating.add(id);
       try {
         const token = await a12s.createToken(id);
@@ -159,7 +167,7 @@ export function createTeams(deps: {
         };
         const created: Agent[] = [];
         try {
-          for (const agent of agents) {
+          for (const { agent } of hired) {
             await a12s.putAgent(agent.id, agentSpec(team, agent), "create");
             created.push(agent);
           }
@@ -170,7 +178,7 @@ export function createTeams(deps: {
         }
         repo.tx(() => {
           repo.insertTeam(team);
-          for (const agent of agents) scoped.insertAgent(agent);
+          for (const { agent, role } of hired) insertAgent(scoped, agent, role);
         });
         return team;
       } finally {
@@ -180,9 +188,9 @@ export function createTeams(deps: {
 
     async hire(teamId: string, input: HireBody): Promise<Agent> {
       const { team, scoped } = live(teamId);
-      const agent = newAgent(scoped, team.id, input.slug, input.role, input.model);
+      const { agent, role } = newAgent(scoped, team.id, input.slug, input.role, input.model);
       await a12s.putAgent(agent.id, agentSpec(team, agent), "create");
-      scoped.insertAgent(agent);
+      scoped.tx(() => insertAgent(scoped, agent, role));
       return agent;
     },
 
@@ -211,25 +219,31 @@ export function createTeams(deps: {
       scoped.markDeleted(Date.now());
     },
 
-    // A new brief or role reaches the agent computer as a fresh spec, which a12s applies at its next idle moment.
+    // A new name is in every agent's instructions, so it reaches them as a fresh spec, which a12s applies at their
+    // next idle moment. The brief is loaded by the team layer's hook and needs none.
     async patchTeam(teamId: string, patch: Pick<PatchTeamBody, "name" | "purpose" | "accent" | "dailyBudgetUsd">) {
       const { team, scoped } = live(teamId);
       const next = { ...team, ...patch };
-      if (next.name !== team.name || next.purpose !== team.purpose) {
+      if (next.name !== team.name) {
         for (const agent of scoped.agents()) await a12s.putAgent(agent.id, agentSpec(next, agent), "replace");
       }
       scoped.updateTeam(patch);
       await dispatcher.run();
     },
 
-    // The row changes only once a12s has taken the spec, so the two never disagree.
-    async patchAgent(teamId: string, id: string, patch: PatchAgentBody): Promise<void> {
+    // A setting changes the row only once a12s has taken the spec, so the two never disagree. A role is a new
+    // version and no spec: the hook loads it with the agent's next message.
+    async patchAgent(teamId: string, id: string, { role, ...settings }: PatchAgentBody): Promise<void> {
       const { team, scoped } = live(teamId);
       const agent = scoped.agent(id);
       if (!agent) throw new StudioError(404, "not_found", `No agent ${id} on ${teamId}.`);
-      const next = { ...agent, ...patch };
-      await a12s.putAgent(id, agentSpec(team, next), "replace");
-      scoped.updateAgent(next);
+      if (role !== undefined) checkBody("role", role);
+      if (Object.keys(settings).length > 0) {
+        const next = { ...agent, ...settings };
+        await a12s.putAgent(id, agentSpec(team, next), "replace");
+        scoped.updateAgent(next);
+      }
+      if (role !== undefined) write(scoped.roleRules(id), role, "owner");
     },
 
     // Section 6: every agent's spec, put again at each start so that a spec a release of Studio has changed reaches

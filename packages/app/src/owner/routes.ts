@@ -3,6 +3,7 @@ import type { Duplex } from "node:stream";
 import type {
   AgentSettings,
   InboxResponse,
+  RulesPage,
   SteeredMessage,
   ToolCall,
   TurnEventsResponse,
@@ -20,6 +21,7 @@ import { homePath, sendAttachment } from "../files.ts";
 import { doingNow, type Live } from "../live.ts";
 import type { Repo, Team, TeamRepo } from "../repo.ts";
 import { BODY_MAX, changeThread, markSeen, ownerPost, ownerThread, systemMessage, TITLE_MAX } from "../router.ts";
+import { current, versions, write } from "../rules.ts";
 import type { Scheduler } from "../scheduler.ts";
 import { deriveState, messagesPage, messageView, type Stream } from "../state.ts";
 import type { createTeams } from "../teams.ts";
@@ -70,9 +72,10 @@ const schemas = {
     dailyBudgetUsd: z.number().min(0).optional(),
     paused: z.boolean().optional(),
   }),
-  hire: z.strictObject({ slug: SLUG, role: TEXT.max(8000), model: MODEL }),
+  // rules.ts holds the limits of a rule or a role.
+  hire: z.strictObject({ slug: SLUG, role: z.string(), model: MODEL }),
   patchAgent: z.strictObject({
-    role: TEXT.max(8000).optional(),
+    role: z.string().optional(),
     model: MODEL.optional(),
     sleepAfterIdle: DURATION.optional(),
     compactMinTokens: z.int().min(0).optional(),
@@ -83,6 +86,7 @@ const schemas = {
     z.strictObject({ encoding: z.literal("utf-8"), content: z.string() }),
     z.strictObject({ encoding: z.literal("base64"), content: z.base64() }),
   ]),
+  rules: z.strictObject({ body: z.string() }),
   power: z.strictObject({ state: z.enum(["awake", "asleep"]) }),
   newThread: z.strictObject({
     title: TEXT.max(TITLE_MAX).optional(),
@@ -169,6 +173,17 @@ function steeredLog(team: TeamRepo, events: A12sEvent[]): SteeredMessage[] {
         }))
       : [],
   );
+}
+
+// The cursor of a rules history: the id of the oldest version on the page before.
+function before(query: URLSearchParams): number | undefined {
+  const value = query.get("before");
+  if (value === null) return undefined;
+  const id = Number(value);
+  if (!Number.isInteger(id)) {
+    throw new StudioError(400, "bad_request", "before: not a version id.", "Use the id of a version you were sent.");
+  }
+  return id;
 }
 
 function parse<S extends z.ZodType>(schema: S, body: unknown): z.output<S> {
@@ -308,8 +323,50 @@ export function ownerRoutes(deps: OwnerDeps): Route[] {
       method: "GET",
       path: /^\/agents\/([^/]+)$/,
       run({ params }): AgentSettings {
-        const { role, model, sleepAfterIdle, compactMinTokens, cpu, memory } = agentOf(params[0]).agent;
-        return { role, model, sleepAfterIdle, compactMinTokens, cpu, memory };
+        const { scoped, agent } = agentOf(params[0]);
+        const { model, sleepAfterIdle, compactMinTokens, cpu, memory } = agent;
+        return {
+          role: current(scoped.roleRules(agent.id)) ?? "",
+          model,
+          sleepAfterIdle,
+          compactMinTokens,
+          cpu,
+          memory,
+        };
+      },
+    },
+    {
+      method: "GET",
+      path: /^\/agents\/([^/]+)\/role$/,
+      run({ params, query }): RulesPage {
+        const { scoped, id } = agentOf(params[0]);
+        return versions(scoped.roleRules(id), before(query));
+      },
+    },
+    {
+      method: "GET",
+      path: /^\/rules$/,
+      run: ({ query }): RulesPage => versions(repo.ownerRules(), before(query)),
+    },
+    {
+      method: "PUT",
+      path: /^\/rules$/,
+      run({ body }) {
+        write(repo.ownerRules(), parse(schemas.rules, body).body, "owner");
+        return written();
+      },
+    },
+    {
+      method: "GET",
+      path: /^\/teams\/([^/]+)\/rules$/,
+      run: ({ params, query }): RulesPage => versions(team(params[0]).scoped.teamRules(), before(query)),
+    },
+    {
+      method: "PUT",
+      path: /^\/teams\/([^/]+)\/rules$/,
+      run({ params, body }) {
+        write(team(params[0]).scoped.teamRules(), parse(schemas.rules, body).body, "owner");
+        return written();
       },
     },
     {

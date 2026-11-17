@@ -1282,3 +1282,143 @@
   color: var(--text-2);
   font-size: var(--size-small);
 }
+
+/* Versions: a text with its history, the differences from each version to the next, and restore */
+
+.sheet-section {
+  margin-top: 22px;
+  padding-top: 18px;
+  border-top: 1px solid var(--hairline);
+}
+
+.sheet-section > h3 {
+  margin: 0 0 10px;
+  font-size: var(--size-body);
+  font-weight: 600;
+}
+
+.versions-head {
+  margin: 18px 0 0;
+  color: var(--text-2);
+  font-size: var(--size-small);
+  font-weight: 600;
+}
+
+.versions-list {
+  margin-top: 6px;
+}
+
+.version + .version {
+  border-top: 1px solid var(--hairline);
+}
+
+.version-row {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  width: 100%;
+  padding: 8px 14px;
+  text-align: left;
+  font-size: var(--size-small);
+}
+
+.version-row:hover {
+  background: var(--fill);
+}
+
+.version-who {
+  color: var(--text);
+  font-weight: 500;
+}
+
+.version-row time {
+  color: var(--text-2);
+}
+
+.tag.now {
+  background: var(--accent-soft, var(--fill-2));
+  color: var(--accent-text, var(--text-2));
+}
+
+.version-count {
+  display: flex;
+  gap: 6px;
+  margin-left: auto;
+  color: var(--text-3);
+  font-family: var(--mono);
+  font-variant-numeric: tabular-nums;
+}
+
+.version-count .added {
+  color: var(--green);
+}
+
+.version-count .removed {
+  color: var(--red);
+}
+
+.version-count .first {
+  font-family: var(--font);
+}
+
+.version-detail {
+  padding: 0 14px 12px;
+}
+
+.diff {
+  margin: 0;
+  padding: 6px 0;
+  overflow-x: auto;
+  border-radius: var(--radius-m);
+  background: var(--bg);
+  font: var(--size-small) / 1.55 var(--mono);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.diff > span {
+  display: block;
+  padding: 0 10px 0 24px;
+  text-indent: -14px;
+}
+
+.diff-same {
+  color: var(--text-2);
+}
+
+.diff-added {
+  background: color-mix(in srgb, var(--green) 12%, transparent);
+}
+
+.diff-removed {
+  background: color-mix(in srgb, var(--red) 10%, transparent);
+  color: var(--text-2);
+  text-decoration: line-through;
+  text-decoration-color: color-mix(in srgb, var(--red) 45%, transparent);
+}
+
+.diff-added::before,
+.diff-removed::before,
+.diff-same::before {
+  display: inline-block;
+  width: 14px;
+  text-indent: 0;
+  color: var(--text-3);
+  content: " ";
+}
+
+.diff-added::before {
+  content: "+";
+  color: var(--green);
+}
+
+.diff-removed::before {
+  content: "−";
+  color: var(--red);
+}
+
+.diff-skip {
+  color: var(--text-3);
+  font-family: var(--font);
+  font-style: italic;
+}
