@@ -64,7 +64,7 @@ fleet/fleet.yaml       written once by setup; names the Fleet, nothing else
 
 `STUDIO_HOME` overrides the folder (tests use a temp dir). Ports are constants in code, not settings.
 
-**Install** (`scripts/setup.sh [--owner-login <login>]`, idempotent): checks Docker, a12s 0.11.2+ and Node 24.2+;
+**Install** (`scripts/setup.sh [--owner-login <login>]`, idempotent): checks Docker, a12s 0.12.0+ and Node 24.2+;
 when the Fleet `studio` has never been started, writes `fleet/fleet.yaml` (`metadata.name: studio`, no agent
 computers) and runs `a12s up` once to start the Controller; prints the `a12s creds set anthropic` command when the
 Controller has no `anthropic` credential; writes `config.json` (asking for the owner's Tailscale login unless given);
@@ -748,12 +748,23 @@ You are {agent}, a member of the team "{team}" in a12s Studio. One person, the o
 How work flows
 - All work lives in threads. Your studio tools are post, read, update_thread, roster, schedule and access.
 - Nobody sees your plain output. The owner and your teammates see only what you send with post.
-- post has three kinds. ask: you need someone to do or answer something; it wakes them. reply: your answer to an
-  ask addressed to you; give its id. note: status or FYI; it wakes nobody. Never send thanks or an
-  acknowledgement as an ask.
-- An ask is answered later, in a new turn. After you send one, do what you can without the answer, then end
-  your turn: the reply wakes you. Never call read to wait for it.
-- Finish every ask you receive with one reply. When a thread's work is finished, set it to done.
+- post writes one message in a thread. With to, it goes to that teammate or to the owner. A teammate who is
+  working gets it inside the turn they are in, between two steps; one who is idle or asleep is woken by it.
+  Without to, it is only recorded in the thread and reaches nobody: use that for progress.
+- Messages reach you the same way. One that arrives while you work belongs to the turn you are in: read it,
+  adjust what you are doing, carry on. Not every message needs an answer.
+- After a message that needs an answer, do what you can without it, then end your turn. The answer comes to
+  you by itself. Never call read to wait for it.
+- When a thread's work is finished, tell whoever asked for it, once, and set the thread to done.
+
+Messaging teammates
+- A message to a teammate costs them a turn or interrupts their work. Send one only when it changes what they
+  should do, or gives them something they asked for.
+- Never send a message only to acknowledge, thank, agree or say you are starting. Silence means received.
+- Batch. One message with everything, not several small ones. Progress goes in a post without to.
+- Stop when an exchange has stopped producing decisions. After three rounds with the same teammate on the same
+  question, decide yourself and say what you chose, or put the options to the owner once.
+- Every message to the owner asks for their attention. Write to them to hand over a result, or for a real gap.
 
 Judgement
 - Make the best choice you can undo, and say what you chose. Ask the owner only for a real gap: a decision only
@@ -889,8 +900,8 @@ type ThreadView = { id, teamId, title, ownerId, status, messages: MessageView[],
 type MessageView = { id, from, to, body, file, at,
                      cause: MessageId | null, depth,                 // section 5.9
                      delivered: { turn, steered, at, costUsd } | null };
-                     // null: it has no agent to reach, or has not reached it yet. costUsd: that Turn's, null until
-                     // the Turn has finished
+                     // null: it has no agent to reach, or has not reached it yet. turn: null where the row names
+                     // none. costUsd: that Turn's, null until the Turn has finished
 ```
 
 **Writes.** Every owner route answers only after its transaction has committed and, where it calls a12s or the
@@ -917,7 +928,7 @@ later; every feed that becomes ready is followed by a resync.
 | `task.finished` | Removes the work item, whatever its status, and keeps its thread for the Turn that follows. |
 | `turn.finished` | Writes the `turns` row (section 7.4), applies sections 5.5 and 5.6, clears the line and text, removes the work items that are not background work (their calls end with the Turn), runs the dispatcher. A Turn followed whole (every event from `turn.started` on, no resync since) is stored from its events; any other is read from a12s `turns`, which has all its text, Messages and tool calls; a12s stores the Turn before it sends the event. |
 | `service.phase` | For an add-on instance, its status: `Ready` → ready; `Error` or `Unhealthy` → error (with its message); any other → starting. Other Services are ignored. |
-| `gap`, or a new feed | Resync: `status()` for phases and background work (an item a12s no longer lists is removed; one it lists that is not known is added with a12s's id, kind, description, start time and launching call, and no thread; a known one keeps its thread and line; work that is not background is dropped); for each agent, recent Turns not yet in `turns`, stored the same way; for each `sent` message, its a12s state, with the Turn that took it and whether it was steered; `services()` for add-on statuses. Running Turns are no longer whole. |
+| `gap`, or a new feed | Resync: `status()` for phases and background work (an item a12s no longer lists is removed; one it lists that is not known is added with a12s's id, kind, description, start time and launching call, and no thread; a known one keeps its thread and line; work that is not background is dropped); for each agent, recent Turns not yet in `turns`, stored the same way; for each `sent` message, its a12s state, with the Turn that took it (whether it joined that Turn is read from the Turn's record when the Turn is stored); `services()` for add-on statuses. Running Turns are no longer whole. |
 
 The same resync runs at app start, which is how state survives a restart.
 
@@ -1035,8 +1046,9 @@ like an unknown one. `PATCH /agents/:agent` with a setting (`model`, `sleepAfter
 `memory`) puts the agent's spec again with the changed fields and writes the row only after a12s has taken it;
 `null` for `cpu` or `memory` is a12s's default. With `role` it writes a role version and puts no spec (section 6).
 `GET /agents/:agent` answers the role's text now with the five settings. `GET …/turns` answers a12s's last 20 Turns,
-each with its text; `GET …/turns/:turn/events` answers its tool calls, each with its "doing now" line and its input
-and output cut at 4000 characters. `GET …/inbox` answers the agent's messages that are `queued` or `sent`, oldest
+each with its text; `GET …/turns/:turn/events` answers its tool calls (`calls`), each with its "doing now" line and its
+input and output cut at 4000 characters, and the messages steered into it (`steered`), each with its sender, its body
+cut the same way and the time it joined; the inspector draws the two lists as one log in time order. `GET …/inbox` answers the agent's messages that are `queued` or `sent`, oldest
 first, each with the a12s Message it was sent as (`sentAs`, null while queued). Removing one marks it `none`; a
 `sent` one is first withdrawn from a12s. Clearing marks every `queued`
 one `none`, clears the a12s inbox, and marks `none` the `sent` ones a12s reports withdrawn; a Message a Turn has
@@ -1094,11 +1106,12 @@ makes no `img`; a kept link has the `rel` and the new tab.
 All of it is drawn from the open thread's `MessageView`s and `ThreadView.chain`; the web asks for nothing more.
 
 - **Folded talk** (`logic/fold.ts`). A run of messages in a row whose sender and receiver are both agents is one
-  line: the agents' names in the order they first write, the number of messages, and, from a depth of 3, the
+  line: the names of the agents in it, senders and receivers, in the order they first appear, the number of
+  messages, and, from a depth of 3, the
   greatest `depth` in the run (`Lead and Dev · 14 messages · 9 deep`). It opens on click. Messages from or to the
   owner, messages from `system` and records with no receiver are never folded.
 - **The delivery line.** Under every message to an agent is one quiet line made from `delivered`: `joined Dev's
-  turn`, `woke Dev`, or `waiting for Dev` while it is null. It opens the inspector's Now tab on that Turn.
+  turn`, `woke Dev`, or `waiting for Dev` while it is null. It opens Dev's inspector, on its Now tab.
 - **The Chain view** (`logic/chain.ts`, `parts/chain.tsx`). A switch in the thread's header replaces the
   conversation with one line per message, oldest first and unfolded: its depth, sender and receiver, the start of
   its body, how it was delivered, and on the first message of each Turn that Turn's cost. A message's cause is
@@ -1517,8 +1530,8 @@ default-deny tests pass; an agent clones and pushes a repository and its contain
 | P3-A Limits | Awake cap and queue order, the cost rule, budget hold with its card in Needs You, free-disk check, the `schedule` tool and scheduled wakes, the global settings sheet and Team settings → Budget, so that every global and team limit is edited in the UI. |
 | P3-B Inspector | The agent inspector: Now with the tool log, Inbox with Remove and Clear, Role and notes, Files, Terminal, Settings (model, sleep, compaction, size: every agent limit). The `file` field of `post` and attachment download. |
 | P3-D Live view | Background work under an agent: `task.started` and `task.finished` and a sub-agent's tool calls in the port, `real.ts`, `fake.ts` and `live.ts`; background work in `status()`; `work` in `AgentView`; presence working while work runs; the work list under an agent and in the conversation; the pause message for an agent with background work. The first line of a Turn is "Working". Message bodies as markdown (section 7.6). |
-| P3-E Messages | One kind of message: the schema change, `post` and `read` without kinds, the router and the dispatcher without their rules for kinds; `inbox.duringTurn: steer` in the spec and `turn.steered` in the port, `real.ts`, `fake.ts` and `live.ts` (M10); the chain record; "needs you" from `owner_seen_at`, with Mark read; the basics' rules for messaging; folded talk, the delivery line and the Chain view (section 7.7). It needs the a12s release that steers. |
-| P3-F Rules | The `rules` table and `rules.ts`, the `rules` tool, `GET /rules/<layer>`, the hooks and `load-rules` (M11), the rules routes, the spec put again at every start; the owner rules in the global settings, Team settings → Rules and the role in the inspector, each with its history, differences and restore. |
+| P3-E Messages | One kind of message: the schema change, `post` and `read` without kinds, the router and the dispatcher without their rules for kinds; `inbox.duringTurn: steer` in the spec and `turn.steered` in the port, `real.ts`, `fake.ts` and `live.ts` (M10); the chain record; "needs you" from `owner_seen_at`, with Mark read; the basics' rules for messaging; the spec put again at every start; folded talk, the delivery line and the Chain view (section 7.7). It needs the a12s release that steers. |
+| P3-F Rules | The `rules` table and `rules.ts`, the `rules` tool, `GET /rules/<layer>`, the hooks and `load-rules` (M11), the rules routes; the owner rules in the global settings, Team settings → Rules and the role in the inspector, each with its history, differences and restore. |
 | P3-G Steering run (after P3-E and P3-F) | `steer.ts`; the P1 script's check that a lead does not poll. |
 | P3-C Durability (merges last of the first four) | `scripts/backup.ts` (both databases with SQLite's backup, `config.json`, the attachments, each home drive as a tar, to `~/a12s-studio-backups/<date>/`, 14 kept) with a nightly LaunchAgent; `scripts/restore.ts`; the documented command to export the vault key; the P3 exit script. |
 

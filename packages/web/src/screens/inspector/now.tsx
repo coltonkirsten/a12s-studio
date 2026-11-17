@@ -1,7 +1,8 @@
-import type { ToolCall, TurnSummary } from "@a12s-studio/contract/api";
+import type { SteeredMessage, ToolCall, TurnSummary } from "@a12s-studio/contract/api";
 import type { AgentView } from "@a12s-studio/contract/state";
 import { useState } from "react";
 import { api, useRead } from "../../api.ts";
+import { displayName } from "../../logic/names.ts";
 import { shortTime } from "../../logic/time.ts";
 import { doing } from "../../parts/presence.tsx";
 import { Problem } from "../../parts/problem.tsx";
@@ -67,13 +68,30 @@ function ToolLog({ agent, turn, again }: { agent: AgentView; turn: string; again
   const log = useRead(() => api.turnEvents(agent.id, turn), `${turn}:${again}:${agent.presence}`);
   if (log.problem) return <Refusal agent={agent} problem={log.problem} what="Wake it to see the tool calls." />;
   if (!log.data) return null;
-  if (log.data.calls.length === 0) return <p className="inspector-quiet">No tool calls.</p>;
+  const { calls, steered } = log.data;
+  if (calls.length === 0 && steered.length === 0) return <p className="inspector-quiet">No tool calls.</p>;
+  // One log in time order: a steered message sits between the calls it arrived between.
+  const rows = [
+    ...calls.map((call) => ({ at: call.startedAt, row: <Call key={call.id} call={call} /> })),
+    ...steered.map((message) => ({ at: message.at, row: <Steered key={message.id} message={message} /> })),
+  ].sort((a, b) => a.at - b.at);
+  return <ol className="tool-log">{rows.map((r) => r.row)}</ol>;
+}
+
+function Steered({ message }: { message: SteeredMessage }) {
+  const [open, setOpen] = useState(false);
   return (
-    <ol className="tool-log">
-      {log.data.calls.map((call) => (
-        <Call key={call.id} call={call} />
-      ))}
-    </ol>
+    <li className="call steered">
+      <button type="button" className="call-row" aria-expanded={open} onClick={() => setOpen(!open)}>
+        <span className="call-line">Message from {displayName(message.from)}</span>
+        <span className="call-state">joined the turn</span>
+      </button>
+      {open && (
+        <div className="call-io">
+          <pre>{message.body}</pre>
+        </div>
+      )}
+    </li>
   );
 }
 

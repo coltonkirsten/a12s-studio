@@ -7,7 +7,7 @@ import type { WriteResult } from "@a12s-studio/contract/api";
 import type { AuditPage } from "@a12s-studio/contract/broker-admin";
 import { BROKER_URL } from "@a12s-studio/contract/names";
 import type { StudioState } from "@a12s-studio/contract/state";
-import { ANSWER_MS, createTeam, ownerAsk, replyTo, type Studio, step } from "./studio.ts";
+import { ANSWER_MS, answerFrom, createTeam, ownerMessage, type Studio, step } from "./studio.ts";
 
 const EXPIRY_MS = 20_000;
 
@@ -38,18 +38,18 @@ const accessCard = (state: StudioState, team: string, path: string) =>
 
 const accessAsk = (path: string) =>
   `Use the access tool to request GET on host api.github.com for exactly the path ${path}, with the reason ` +
-  `"read the repository for the owner". Then reply to this ask with the word: requested`;
+  `"read the repository for the owner". Then answer me with the word: requested`;
 
-// A further ask from the owner to dev in an open thread; answers the ask's id.
+// A further message from the owner to dev in an open thread; answers the message's id.
 async function askDev(studio: Studio, thread: string, body: string): Promise<string> {
   const { id } = await studio.api<WriteResult>("POST", `/threads/${thread}/messages`, { to: "dev", body });
-  if (!id) throw new Error(`the ask in ${thread} answered no id`);
+  if (!id) throw new Error(`the message in ${thread} answered no id`);
   return id;
 }
 
-// Waits for the access card of the agent's request for `path` and for its reply to the ask that asked for it;
+// Waits for the access card of the agent's request for `path` and for its answer to the message that asked for it;
 // answers the request's id.
-async function requested(studio: Studio, team: string, agent: string, ask: string, path: string) {
+async function requested(studio: Studio, team: string, agent: string, asked: string, path: string) {
   const state = await studio.until(
     `an access card for ${path}`,
     (s) => accessCard(s, team, path) !== undefined,
@@ -57,7 +57,7 @@ async function requested(studio: Studio, team: string, agent: string, ask: strin
   );
   const card = accessCard(state, team, path);
   if (card?.kind !== "access_request") throw new Error(`no access card for ${path}`);
-  await studio.until(`a reply from ${agent}`, (s) => replyTo(s, ask, agent) !== undefined, ANSWER_MS);
+  await studio.until(`an answer from ${agent}`, (s) => answerFrom(s, agent, asked) !== undefined, ANSWER_MS);
   return card.request.id;
 }
 
@@ -93,9 +93,9 @@ export async function p2(studio: Studio): Promise<void> {
   });
 
   const { thread } = await step(`${dev} requests access; approved, the same call is a 200 at once`, async () => {
-    const asked = await ownerAsk(studio, web, "Repository access", accessAsk(repoPath), "dev");
+    const asked = await ownerMessage(studio, web, "Repository access", accessAsk(repoPath), "dev");
     await studio.open(asked.thread);
-    const request = await requested(studio, web, dev, asked.ask, repoPath);
+    const request = await requested(studio, web, dev, asked.message, repoPath);
     await studio.api("POST", `/teams/${web}/requests/${request}/approve`, {});
     assert.equal(await brokerGet(studio, dev, repoPath), "200");
     return asked;
@@ -111,13 +111,13 @@ export async function p2(studio: Studio): Promise<void> {
     );
     await studio.api("POST", `/teams/${web}/requests/${request}/deny`, {});
     assert.equal(await brokerGet(studio, dev, branchesPath), "403 no_access");
-    const ask = await askDev(
+    const asked = await askDev(
       studio,
       thread,
-      `Did the owner approve or deny your request for ${branchesPath}? Reply with the one word.`,
+      `Did the owner approve or deny your request for ${branchesPath}? Answer me with the one word.`,
     );
-    const state = await studio.until(`${dev}'s answer`, (s) => replyTo(s, ask, dev) !== undefined, ANSWER_MS);
-    const answer = replyTo(state, ask, dev)?.body ?? "";
+    const state = await studio.until(`${dev}'s answer`, (s) => answerFrom(s, dev, asked) !== undefined, ANSWER_MS);
+    const answer = answerFrom(state, dev, asked)?.body ?? "";
     assert.match(answer, /denied|deny/i, `${dev} answered "${answer}"`);
   });
 
@@ -158,16 +158,16 @@ export async function p2(studio: Studio): Promise<void> {
       methods: ["GET", "POST"],
       paths: [`/${repo}.git/**`, `/${repo}/**`],
     });
-    const asked = await ownerAsk(
+    const asked = await ownerMessage(
       studio,
       web,
       "Push a branch",
       `Clone https://github.com/${repo}.git, add a file named ${branch}.txt holding one line of text, commit it, ` +
-        `and push the commit as a new branch named ${branch}. Then reply to this ask with the word: pushed`,
+        `and push the commit as a new branch named ${branch}. Then answer me with the word: pushed`,
       "dev",
     );
     await studio.open(asked.thread);
-    await studio.until(`a reply from ${dev}`, (s) => replyTo(s, asked.ask, dev) !== undefined, ANSWER_MS);
+    await studio.until(`an answer from ${dev}`, (s) => answerFrom(s, dev, asked.message) !== undefined, ANSWER_MS);
     const listed = await github("GET", `${repoPath}/branches/${branch}`);
     assert.equal(listed.status, 200, `GitHub does not list ${branch}`);
   });

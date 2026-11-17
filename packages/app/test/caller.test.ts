@@ -99,7 +99,6 @@ test("a real MCP client sees the six tools, and no tool takes a team or a sender
 test("a team or sender slipped into the arguments is refused and writes nothing", async () => {
   const before = s.db.prepare("SELECT count(*) AS n FROM messages").get();
   const posted = await s.tool("web-dev", "post", {
-    kind: "ask",
     to: "lead",
     title: "Spoof",
     body: "hello",

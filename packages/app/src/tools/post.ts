@@ -4,14 +4,13 @@ import { agentPost, BODY_MAX, TITLE_MAX } from "../router.ts";
 import type { Tool } from "./mcp.ts";
 
 const input = {
-  kind: z
-    .enum(["ask", "reply", "note"])
-    .describe("ask: wakes the receiver. reply: answers an ask. note: wakes nobody."),
   body: z.string().min(1).max(BODY_MAX),
-  to: z.string().optional().describe('ask and note: a teammate\'s name from roster, or "owner".'),
-  thread: z.string().optional().describe("ask and note: the thread id."),
-  title: z.string().min(1).max(TITLE_MAX).optional().describe("ask: starts a new thread you own, instead of thread."),
-  ask: z.string().optional().describe("reply: the id of the ask you answer."),
+  to: z
+    .string()
+    .optional()
+    .describe('A teammate\'s name from roster, or "owner". Left out, it is only recorded in the thread.'),
+  thread: z.string().optional().describe("The thread id. Give thread or title."),
+  title: z.string().min(1).max(TITLE_MAX).optional().describe("Starts a new thread you own, instead of thread."),
   file: z
     .string()
     .optional()
@@ -21,13 +20,15 @@ const input = {
 export const post: Tool<typeof input> = {
   name: "post",
   description:
-    "Send an ask, a reply or a note in a thread. The only way the owner and your teammates see what you write.",
+    "Write one message in a thread, to a teammate, to the owner, or to nobody. The only way the owner and your " +
+    "teammates see what you write.",
   input,
   async run(ctx, { file, ...args }) {
     const attachment = file === undefined ? undefined : await readAttachment(ctx.a12s, ctx.caller.agentId, file);
     const posted = agentPost(
       ctx.team,
       ctx.caller,
+      ctx.turn,
       args,
       attachment && { name: attachment.name, store: (message) => storeAttachment(ctx.files, message, attachment) },
     );

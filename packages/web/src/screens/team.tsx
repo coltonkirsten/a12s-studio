@@ -1,4 +1,4 @@
-import type { AgentView, MessageView, StudioState, TeamView } from "@a12s-studio/contract/state";
+import type { AgentView, StudioState, TeamView } from "@a12s-studio/contract/state";
 import { type CSSProperties, useState } from "react";
 import { api, useAction } from "../api.ts";
 import { displayName } from "../logic/names.ts";
@@ -16,10 +16,6 @@ export function TeamScreen({ state, team, route, onHire }: Props) {
   const [menu, setMenu] = useState(false);
   const now = Date.now();
   const open = state.open && state.open.id === route.thread ? state.open : null;
-  const questions: MessageView[] = [];
-  for (const item of state.needsYou) {
-    if (item.kind === "question" && item.threadId === route.thread) questions.push(item.message);
-  }
   const composing = !route.thread || route.thread === "new";
 
   return (
@@ -96,7 +92,7 @@ export function TeamScreen({ state, team, route, onHire }: Props) {
       </section>
 
       <section className="conversation-column">
-        {open && <Conversation team={team} thread={open} questions={questions} />}
+        {open && <Conversation team={team} thread={open} route={route} />}
         {composing && (
           <div className="conversation">
             <header className="conversation-head">
@@ -110,7 +106,6 @@ export function TeamScreen({ state, team, route, onHire }: Props) {
             <Composer
               team={team}
               placeholder={team.leadId ? `Message ${displayName(team.leadId)}, or @ someone` : "Message the team"}
-              question={null}
               send={(body, to) => api.newThread(team.id, { body, to })}
               sent={(result) => {
                 if (result.id) location.hash = href(team.id, result.id);

@@ -131,6 +131,7 @@ export function toEvent(ev: SdkEvent): A12sEvent | null {
       return { type: ev.type, agent, at, phase: phaseOf(ev.data.phase), ...(error ? { error } : {}) };
     }
     case "turn.started":
+    case "turn.steered":
       return { type: ev.type, agent, at, turn: ev.turn, messageIds: (ev.data.inbox?.messages ?? []).map((m) => m.id) };
     case "text.delta":
       return { type: ev.type, agent, at, turn: ev.turn, text: ev.data.text };
@@ -184,7 +185,7 @@ function toTurn(t: TurnsResponse["turns"][number]): TurnRecord {
     status: t.status,
     ...(t.error ? { error: t.error } : {}),
     text: t.text,
-    messageIds: t.messages.map((m) => m.id),
+    messages: t.messages.map((m) => ({ id: m.id, steered: m.steered === true })),
     tools: t.tools.map((call) => ({ name: call.name, isError: call.isError === true })),
     ...(t.startedAt ? { startedAt: ms(t.startedAt) } : {}),
     finishedAt: ms(t.finishedAt),
@@ -342,6 +343,7 @@ export function realA12s(owner: Controller): A12s {
           metadata: m.metadata ?? {},
           ...(m.replaceKey ? { replaceKey: m.replaceKey } : {}),
           createdAt: ms(m.createdAt),
+          ...(m.turn ? { turn: m.turn } : {}),
         }));
       },
       async withdraw(name, messageId) {

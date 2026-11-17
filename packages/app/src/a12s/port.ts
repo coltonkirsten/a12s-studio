@@ -54,6 +54,8 @@ export type AgentSpec = {
   instructions: string;
   files: Record<string, string>;
   power: { sleepAfterIdle: string; compactBeforeSleep: { minTokens: number } };
+  // steer: a Message for an agent computer whose Turn runs joins that Turn, reported by turn.steered.
+  inbox?: { duringTurn: "steer" };
   grants: { send: string[] };
   uses: (string | { name: string; mcp: boolean })[];
   egress: { allow: string[] };
@@ -73,6 +75,8 @@ export type ModelCosts = Record<string, number>;
 export type A12sEvent =
   | { type: "agent_computer.phase"; agent: string; at: number; phase: Phase; error?: string }
   | { type: "turn.started"; agent: string; at: number; turn: string; messageIds: string[] }
+  // Messages the harness took into the running Turn.
+  | { type: "turn.steered"; agent: string; at: number; turn: string; messageIds: string[] }
   | { type: "text.delta"; agent: string; at: number; turn: string; text: string }
   // A background sub-agent's calls carry its launching call as `parent`, and no Turn between the agent's Turns.
   | {
@@ -147,6 +151,8 @@ export type InboxMessage = {
   metadata: Record<string, string>;
   replaceKey?: string;
   createdAt: number;
+  // The Turn that received it, once delivered.
+  turn?: string;
 };
 
 export type TurnRecord = {
@@ -157,7 +163,8 @@ export type TurnRecord = {
   status: TurnStatus;
   error?: string;
   text: string;
-  messageIds: string[];
+  // Every Message it received in order: those it started with, then those steered into it.
+  messages: { id: string; steered: boolean }[];
   // Every tool call of the Turn, a sub-agent's included.
   tools: { name: string; isError: boolean }[];
   startedAt?: number;

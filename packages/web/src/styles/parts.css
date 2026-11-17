@@ -293,17 +293,6 @@
   align-self: flex-start;
 }
 
-.msg.asks-you {
-  padding: 12px 14px;
-  border-radius: var(--radius-l);
-  background: var(--accent-soft);
-}
-
-.asks {
-  color: var(--accent-text);
-  font-weight: 500;
-}
-
 .msg.system {
   align-self: center;
   color: var(--text-2);
@@ -1213,4 +1202,83 @@
 
 .msg.live .work-meta::before {
   content: "· ";
+}
+
+/* How a message reached its agent, and the Chain view */
+
+.delivery {
+  display: block;
+  margin-top: 2px;
+  color: var(--text-3);
+  font-size: var(--size-caption);
+}
+
+.delivery:hover {
+  color: var(--text-2);
+  text-decoration: underline;
+}
+
+.button[aria-pressed="true"] {
+  background: var(--fill-2);
+  color: var(--text);
+}
+
+.chain {
+  flex: 1;
+  overflow-y: auto;
+  padding: 16px var(--gutter);
+}
+
+.chain-rows {
+  padding: 0;
+  list-style: none;
+}
+
+.chain-totals {
+  margin-bottom: 10px;
+  color: var(--text-2);
+  font-size: var(--size-small);
+}
+
+.chain-row button {
+  display: grid;
+  grid-template-columns: 2.5em 11em 1fr 10em 4.5em;
+  gap: 10px;
+  width: 100%;
+  padding: 4px 6px;
+  border-radius: var(--radius-s);
+  font-size: var(--size-small);
+  text-align: left;
+}
+
+.chain-row button:hover {
+  background: var(--fill);
+}
+
+.chain-row.cause button {
+  background: var(--accent-soft);
+}
+
+.chain-depth,
+.chain-cost {
+  color: var(--text-2);
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+
+.chain-who,
+.chain-start {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.chain-delivery {
+  color: var(--text-3);
+}
+
+.card-more {
+  margin-bottom: 6px;
+  color: var(--text-2);
+  font-size: var(--size-small);
 }

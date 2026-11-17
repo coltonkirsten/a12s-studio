@@ -20,8 +20,6 @@ type Candidate = {
   oldest: number;
 };
 
-const MAX_NOTES = 20;
-const NOTE_MAX = 500;
 // a12s starts an agent before it answers the wake, so its status lags by moments at most. An agent still reported
 // asleep this long after its wake went back to sleep unseen (a pause or the owner's Sleep during the run that woke
 // it) and has to be wakeable again.
@@ -55,29 +53,12 @@ export function freeDiskGb(): number {
   return (disk.bavail * disk.bsize) / 1e9;
 }
 
-function render(message: Message, thread: Thread | undefined, notes: Message[]): string {
-  const from = nameOf(message.fromId);
+// Section 5.3. Nothing in it says whether to answer: that is the receiver's judgement.
+function render(message: Message, thread: Thread | undefined): string {
   const lines = thread ? [`thread ${thread.id} "${thread.title}"`] : [];
-  lines.push(
-    message.kind === "reply"
-      ? `reply ${message.id} from ${from} to your ask ${message.askId}`
-      : `ask ${message.id} from ${from}`,
-    "---",
-    message.body,
-    "---",
-  );
+  lines.push(`message ${message.id} from ${nameOf(message.fromId)}`, "---", message.body, "---");
   const file = attachmentUrl(message);
   if (file) lines.push(`file: ${file}`);
-  if (message.kind === "ask" && message.fromId !== "system") {
-    lines.push(`To answer: post(kind="reply", ask="${message.id}")`);
-  }
-  if (notes.length > 0) {
-    lines.push("", "notes since your last message:");
-    for (const note of notes) {
-      const where = note.threadId ? `[${note.threadId}] ` : "";
-      lines.push(`- ${where}${nameOf(note.fromId)}: ${note.body.slice(0, NOTE_MAX)}`);
-    }
-  }
   return lines.join("\n");
 }
 
@@ -134,30 +115,23 @@ export function createDispatcher(repo: Repo, a12s: A12s): Dispatcher {
   // True when it woke the agent.
   async function deliver({ scoped, client, agentId, phase, pending }: Candidate): Promise<boolean> {
     let waiting = pending;
-    const queue = scoped.queuedFor(agentId);
-    let notes = queue.filter((m) => m.kind === "note").slice(0, MAX_NOTES);
-    for (const message of queue.filter((m) => m.kind !== "note")) {
+    for (const message of scoped.queuedFor(agentId)) {
       const thread = message.threadId ? scoped.thread(message.threadId) : undefined;
-      const metadata: Record<string, string> = {
-        message: message.id,
-        kind: message.kind,
-        from: nameOf(message.fromId),
-      };
+      const metadata: Record<string, string> = { message: message.id, from: nameOf(message.fromId) };
       if (message.threadId) metadata.thread = message.threadId;
       try {
         const sent = await client.send(agentId, {
-          body: render(message, thread, notes),
+          body: render(message, thread),
           metadata,
           // A send repeated after a crash replaces the pending copy instead of adding a second one.
           replaceKey: message.id,
         });
-        scoped.tx(() => scoped.markSent([message.id, ...notes.map((n) => n.id)], sent.id));
+        scoped.markSent(message.id, sent.id);
         waiting++;
       } catch (error) {
         console.error(`dispatcher: send ${message.id} to ${agentId} failed; it stays queued:`, error);
         break;
       }
-      notes = [];
     }
     // Send, then wake: the agent wakes with its work already in its inbox.
     if (phase !== "Asleep" || waiting === 0) return false;

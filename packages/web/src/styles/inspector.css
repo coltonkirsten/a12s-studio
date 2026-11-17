@@ -253,15 +253,11 @@
 
 /* Inbox */
 
-.inbox-group {
+.inbox-item {
   margin-bottom: 10px;
   padding: 12px 14px;
   border-radius: var(--radius-l);
   background: var(--fill);
-}
-
-.inbox-message + .inbox-message {
-  margin-top: 12px;
 }
 
 .inbox-message header {
@@ -292,7 +288,7 @@
   -webkit-line-clamp: 6;
 }
 
-.inbox-group footer {
+.inbox-item footer {
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -363,4 +359,10 @@
   display: grid;
   grid-template-columns: 1fr 1fr;
   gap: 12px;
+}
+
+/* A message that joined the Turn, in its tool log */
+
+.call.steered .call-line {
+  color: var(--accent-text);
 }

@@ -197,6 +197,11 @@ export function pending(a12s: FakeA12s, agent: string) {
   return (a12s.agents.get(agent)?.inbox ?? []).filter((m) => m.state === "pending");
 }
 
+// A Studio message's own text, as the agent receives it between two rules (build-spec 5.3).
+export function bodyOf(received: string): string | undefined {
+  return received.split("\n---")[1]?.slice(1);
+}
+
 export async function until(check: () => boolean, ms = 2000): Promise<void> {
   const end = Date.now() + ms;
   while (!check()) {

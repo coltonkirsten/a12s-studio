@@ -12,8 +12,8 @@ import {
 } from "./a12s/port.ts";
 import { turnCost } from "./cost.ts";
 import type { Dispatcher } from "./dispatcher.ts";
-import type { Repo, TeamRepo } from "./repo.ts";
-import { onTurnFinished, systemAsk } from "./router.ts";
+import type { Message, Repo, TeamRepo } from "./repo.ts";
+import { onTurnFinished, systemMessage } from "./router.ts";
 
 // A sub-agent or background work of an agent. `call` is the tool call that started it, which a sub-agent's own calls
 // name as their parent; `background` once a12s has reported it as work that outlives the Turn.
@@ -30,7 +30,7 @@ export type AgentLive = {
     threadId: ThreadId | null;
     startedAt: number;
     text: string;
-    messageIds: string[];
+    messages: TurnRecord["messages"];
     whole: boolean;
   } | null;
   tools: Set<string>;
@@ -99,6 +99,16 @@ function syncWork(rec: AgentLive, background: BackgroundItem[]): void {
   idleLine(rec);
 }
 
+// Section 5.9: one line for each message that reaches its agent.
+function logDelivered(messages: Message[]): void {
+  for (const m of messages) {
+    console.log(
+      `delivered ${m.id} from ${m.fromId} to ${m.toId}: cause ${m.causeId ?? "none"}, depth ${m.depth}, ` +
+        `turn ${m.turnId}, ${m.steered ? "steered" : "started it"}`,
+    );
+  }
+}
+
 // Section 5.6: a Studio tool call fails for an agent only when the app refuses it or cannot be reached.
 function lostCalls(turn: TurnRecord): boolean {
   return turn.tools.some((call) => call.isError && call.name.startsWith(TOOL_PREFIX));
@@ -139,7 +149,7 @@ export function doingNow(tool: string, input: unknown): string {
   }
   if (tool.startsWith(TOOL_PREFIX)) {
     const name = tool.slice(TOOL_PREFIX.length);
-    if (name === "post") return str("kind") === "reply" ? "Writing a reply" : `Writing to ${str("to") || "the thread"}`;
+    if (name === "post") return str("to") ? `Writing to ${str("to")}` : "Writing in the thread";
     if (STUDIO_LINES[name]) return STUDIO_LINES[name];
   }
   return `Using ${tool}`;
@@ -197,10 +207,13 @@ export function createLive(deps: {
   function recordTurn(scoped: TeamRepo, t: Omit<TurnRecord, "tools">, postAgain: boolean): void {
     if (scoped.turnStored(t.id)) return;
     const startedAt = t.startedAt ?? t.finishedAt;
-    onTurnFinished(scoped, { agentId: t.agent, status: t.status, text: t.text, startedAt, messageIds: t.messageIds });
-    const threadId = scoped.messagesByA12sIds(t.messageIds)[0]?.threadId ?? null;
+    const ids = (steered: boolean) => t.messages.filter((m) => m.steered === steered).map((m) => m.id);
+    const messageIds = t.messages.map((m) => m.id);
+    onTurnFinished(scoped, { agentId: t.agent, status: t.status, text: t.text, startedAt, messageIds });
+    const threadId = scoped.messagesByA12sIds(ids(false))[0]?.threadId ?? null;
     scoped.tx(() => {
-      scoped.markDelivered(t.messageIds, startedAt);
+      for (const steered of [false, true]) logDelivered(scoped.markDelivered(ids(steered), t.id, steered, startedAt));
+      scoped.markSteered(ids(true), t.id);
       scoped.insertTurn({
         id: t.id,
         agentId: t.agent,
@@ -214,7 +227,7 @@ export function createLive(deps: {
         modelCostsUsd: t.modelCostsUsd,
         costUsd: turnCost(t, scoped.previousCosts(t.agent, t.finishedAt)),
       });
-      if (postAgain) systemAsk(scoped, t.agent, POST_AGAIN);
+      if (postAgain) systemMessage(scoped, t.agent, POST_AGAIN);
     });
   }
 
@@ -231,21 +244,27 @@ export function createLive(deps: {
     const rec = record(ev.agent);
     switch (ev.type) {
       case "turn.started": {
-        scoped.markDelivered(ev.messageIds, ev.at);
+        logDelivered(scoped.markDelivered(ev.messageIds, ev.turn, false, ev.at));
         // The harness starts a Turn with no Messages when background work ends, to read its result.
         const threadId =
           ev.messageIds.length === 0 ? rec.lastThread : (scoped.messagesByA12sIds(ev.messageIds)[0]?.threadId ?? null);
         rec.lastThread = null;
-        rec.turn = { id: ev.turn, threadId, startedAt: ev.at, text: "", messageIds: ev.messageIds, whole: true };
+        const messages = ev.messageIds.map((id) => ({ id, steered: false }));
+        rec.turn = { id: ev.turn, threadId, startedAt: ev.at, text: "", messages, whole: true };
         rec.line = "Working";
         rec.tools.clear();
         changed();
         return;
       }
+      case "turn.steered": {
+        logDelivered(scoped.markDelivered(ev.messageIds, ev.turn, true, ev.at));
+        if (rec.turn?.id === ev.turn) rec.turn.messages.push(...ev.messageIds.map((id) => ({ id, steered: true })));
+        return;
+      }
       case "text.delta": {
         // A Turn already running when the app started: its start was missed, so it has no thread.
         if (rec.turn?.id !== ev.turn)
-          rec.turn = { id: ev.turn, threadId: null, startedAt: ev.at, text: "", messageIds: [], whole: false };
+          rec.turn = { id: ev.turn, threadId: null, startedAt: ev.at, text: "", messages: [], whole: false };
         rec.turn.text += ev.text;
         deps.text({ agent: ev.agent, turn: ev.turn, text: ev.text });
         if (rec.tools.size === 0 && rec.line !== "Writing") {
@@ -324,7 +343,7 @@ export function createLive(deps: {
             status: ev.status,
             ...(ev.error ? { error: ev.error } : {}),
             text: seen.text,
-            messageIds: seen.messageIds,
+            messages: seen.messages,
             startedAt: seen.startedAt,
             finishedAt: ev.at,
             modelCostsUsd: ev.modelCostsUsd,
@@ -377,12 +396,18 @@ export function createLive(deps: {
             recordTurn(scoped, turn, lostCalls(turn));
           }
         }
+        // Delivered here means taken by a Turn still running, or the finished Turns above would have marked it. How
+        // it arrived is set from that Turn's record when it finishes; until then it counts as having started it.
         for (const agent of scoped.agentsWithSent()) {
           const inbox = await client.inbox(agent);
-          const ids = (states: string[]) => inbox.filter((m) => states.includes(m.state)).map((m) => m.id);
+          const now = Date.now();
           scoped.tx(() => {
-            scoped.markDelivered(ids(["delivered"]), Date.now());
-            scoped.markUndelivered(ids(["withdrawn", "discarded", "expired"]));
+            for (const m of inbox) {
+              if (m.state === "delivered" && m.turn) logDelivered(scoped.markDelivered([m.id], m.turn, false, now));
+            }
+            scoped.markUndelivered(
+              inbox.filter((m) => ["withdrawn", "discarded", "expired"].includes(m.state)).map((m) => m.id),
+            );
           });
         }
       } catch (error) {

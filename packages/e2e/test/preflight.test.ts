@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { missing, type Probes } from "../src/preflight.ts";
 
-const ready: Probes = { docker: true, a12s: "0.11.2", busyPorts: [] };
+const ready: Probes = { docker: true, a12s: "0.12.0", busyPorts: [] };
 const env = { CLAUDE_CODE_OAUTH_TOKEN: "set" };
 const github = { ...env, E2E_GITHUB_REPO: "example/scratch", E2E_GITHUB_TOKEN: "set" };
 const p1 = ["p1"];
@@ -11,17 +11,17 @@ const both = ["p1", "p2"];
 test("each missing thing is named, all of them at once", () => {
   const cases: [string, Record<string, string | undefined>, Probes, string[], string[]][] = [
     ["all there", env, ready, p1, []],
-    ["a later patch release", env, { ...ready, a12s: "0.11.3" }, p1, []],
+    ["a later patch release", env, { ...ready, a12s: "0.12.1" }, p1, []],
     ["a later major release", env, { ...ready, a12s: "1.0.0" }, p1, []],
     ["Docker stopped", env, { ...ready, docker: false }, p1, ["Docker is not running."]],
     ["no a12s", env, { ...ready, a12s: null }, p1, ["a12s is not installed."]],
-    ["an old a12s", env, { ...ready, a12s: "0.10.9" }, p1, ["a12s 0.10.9 is too old; 0.11.2 or later is needed."]],
+    ["an old a12s", env, { ...ready, a12s: "0.10.9" }, p1, ["a12s 0.10.9 is too old; 0.12.0 or later is needed."]],
     [
-      "an earlier patch release",
+      "the release before",
       env,
-      { ...ready, a12s: "0.11.1" },
+      { ...ready, a12s: "0.11.2" },
       p1,
-      ["a12s 0.11.1 is too old; 0.11.2 or later is needed."],
+      ["a12s 0.11.2 is too old; 0.12.0 or later is needed."],
     ],
     [
       "a Studio running",

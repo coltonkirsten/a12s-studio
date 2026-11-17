@@ -15,7 +15,7 @@ async function setup(t: { after(fn: () => unknown): void }, opts: Parameters<typ
 
 const schedule = (s: S, agent: string, args: Record<string, unknown>) => s.tool(agent, "schedule", args);
 
-function asks(s: S) {
+function fromSystem(s: S) {
   return s.db
     .prepare(
       "SELECT to_id AS toId, thread_id AS threadId, body, delivery FROM messages WHERE from_id = 'system' ORDER BY rowid",
@@ -34,7 +34,7 @@ function makeDue(s: S, id: unknown, at: number): void {
 
 test("set, list and cancel an agent's own wakes", async (t) => {
   const s = await setup(t);
-  const thread = (await s.tool("web-lead", "post", { kind: "ask", to: "dev", title: "Launch", body: "Go." })).thread;
+  const thread = (await s.tool("web-lead", "post", { to: "dev", title: "Launch", body: "Go." })).thread;
   const before = Date.now();
   const once = await schedule(s, "web-lead", { action: "set", in_minutes: 30, note: "Check the build.", thread });
   const at = new Date(before + 2 * HOUR).toISOString();
@@ -71,7 +71,7 @@ test("an agent sees and cancels only its own wakes; another team's wake id is mi
       other,
     );
   }
-  const theirs = await s.tool("notes-lead", "post", { kind: "ask", to: "owner", title: "Notes", body: "Hi." });
+  const theirs = await s.tool("notes-lead", "post", { to: "owner", title: "Notes", body: "Hi." });
   const crossed = await schedule(s, "web-lead", { action: "set", in_minutes: 5, note: "x", thread: theirs.thread });
   assert.equal(crossed.error?.code, "not_found");
   assert.equal(((await schedule(s, "web-lead", { action: "list" })).wakes as unknown[]).length, 1);
@@ -107,10 +107,10 @@ test("the schedule tool's limits: 20 wakes, hourly repeats, a time in the future
   assert.equal(((await schedule(s, "web-lead", { action: "list" })).wakes as unknown[]).length, 1);
 });
 
-test("a due wake becomes exactly one system ask in its thread, across a restart between ticks", async (t) => {
+test("a due wake becomes exactly one system message in its thread, across a restart between ticks", async (t) => {
   const first = await studio();
   await first.twoTeams();
-  const thread = (await first.tool("web-lead", "post", { kind: "ask", to: "owner", title: "Ops", body: "?" })).thread;
+  const thread = (await first.tool("web-lead", "post", { to: "owner", title: "Ops", body: "?" })).thread;
   first.a12s.setPhase("web-lead", "Asleep");
   const wake = await schedule(first, "web-lead", { action: "set", in_minutes: 1, note: "Check the deploy.", thread });
   makeDue(first, wake.wake, Date.now() - 1000);
@@ -122,12 +122,12 @@ test("a due wake becomes exactly one system ask in its thread, across a restart 
   await s.app.scheduler.tick();
   await s.app.scheduler.tick();
 
-  assert.deepEqual(asks(s), [
+  assert.deepEqual(fromSystem(s), [
     { toId: "web-lead", threadId: thread, body: `scheduled wake ${wake.wake}: Check the deploy.`, delivery: "sent" },
   ]);
   assert.equal(s.db.prepare("SELECT count(*) AS n FROM wakes").get()?.n, 0);
-  assert.notEqual(s.a12s.agents.get("web-lead")?.phase, "Asleep", "the ask woke the agent");
-  assert.match(pending(s.a12s, "web-lead")[0]?.body ?? "", /^thread th_\w+ "Ops"\nask m_\w+ from system\n---\n/);
+  assert.notEqual(s.a12s.agents.get("web-lead")?.phase, "Asleep", "the message woke the agent");
+  assert.match(pending(s.a12s, "web-lead")[0]?.body ?? "", /^thread th_\w+ "Ops"\nmessage m_\w+ from system\n---\n/);
 });
 
 test("a repeating wake fires once and moves forward past now, keeping its time of day", async (t) => {
@@ -140,19 +140,19 @@ test("a repeating wake fires once and moves forward past now, keeping its time o
   const next = dueAt(s, wake.wake);
   assert.ok(next > Date.now() && next <= Date.now() + 2 * HOUR, "the next time is the first one after now");
   assert.equal((next - due) % (2 * HOUR), 0, "on the wake's own cycle");
-  assert.equal(asks(s).length, 1);
+  assert.equal(fromSystem(s).length, 1);
   await s.app.scheduler.tick();
-  assert.equal(asks(s).length, 1, "not due again yet");
+  assert.equal(fromSystem(s).length, 1, "not due again yet");
 });
 
-test("a wake that fires while its team is paused is held like any ask", async (t) => {
+test("a wake that fires while its team is paused is held like any message", async (t) => {
   const s = await setup(t);
   await s.app.teams.pause("web");
   const wake = await schedule(s, "web-dev", { action: "set", in_minutes: 1, note: "Wake up." });
   makeDue(s, wake.wake, Date.now() - 1000);
   await s.app.scheduler.tick();
   assert.deepEqual(
-    asks(s).map((a) => a.delivery),
+    fromSystem(s).map((m) => m.delivery),
     ["queued"],
   );
   assert.equal(s.a12s.agents.get("web-dev")?.phase, "Asleep");

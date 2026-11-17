@@ -1,7 +1,9 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
+import type { MessagesPage } from "@a12s-studio/contract/api";
 import type { StudioState } from "@a12s-studio/contract/state";
 import { ownerGate } from "../src/owner/gate.ts";
+import { deriveState } from "../src/state.ts";
 import { OWNER_LOGIN, pending, studio, until } from "./studio.ts";
 
 type S = Awaited<ReturnType<typeof studio>>;
@@ -113,7 +115,7 @@ test("stream: states are coalesced", async (t) => {
   assert.equal(stream.last().teams.find((team) => team.id === "web")?.name, "Web 19");
 });
 
-test("owner thread and post: asks go to the lead or the named slug, a reply answers an agent's ask", async (t) => {
+test("owner thread and post: a message goes to the lead, the thread's owner or the named slug", async (t) => {
   const s = await setup(t);
   await s.twoTeams();
   const thread = await s.owner("POST", "/api/teams/web/threads", { body: "Build the landing page." });
@@ -127,12 +129,8 @@ test("owner thread and post: asks go to the lead or the named slug, a reply answ
   await s.app.dispatcher.run();
   assert.equal(pending(s.a12s, "web-dev").length, 1);
 
-  const asked = await s.tool("web-lead", "post", {
-    kind: "ask",
-    to: "owner",
-    thread: threadId,
-    body: "Blue or green?",
-  });
+  await new Promise((resolve) => setTimeout(resolve, 5));
+  const asked = await s.tool("web-lead", "post", { to: "owner", thread: threadId, body: "Blue or green?" });
   const state = await s.stream(`/api/stream?thread=${threadId}`);
   t.after(() => state.close());
   await state.next(1);
@@ -140,19 +138,38 @@ test("owner thread and post: asks go to the lead or the named slug, a reply answ
   assert.equal(view.open?.id, threadId);
   assert.equal(view.open?.status, "needs_you");
   assert.deepEqual(
-    view.needsYou.map((n) => n.kind),
-    ["question"],
+    view.needsYou.map((n) => n.kind === "message" && [n.threadId, n.message.id, n.more]),
+    [[threadId, asked.message, 0]],
   );
-  assert.equal(view.teams.find((x) => x.id === "web")?.threads[0]?.asksForYou, 1);
+  assert.equal(view.teams.find((x) => x.id === "web")?.threads[0]?.forYou, 1);
 
-  const answer = await s.owner("POST", `/api/threads/${threadId}/messages`, { body: "Blue.", ask: asked.message });
+  const answer = await s.owner("POST", `/api/threads/${threadId}/messages`, { body: "Blue." });
   assert.equal(answer.status, 200);
   const page = await s.owner("GET", `/api/threads/${threadId}/messages`);
-  const messages = (page.body as { messages: { kind: string; from: string; to: string }[] }).messages;
+  const messages = (page.body as MessagesPage).messages;
   assert.deepEqual(
-    messages.map((m) => `${m.kind} ${m.from}>${m.to}`),
-    ["ask owner>web-lead", "ask owner>web-dev", "ask web-lead>owner", "reply owner>web-lead"],
+    messages.map((m) => `${m.from}>${m.to}`),
+    ["owner>web-lead", "owner>web-dev", "web-lead>owner", "owner>web-lead"],
   );
+  assert.equal(
+    (await s.owner("POST", `/api/threads/${threadId}/messages`, { body: "x", ask: asked.message })).status,
+    400,
+    "a message from the owner names no message it answers",
+  );
+});
+
+test("Mark read: the seen route clears needs you for that thread only", async (t) => {
+  const s = await setup(t);
+  await s.twoTeams();
+  const posted = await s.tool("web-lead", "post", { to: "owner", title: "Colour", body: "Blue or green?" });
+  const thread = String(posted.thread);
+  await s.tool("notes-lead", "post", { to: "owner", title: "Sources", body: "Which?" });
+  const needs = () => deriveState(s.app, null).needsYou.filter((n) => n.kind === "message").length;
+  assert.equal(needs(), 2);
+  const seen = await s.owner("POST", `/api/threads/${thread}/seen`, {});
+  assert.equal(seen.status, 200);
+  assert.equal(needs(), 1);
+  assert.equal((await s.owner("POST", "/api/threads/th_000000000000/seen", {})).status, 404);
 });
 
 test("owner routes refuse another team's thread and unknown agents like missing ones", async (t) => {
@@ -190,7 +207,7 @@ test("agents: hire, patch model, power, fire", async (t) => {
   assert.equal((await s.owner("DELETE", "/api/agents/web-lead")).status, 409);
 });
 
-test("settings: pause holds owner asks and shows agents waiting; resume delivers", async (t) => {
+test("settings: pause holds owner messages and shows agents waiting; resume delivers", async (t) => {
   const s = await setup(t, { live: true });
   await s.twoTeams();
   assert.equal((await s.owner("PATCH", "/api/settings", { paused: true })).status, 200);

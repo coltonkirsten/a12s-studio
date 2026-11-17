@@ -6,6 +6,7 @@ import { resolveCaller } from "./caller.ts";
 import type { Dispatcher } from "./dispatcher.ts";
 import { StudioError } from "./errors.ts";
 import { sendAttachment } from "./files.ts";
+import type { Live } from "./live.ts";
 import type { Repo } from "./repo.ts";
 import type { Scheduler } from "./scheduler.ts";
 import { mcpServer } from "./tools/mcp.ts";
@@ -23,6 +24,7 @@ export function createAgentServer(deps: {
   broker: BrokerClient;
   dispatcher: Dispatcher;
   scheduler: Scheduler;
+  live: Pick<Live, "agent">;
   filesDir: string;
 }): Server {
   return createServer(async (req, res) => {
@@ -43,6 +45,7 @@ export function createAgentServer(deps: {
       if (token === undefined) throw new StudioError(403, "no_caller", "Your team no longer exists.");
       const server = mcpServer({
         caller,
+        turn: deps.live.agent(caller.agentId)?.turn?.id ?? null,
         team,
         a12s: deps.a12s.forTeam(token),
         broker: deps.broker.forTeam(caller.teamId),

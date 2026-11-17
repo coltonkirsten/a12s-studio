@@ -6,7 +6,7 @@ import type { A12s } from "../src/a12s/port.ts";
 import { blockedReason } from "../src/dispatcher.ts";
 import { ownerPost, ownerThread } from "../src/router.ts";
 import { deriveState } from "../src/state.ts";
-import { pending, studio, until } from "./studio.ts";
+import { bodyOf, pending, studio, until } from "./studio.ts";
 
 type S = Awaited<ReturnType<typeof studio>>;
 
@@ -33,7 +33,7 @@ const agentView = (s: S, agent: string) =>
   deriveState(s.app, null)
     .teams.flatMap((team) => team.agents)
     .find((a) => a.id === agent);
-const bodies = (s: S, agent: string) => pending(s.a12s, agent).map((m) => m.body.split("\n---\n")[1]);
+const bodies = (s: S, agent: string) => pending(s.a12s, agent).map((m) => bodyOf(m.body));
 // Apart in time, so the order is decided by who wrote first, not by a tie.
 const later = () => new Promise((resolve) => setTimeout(resolve, 5));
 
@@ -129,7 +129,7 @@ for (const seed of [1, 2, 3, 4]) {
       if (step === "owner") ownerThread(team, { body: `o${i}`, to: agent.split("-")[1] });
       if (step === "agent") {
         const [from, to] = pick(ASKS);
-        await s.tool(from, "post", { kind: "ask", to, title: `a${i}`, body: `b${i}` });
+        await s.tool(from, "post", { to, title: `a${i}`, body: `b${i}` });
       }
       if (step === "settle") {
         for (const name of waking) s.a12s.setPhase(name, "Ready");
@@ -199,13 +199,13 @@ test("an agent paused back to sleep before a run saw it awake is woken again", a
   assert.equal(phase(s, "web-lead"), "Ready", "its pending work wakes it");
 });
 
-test("under the cap the owner's ask wakes its agent first, then the oldest waits its turn", async (t) => {
+test("under the cap the owner's message wakes its agent first, then the oldest waits its turn", async (t) => {
   const s = await setup(t, { live: true });
   await patch(s, "/settings", { awakeCap: 1 });
   await s.app.teams.pause(null);
-  await s.tool("web-lead", "post", { kind: "ask", to: "dev", title: "Oldest", body: "From the lead." });
+  await s.tool("web-lead", "post", { to: "dev", title: "Oldest", body: "From the lead." });
   await later();
-  await s.tool("notes-lead", "post", { kind: "ask", to: "researcher", title: "Older", body: "From a lead." });
+  await s.tool("notes-lead", "post", { to: "researcher", title: "Older", body: "From a lead." });
   await later();
   ownerThread(s.app.repo.forTeam("notes"), { body: "From the owner." });
   await s.app.teams.resume(null);
@@ -283,7 +283,7 @@ test("a team at its budget: sends stop, running Turns finish, the card shows, ra
   await until(() => spent() > 0.59);
   ownerPost(web, thread, { body: "Second." });
   await s.app.dispatcher.run();
-  assert.deepEqual(bodies(s, "web-lead"), ["Second."], "under the budget, asks go out");
+  assert.deepEqual(bodies(s, "web-lead"), ["Second."], "under the budget, messages go out");
 
   s.a12s.startTurn("web-lead");
   s.a12s.finishTurn("web-lead", { modelCostsUsd: { sonnet: 1.2 } });
@@ -292,8 +292,16 @@ test("a team at its budget: sends stop, running Turns finish, the card shows, ra
     ownerPost(web, thread, { body });
     await later();
   }
+  const steeredBefore = s.a12s.agents.get("web-dev")?.journal.filter((e) => e.type === "turn.steered").length;
+  ownerPost(web, thread, { body: "For the working dev.", to: "dev" });
   ownerThread(s.app.repo.forTeam("notes"), { body: "Another team." });
   await s.app.dispatcher.run();
+  await later();
+  assert.equal(
+    s.a12s.agents.get("web-dev")?.journal.filter((e) => e.type === "turn.steered").length,
+    steeredBefore,
+    "a message for a working agent is held too",
+  );
 
   assert.equal(pending(s.a12s, "web-lead").length, 0, "nothing more is sent to a team at its budget");
   assert.deepEqual(bodies(s, "notes-lead"), ["Another team."], "another team is not held");

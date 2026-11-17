@@ -88,6 +88,7 @@ export const api = {
   stop: (agent: string) => write("POST", `/agents/${at(agent)}/stop`),
   newThread: (team: string, body: NewThreadBody) => write("POST", `/teams/${at(team)}/threads`, body),
   post: (thread: string, body: PostMessageBody) => write("POST", `/threads/${at(thread)}/messages`, body),
+  seen: (thread: string) => write("POST", `/threads/${at(thread)}/seen`, {}),
   patchThread: (thread: string, body: PatchThreadBody) => write("PATCH", `/threads/${at(thread)}`, body),
   patchSettings: (body: PatchSettingsBody) => write("PATCH", "/settings", body),
   access: (team: string) =>

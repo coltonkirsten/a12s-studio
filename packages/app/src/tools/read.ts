@@ -19,9 +19,9 @@ export const read: Tool<typeof input> = {
   name: "read",
   description: "Read the board (the team's threads, newest first) or one thread's messages.",
   input,
-  run({ team, caller }, { thread: id, status, limit = 30, before }) {
+  run({ team }, { thread: id, status, limit = 30, before }) {
     if (id === undefined) {
-      const rows = team.board({ status: status ?? "open", limit, before, viewer: caller.agentId });
+      const rows = team.board({ status: status ?? "open", limit, before });
       return {
         threads: rows.map((t) => ({
           id: t.id,
@@ -30,7 +30,6 @@ export const read: Tool<typeof input> = {
           status: boardStatus(t),
           updated: iso(t.updatedAt),
           last: t.last && `${nameOf(t.last.fromId)}: ${t.last.body.slice(0, PREVIEW_MAX)}`,
-          asksForYou: t.asksForViewer,
         })),
       };
     }
@@ -54,10 +53,8 @@ export const read: Tool<typeof input> = {
       },
       messages: team.threadMessages(thread.id, limit, before).map((m) => ({
         id: m.id,
-        kind: m.kind,
         from: nameOf(m.fromId),
         to: m.toId && nameOf(m.toId),
-        ask: m.askId,
         body: m.body,
         file: attachmentUrl(m),
         at: iso(m.createdAt),

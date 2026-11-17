@@ -3,7 +3,7 @@ import type { BrokerClient } from "./broker-client.ts";
 import type { Dispatcher } from "./dispatcher.ts";
 import { StudioError } from "./errors.ts";
 import type { Repo, Wake } from "./repo.ts";
-import { systemAsk, systemNote } from "./router.ts";
+import { systemMessage } from "./router.ts";
 
 const TICK_MS = 30_000;
 
@@ -21,7 +21,7 @@ function nextDue(wake: Wake, now: number): number | null {
 }
 
 // The one 30 s tick: due wakes, the broker's attention items, the expiry warnings they call for, then a dispatcher
-// run, which delivers the wakes' asks under every limit.
+// run, which delivers the wakes' messages under every limit.
 export function createScheduler(deps: {
   repo: Repo;
   broker: BrokerClient;
@@ -64,13 +64,13 @@ export function createScheduler(deps: {
     return next;
   }
 
-  // The note goes first: if the app stops before `warned`, the lead is told twice rather than never.
+  // The message goes first: if the app stops before `warned`, the lead is told twice rather than never.
   async function warn(grant: Grant & { teamId: string }): Promise<void> {
     const team = repo.forTeam(grant.teamId);
     const lead = team.team()?.leadAgentId;
     if (lead && grant.expiresAt !== null) {
       const when = new Date(grant.expiresAt).toISOString();
-      systemNote(
+      systemMessage(
         team,
         lead,
         `Access to ${grant.host} ${grant.paths.join(", ")} expires on ${when}. Use access to request an extension if the team still needs it.`,
@@ -79,13 +79,13 @@ export function createScheduler(deps: {
     await broker.warned(grant.id);
   }
 
-  // Each wake becomes its ask in the same transaction that removes or moves it, so a crash can neither lose nor
+  // Each wake becomes its message in the same transaction that removes or moves it, so a crash can neither lose nor
   // repeat one.
   function fireWakes(now: number): void {
     for (const wake of repo.dueWakes(now)) {
       const team = repo.forTeam(wake.teamId);
       team.tx(() => {
-        systemAsk(team, wake.agentId, `scheduled wake ${wake.id}: ${wake.note}`, wake.threadId);
+        systemMessage(team, wake.agentId, `scheduled wake ${wake.id}: ${wake.note}`, wake.threadId);
         team.wakeFired(wake.id, nextDue(wake, now));
       });
     }

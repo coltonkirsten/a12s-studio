@@ -11,7 +11,7 @@ import type {
   Grant,
   PutCredentialBody,
 } from "@a12s-studio/contract/broker-admin";
-import { type MessageId, OWNER_PORT, type RequestId, type ThreadId, teamSlug } from "@a12s-studio/contract/names";
+import { OWNER_PORT, type RequestId, type ThreadId, teamSlug } from "@a12s-studio/contract/names";
 import type {
   AgentView,
   MessageView,
@@ -50,9 +50,41 @@ function agent(
   };
 }
 
-function msg(kind: MessageView["kind"], from: string, to: string | null, body: string, ago: number): MessageView {
+let turnSeq = 0;
+
+function msg(from: string, to: string | null, body: string, ago: number): MessageView {
   seq += 1;
-  return { id: `m_fixture${seq}`, kind, from, to, ask: null, body, file: null, implicit: false, at: now - ago * MIN };
+  return {
+    id: `m_fixture${seq}`,
+    from,
+    to,
+    body,
+    file: null,
+    at: now - ago * MIN,
+    cause: null,
+    depth: 0,
+    delivered: null,
+  };
+}
+
+/** A Turn of the receiver took these messages: the first started it, the rest joined it. */
+function turn(costUsd: number | null, ...messages: MessageView[]): MessageView[] {
+  const id = `t_fixture${++turnSeq}`;
+  messages.forEach((m, i) => {
+    m.delivered = { turn: id, steered: i > 0, at: m.at, costUsd };
+  });
+  return messages;
+}
+
+const pick = (messages: MessageView[], ...at: number[]) => at.flatMap((i) => messages[i] ?? []);
+
+/** Each message set off by the one before it. */
+function chain(...messages: MessageView[]): MessageView[] {
+  messages.forEach((m, i) => {
+    const cause = messages[i - 1];
+    if (cause) Object.assign(m, { cause: cause.id, depth: cause.depth + 1 });
+  });
+  return messages;
 }
 
 function thread(
@@ -62,7 +94,23 @@ function thread(
   status: "open" | "done",
   messages: MessageView[],
 ): ThreadView {
-  return { id, teamId, title, ownerId: `${teamId}-lead`, status, messages, hasMore: false };
+  const costs = new Map(
+    messages.flatMap((m) => (m.delivered?.turn ? [[m.delivered.turn, m.delivered.costUsd ?? 0]] : [])),
+  );
+  return {
+    id,
+    teamId,
+    title,
+    ownerId: `${teamId}-lead`,
+    status,
+    messages,
+    hasMore: false,
+    chain: {
+      depth: Math.max(0, ...messages.map((m) => m.depth)),
+      turns: costs.size,
+      costUsd: [...costs.values()].reduce((sum, cost) => sum + cost, 0),
+    },
+  };
 }
 
 // An answer as agents write them: markdown, with an image and a tag the page must not honour.
@@ -90,67 +138,89 @@ npx alpha build --out site && npx alpha serve site --port 8080 --open --watch --
 
 Sources: [Alpha docs](https://example.com/alpha), ![build time chart](https://example.com/chart.png). <script>alert("hi")</script>`;
 
-const question = msg(
-  "ask",
+const headlines = msg(
   "website-lead",
   "owner",
   "Two headlines are ready. Do you prefer “Build it once, keep it simple” or “A calm site for busy people”?",
   12,
 );
 
+const menu = chain(
+  msg("owner", "website-lead", "The menu overlaps the logo on phones. Can you fix it this afternoon?", 48),
+  msg("website-lead", "website-dev", "Please fix the header menu below 600px wide; keep the desktop layout.", 46),
+  msg("website-dev", "website-lead", "Fixed in header.css; adding a test now.", 6),
+);
+turn(0.42, ...pick(menu, 0));
+turn(0.88, ...pick(menu, 1));
+turn(0.12, ...pick(menu, 2));
+
+// Two agents agreeing a format, twelve messages deep: what the Chain view is for.
+const format = chain(
+  msg("owner", "website-lead", "Agree a wire format with dev, swap three test records, and tell me the format.", 90),
+  ...Array.from({ length: 11 }, (_, i) =>
+    i % 2 === 0
+      ? msg(
+          "website-lead",
+          "website-dev",
+          `Round ${i / 2 + 1}: here is my encoder's output; does it decode?`,
+          88 - i * 6,
+        )
+      : msg(
+          "website-dev",
+          "website-lead",
+          `Round ${(i + 1) / 2}: decoded, with one change to the field order.`,
+          85 - i * 6,
+        ),
+  ),
+  msg("website-lead", "owner", "Agreed: length-prefixed JSON lines.", 10),
+);
+// The lead's Turns take the even messages, dev's the odd ones; the last is to the owner.
+turn(0.3, ...pick(format, 0, 2, 4));
+turn(0.4, ...pick(format, 6, 8, 10));
+turn(0.55, ...pick(format, 1, 3));
+turn(0.21, ...pick(format, 5, 7, 9));
+turn(0.18, ...pick(format, 11));
+
 const threads: ThreadView[] = [
   thread("th_fixturemenu", "website", "Fix the menu on small screens", "open", [
-    msg("ask", "owner", "website-lead", "The menu overlaps the logo on phones. Can you fix it this afternoon?", 48),
-    msg(
-      "ask",
-      "website-lead",
-      "website-dev",
-      "Please fix the header menu below 600px wide; keep the desktop layout.",
-      46,
-    ),
-    msg("note", "website-dev", "website-lead", "Found it: the logo has a fixed width.", 30),
-    msg("reply", "website-dev", "website-lead", "Fixed in header.css; adding a test now.", 6),
-    msg("note", "website-lead", null, "Dev has a fix in review. Only the header changes.", 5),
+    ...menu,
+    msg("website-lead", null, "Dev has a fix in review. Only the header changes.", 5),
   ]),
+  thread("th_fixtureformat", "website", "Agree the export format", "open", format),
   thread("th_fixturecopy", "website", "Landing page copy", "open", [
-    msg("ask", "owner", "website-lead", "Draft the landing page copy. Short, friendly, no jargon.", 180),
-    msg("ask", "website-lead", "website-writer", "Two headline options and a three-line intro, please.", 175),
-    msg("reply", "website-writer", "website-lead", "Done; both options are in copy.md.", 20),
-    question,
+    ...turn(0.35, msg("owner", "website-lead", "Draft the landing page copy. Short, friendly, no jargon.", 180)),
+    ...turn(0.6, msg("website-lead", "website-writer", "Two headline options and a three-line intro, please.", 175)),
+    ...turn(0.2, msg("website-writer", "website-lead", "Done; both options are in copy.md.", 20)),
+    headlines,
   ]),
   thread("th_fixturedeploy", "website", "Set up preview deploys", "done", [
-    msg("ask", "owner", "website-lead", "Every pull request should get a preview link.", 60 * 26),
-    msg(
-      "reply",
-      "website-lead",
-      "owner",
-      "Done. Each pull request now gets a preview link in its first comment.",
-      60 * 25,
-    ),
+    ...turn(1.1, msg("owner", "website-lead", "Every pull request should get a preview link.", 60 * 26)),
+    msg("website-lead", "owner", "Done. Each pull request now gets a preview link in its first comment.", 60 * 25),
   ]),
   thread("th_fixturessg", "notes", "Compare static site generators", "open", [
-    msg(
-      "ask",
-      "owner",
-      "notes-lead",
-      "Compare three open-source static site generators for a small docs site.",
-      60 * 5,
+    ...turn(
+      0.3,
+      msg("owner", "notes-lead", "Compare three open-source static site generators for a small docs site.", 60 * 5),
     ),
-    msg(
-      "ask",
-      "notes-lead",
-      "notes-researcher",
-      "Build times, plugin story and docs quality for three tools.",
-      60 * 5 - 2,
+    ...turn(
+      0.9,
+      msg("notes-lead", "notes-researcher", "Build times, plugin story and docs quality for three tools.", 60 * 5 - 2),
     ),
-    msg("reply", "notes-researcher", "notes-lead", "Notes are in compare.md.", 60 * 2),
-    msg("reply", "notes-lead", "owner", SUMMARY, 60 * 2 - 5),
+    ...turn(0.25, msg("notes-researcher", "notes-lead", "Notes are in compare.md.", 60 * 2)),
+    msg("notes-lead", "owner", SUMMARY, 60 * 2 - 5),
   ]),
   thread("th_fixturereading", "notes", "Reading list for next week", "done", [
-    msg("ask", "owner", "notes-lead", "Five short articles on writing clear documentation.", 60 * 24 * 3),
-    msg("reply", "notes-lead", "owner", "Here are five, each under ten minutes.", 60 * 24 * 3 - 30),
+    ...turn(0.4, msg("owner", "notes-lead", "Five short articles on writing clear documentation.", 60 * 24 * 3)),
+    msg("notes-lead", "owner", "Here are five, each under ten minutes.", 60 * 24 * 3 - 30),
   ]),
 ];
+
+// When the owner last wrote in a thread or marked it read; the copy and format threads wait for them.
+const seen = new Map<ThreadId, number>(threads.map((t) => [t.id, now]));
+seen.set("th_fixturecopy", 0);
+seen.set("th_fixtureformat", 0);
+
+const forOwner = (t: ThreadView) => t.messages.filter((m) => m.to === "owner" && m.at > (seen.get(t.id) ?? 0));
 
 const teams: Omit<TeamView, "threads">[] = [
   {
@@ -204,10 +274,6 @@ const teams: Omit<TeamView, "threads">[] = [
       agent("notes-researcher", "Reads sources and takes notes", "waiting", { waitingFor: "cap", queued: 1 }),
     ],
   },
-];
-
-const questions: NeedsYouItem[] = [
-  { kind: "question", teamId: "website", threadId: "th_fixturecopy", message: question },
 ];
 
 type TeamAccess = AccessView & { audit: AuditEntry[] };
@@ -328,7 +394,13 @@ function teamAccess(team: string): TeamAccess {
 
 /** The broker's three cards, derived the way the app derives them from its attention answer. */
 function needsYou(): NeedsYouItem[] {
-  const items = [...questions];
+  const items: NeedsYouItem[] = threads.flatMap((t) => {
+    const waiting = forOwner(t);
+    const newest = waiting.at(-1);
+    return t.status === "open" && newest
+      ? [{ kind: "message", teamId: t.teamId, threadId: t.id, message: newest, more: waiting.length - 1 } as const]
+      : [];
+  });
   for (const [teamId, a] of Object.entries(access)) {
     const stored = (host: string) => a.credentials.some((c) => c.host === host);
     for (const r of a.requests.filter((x) => x.status === "pending")) {
@@ -384,15 +456,15 @@ function stateFor(open: string | null): StudioState {
         .filter((t) => t.teamId === team.id)
         .map((t) => {
           const last = t.messages.at(-1);
-          const asks = questions.filter((i) => i.kind === "question" && i.threadId === t.id).length;
+          const forYou = forOwner(t).length;
           return {
             id: t.id,
             title: t.title,
             ownerId: t.ownerId,
-            status: asks ? "needs_you" : t.status,
+            status: t.status === "open" && forYou > 0 ? "needs_you" : t.status,
             updatedAt: last?.at ?? now,
             preview: last?.body ?? "",
-            asksForYou: asks,
+            forYou,
           } as const;
         })
         .sort((a, b) => b.updatedAt - a.updatedAt),
@@ -553,14 +625,13 @@ function write(b: Record<string, unknown>, path: string, method: string): string
   if (method === "POST" && kind === "threads" && sub === "messages") {
     const t = threads.find((x) => x.id === id);
     const to = b.to === undefined ? t?.ownerId : `${t?.teamId}-${b.to}`;
-    const m = msg(b.ask ? "reply" : "ask", "owner", String(to), String(b.body), 0);
-    t?.messages.push({ ...m, at: Date.now(), ask: (b.ask as MessageId | undefined) ?? null });
-    const answered = questions.findIndex((i) => i.kind === "question" && i.message.id === b.ask);
-    if (answered >= 0) questions.splice(answered, 1);
+    t?.messages.push({ ...msg("owner", String(to), String(b.body), 0), at: Date.now() });
+    if (t) seen.set(t.id, Date.now());
   }
+  if (method === "POST" && kind === "threads" && sub === "seen" && id) seen.set(id as ThreadId, Date.now());
   if (method === "POST" && kind === "teams" && sub === "threads") {
     const newId: ThreadId = `th_fixture${++seq}`;
-    const first = { ...msg("ask", "owner", `${id}-${b.to ?? "lead"}`, String(b.body), 0), at: Date.now() };
+    const first = { ...msg("owner", `${id}-${b.to ?? "lead"}`, String(b.body), 0), at: Date.now() };
     threads.push(thread(newId, String(id), String(b.body).slice(0, 48), "open", [first]));
     return newId;
   }

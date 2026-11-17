@@ -30,7 +30,7 @@ export function createApp(deps: {
   const teams = createTeams({ repo, a12s, broker, dispatcher, templatesDir: deps.templatesDir });
   const live = createLive({ repo, a12s, dispatcher, changed: stream.changed, text: stream.live });
   const { filesDir } = deps;
-  const agentServer = createAgentServer({ repo, a12s, broker, dispatcher, scheduler, filesDir });
+  const agentServer = createAgentServer({ repo, a12s, broker, dispatcher, scheduler, live, filesDir });
   const ownerServer = createOwnerServer({
     repo,
     a12s,

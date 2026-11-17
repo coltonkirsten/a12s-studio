@@ -5,11 +5,11 @@ import { join } from "node:path";
 import { test } from "node:test";
 import { HOST, startBroker } from "@a12s-studio/broker/test/harness.ts";
 import { deriveState } from "../src/state.ts";
-import { studio } from "./studio.ts";
+import { pending, studio } from "./studio.ts";
 
 const DAY = 24 * 60 * 60 * 1000;
 
-test("an expiring grant: one note to the lead and one warned call across many ticks; the card stays", async (t) => {
+test("an expiring grant: one message that wakes the lead and one warned call across many ticks; the card stays", async (t) => {
   const broker = await startBroker(t);
   const s = await studio({ broker: broker.socketPath });
   t.after(() => s.close());
@@ -18,25 +18,25 @@ test("an expiring grant: one note to the lead and one warned call across many ti
   const grant = await broker.grant("web", { paths: ["/v1/items/**"], expiresAt: broker.clock.now + DAY });
   await broker.grant("notes", { expiresAt: broker.clock.now + 10 * DAY });
   const warned = t.mock.method(s.app.broker, "warned");
+  for (const name of s.a12s.agents.keys()) s.a12s.setPhase(name, "Asleep");
 
   for (let i = 0; i < 5; i++) await s.app.scheduler.tick();
 
   assert.equal(warned.mock.callCount(), 1);
-  const notes = s.db
-    .prepare("SELECT to_id, kind, thread_id, body, delivery FROM messages WHERE from_id = 'system'")
-    .all();
+  const sent = s.db.prepare("SELECT to_id, thread_id, body, delivery FROM messages WHERE from_id = 'system'").all();
   assert.deepEqual(
-    notes.map((row) => ({ ...row })),
+    sent.map((row) => ({ ...row })),
     [
       {
         to_id: "web-lead",
-        kind: "note",
         thread_id: null,
         body: `Access to ${HOST} /v1/items/** expires on 2030-01-02T00:00:00.000Z. Use access to request an extension if the team still needs it.`,
-        delivery: "queued",
+        delivery: "sent",
       },
     ],
   );
+  assert.equal(pending(s.a12s, "web-lead").length, 1);
+  assert.notEqual(s.a12s.agents.get("web-lead")?.phase, "Asleep", "the warning wakes the lead");
   const cards = deriveState(s.app, null).needsYou.filter((c) => c.kind === "grant_expiring");
   assert.deepEqual(cards, [
     {

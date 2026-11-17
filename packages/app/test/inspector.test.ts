@@ -111,6 +111,24 @@ test("Turns: the list, and a Turn's tool log with each call's line and result", 
   assert.equal(list.turns[0]?.text, "All read.");
 });
 
+test("Turns: a message steered into the Turn is a row of its log, with its sender and body", async (t) => {
+  const s = await setup(t);
+  const turn = s.a12s.startTurn("web-dev");
+  s.a12s.emit({ type: "tool.started", agent: "web-dev", at: Date.now(), turn, id: "c1", name: "Bash", input: {} });
+  const posted = await s.tool("web-lead", "post", { to: "dev", title: "Hero", body: "Use the new logo." });
+  await until(() => s.a12s.agents.get("web-dev")?.journal.some((e) => e.type === "turn.steered") === true);
+
+  const log = (await s.owner("GET", `/api/agents/web-dev/turns/${turn}/events`)).body as TurnEventsResponse;
+  assert.deepEqual(
+    log.calls.map((c) => c.id),
+    ["c1"],
+  );
+  assert.deepEqual(
+    log.steered.map((m) => [m.id, m.from, m.body]),
+    [[posted.message, "web-lead", "Use the new logo."]],
+  );
+});
+
 test("an asleep agent: its tool log and files answer asleep, its Turn list still answers", async (t) => {
   const s = await setup(t);
   await s.owner("POST", "/api/agents/web-dev/power", { state: "asleep" });
@@ -154,15 +172,12 @@ test("Inbox: removing a queued message marks it none, and it is never sent", asy
   assert.equal((await s.owner("DELETE", `/api/agents/web-dev/inbox/${first}`)).status, 404);
 });
 
-test("Inbox: removing a sent message withdraws it from a12s, with the notes riding on it", async (t) => {
+test("Inbox: removing a sent message withdraws exactly that one", async (t) => {
   const s = await setup(t);
-  const thread = String(
-    (await s.tool("web-lead", "post", { kind: "ask", to: "dev", title: "T", body: "One." })).thread,
-  );
-  await until(() => pending(s.a12s, "web-dev").length === 1);
-  await s.tool("web-lead", "post", { kind: "note", to: "dev", thread, body: "FYI." });
-  await s.tool("web-lead", "post", { kind: "ask", to: "dev", thread, body: "Two." });
-  await until(() => pending(s.a12s, "web-dev").length === 2);
+  const thread = String((await s.tool("web-lead", "post", { to: "dev", title: "T", body: "One." })).thread);
+  await s.tool("web-lead", "post", { to: "dev", thread, body: "FYI." });
+  await s.tool("web-lead", "post", { to: "dev", thread, body: "Two." });
+  await until(() => pending(s.a12s, "web-dev").length === 3);
 
   const inbox = (await s.owner("GET", "/api/agents/web-dev/inbox")).body as InboxResponse;
   const [one, fyi, two] = inbox.messages;
@@ -170,24 +185,24 @@ test("Inbox: removing a sent message withdraws it from a12s, with the notes ridi
     inbox.messages.map((m) => m.body),
     ["One.", "FYI.", "Two."],
   );
-  assert.ok(one?.sentAs && fyi?.sentAs === two?.sentAs && one.sentAs !== two?.sentAs, "the note rides on Two.");
+  assert.equal(new Set(inbox.messages.map((m) => m.sentAs)).size, 3, "each message is its own a12s Message");
   assert.equal((await s.owner("DELETE", `/api/agents/web-dev/inbox/${fyi?.id}`)).status, 200);
   const left = (await s.owner("GET", "/api/agents/web-dev/inbox")).body as InboxResponse;
   assert.deepEqual(
     left.messages.map((m) => m.body),
-    ["One."],
+    ["One.", "Two."],
   );
   assert.deepEqual(
     pending(s.a12s, "web-dev").map((m) => m.metadata.message),
-    [inbox.messages[0]?.id],
+    [one?.id, two?.id],
   );
   await s.app.dispatcher.run();
-  assert.equal(pending(s.a12s, "web-dev").length, 1);
+  assert.equal(pending(s.a12s, "web-dev").length, 2);
 });
 
 test("Inbox: a message a Turn has already taken cannot be removed", async (t) => {
   const s = await setup(t);
-  await s.tool("web-lead", "post", { kind: "ask", to: "dev", title: "T", body: "One." });
+  await s.tool("web-lead", "post", { to: "dev", title: "T", body: "One." });
   await until(() => pending(s.a12s, "web-dev").length === 1);
   const [message] = ((await s.owner("GET", "/api/agents/web-dev/inbox")).body as InboxResponse).messages;
   // a12s has handed it to a Turn whose turn.started the app has not read yet.
@@ -203,12 +218,10 @@ test("Inbox: a message a Turn has already taken cannot be removed", async (t) =>
 
 test("Inbox: clear withdraws everything pending and marks queued and sent messages none", async (t) => {
   const s = await setup(t);
-  const thread = String(
-    (await s.tool("web-lead", "post", { kind: "ask", to: "dev", title: "T", body: "One." })).thread,
-  );
+  const thread = String((await s.tool("web-lead", "post", { to: "dev", title: "T", body: "One." })).thread);
   await until(() => pending(s.a12s, "web-dev").length === 1);
   await s.owner("PATCH", "/api/teams/web", { paused: true });
-  await s.tool("web-lead", "post", { kind: "ask", to: "dev", thread, body: "Two." });
+  await s.tool("web-lead", "post", { to: "dev", thread, body: "Two." });
   const cleared = await s.owner("POST", "/api/agents/web-dev/inbox/clear", {});
   assert.equal(cleared.status, 200);
   assert.deepEqual(((await s.owner("GET", "/api/agents/web-dev/inbox")).body as InboxResponse).messages, []);

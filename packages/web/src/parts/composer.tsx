@@ -1,5 +1,5 @@
 import type { WriteResult } from "@a12s-studio/contract/api";
-import type { MessageView, TeamView } from "@a12s-studio/contract/state";
+import type { TeamView } from "@a12s-studio/contract/state";
 import { useLayoutEffect, useRef, useState } from "react";
 import { useAction } from "../api.ts";
 import { addressee, insertMention, mentionAt } from "../logic/mention.ts";
@@ -11,19 +11,16 @@ import { Problem } from "./problem.tsx";
 type Props = {
   team: TeamView;
   placeholder: string;
-  /** The open question for you in this thread, which a message answers unless you set it aside. */
-  question: MessageView | null;
   /** `to` is the slug of the agent addressed with @, as the owner API takes it. */
-  send: (body: string, to: string | undefined, ask: MessageView | null) => Promise<WriteResult>;
+  send: (body: string, to: string | undefined) => Promise<WriteResult>;
   sent?: (result: WriteResult) => void;
 };
 
-export function Composer({ team, placeholder, question, send, sent }: Props) {
+export function Composer({ team, placeholder, send, sent }: Props) {
   const [text, setText] = useState("");
   const [caret, setCaret] = useState(0);
   const [pick, setPick] = useState(0);
   const [dismissed, setDismissed] = useState<number | null>(null);
-  const [replying, setReplying] = useState(true);
   const field = useRef<HTMLTextAreaElement>(null);
   const placeCaret = useRef<number | null>(null);
   const action = useAction();
@@ -40,7 +37,6 @@ export function Composer({ team, placeholder, question, send, sent }: Props) {
     team.agents.map((a) => a.slug),
   );
   const to = team.agents.find((a) => a.slug === toSlug);
-  const ask = replying ? question : null;
 
   // React resets the caret when it replaces the value; put it back after the mention before the next key arrives.
   useLayoutEffect(() => {
@@ -61,7 +57,7 @@ export function Composer({ team, placeholder, question, send, sent }: Props) {
     const body = text.trim();
     if (!body || action.pending) return;
     action.run(
-      () => send(body, to?.slug, ask),
+      () => send(body, to?.slug),
       (result) => {
         setText("");
         setCaret(0);
@@ -92,23 +88,9 @@ export function Composer({ team, placeholder, question, send, sent }: Props) {
           ))}
         </ul>
       )}
-      {(ask || to) && (
+      {to && (
         <div className="composer-to">
-          {ask ? (
-            <>
-              <span>Answering {displayName(ask.from)}'s question</span>
-              <button
-                type="button"
-                className="icon-button"
-                title="Write a new message instead"
-                onClick={() => setReplying(false)}
-              >
-                <Icon name="close" size={12} />
-              </button>
-            </>
-          ) : (
-            to && <span>To {displayName(to.id)}</span>
-          )}
+          <span>To {displayName(to.id)}</span>
         </div>
       )}
       <div className={action.pending ? "composer-field pending" : "composer-field"}>

@@ -31,10 +31,13 @@ export type FakeAgent = {
   current: {
     turn: string;
     startedAt: number;
-    messageIds: string[];
+    messages: TurnRecord["messages"];
     text: string;
     tools: TurnRecord["tools"];
   } | null;
+  // The running Turn ends before the harness reads the next Batch steered to it, so the harness runs that Batch as a
+  // Turn of its own.
+  missesTurn: boolean;
 };
 
 export type TurnResult = { status?: TurnStatus; error?: string; modelCostsUsd?: ModelCosts };
@@ -46,6 +49,8 @@ export type FakeA12s = A12s & {
   setPhase(name: string, phase: Phase, error?: string): void;
   startTurn(name: string): string;
   finishTurn(name: string, result?: TurnResult): void;
+  // The next Batch steered into the agent's running Turn misses it: the Turn ends first and the Batch starts the next.
+  missTurn(name: string): void;
   // Work going on in the background, as the harness reports it: inside the running Turn, if any, else between Turns.
   startTask(name: string, task: Omit<BackgroundItem, "startedAt">): void;
   finishTask(name: string, id: string): void;
@@ -91,17 +96,46 @@ export function fakeA12s(): FakeA12s {
     const agent = mustGet(name);
     if (agent.phase === "Asleep") throw new Error(`fake a12s: ${name} is asleep and cannot start a Turn`);
     const turn = nextId("t_");
-    const messageIds: string[] = [];
-    for (const message of agent.inbox) {
-      if (message.state !== "pending") continue;
-      message.state = "delivered";
-      messageIds.push(message.id);
-    }
+    const messageIds = deliver(agent, turn);
     const at = Date.now();
-    agent.current = { turn, startedAt: at, messageIds, text: "", tools: [] };
+    agent.current = {
+      turn,
+      startedAt: at,
+      messages: messageIds.map((id) => ({ id, steered: false })),
+      text: "",
+      tools: [],
+    };
     setPhase(name, "Busy");
     emit({ type: "turn.started", agent: name, at, turn, messageIds });
     return turn;
+  }
+
+  // Every pending Message, in order, now received by `turn`.
+  function deliver(agent: FakeAgent, turn: string): string[] {
+    const ids: string[] = [];
+    for (const message of agent.inbox) {
+      if (message.state !== "pending") continue;
+      message.state = "delivered";
+      message.turn = turn;
+      ids.push(message.id);
+    }
+    return ids;
+  }
+
+  // a12s hands what is pending to the running Turn of an agent computer that steers, after the send has answered.
+  function steer(name: string): void {
+    const agent = agents.get(name);
+    const current = agent?.current;
+    if (!agent || !current || !agent.inbox.some((m) => m.state === "pending")) return;
+    if (agent.missesTurn) {
+      agent.missesTurn = false;
+      finishTurn(name);
+      startTurn(name);
+      return;
+    }
+    const messageIds = deliver(agent, current.turn);
+    current.messages.push(...messageIds.map((id) => ({ id, steered: true })));
+    emit({ type: "turn.steered", agent: name, at: Date.now(), turn: current.turn, messageIds });
   }
 
   function endTurn(name: string, result: TurnResult): void {
@@ -120,7 +154,7 @@ export function fakeA12s(): FakeA12s {
       status,
       ...error,
       text: current.text,
-      messageIds: current.messageIds,
+      messages: current.messages,
       tools: current.tools,
       startedAt: current.startedAt,
       finishedAt: at,
@@ -204,6 +238,7 @@ export function fakeA12s(): FakeA12s {
           createdAt: Date.now(),
         };
         agent.inbox.push(sent);
+        if (agent.phase === "Busy" && agent.spec.inbox?.duringTurn === "steer") setImmediate(() => steer(name));
         return { id: sent.id, state: sent.state };
       },
       async wake(name) {
@@ -291,6 +326,9 @@ export function fakeA12s(): FakeA12s {
     setPhase,
     startTurn,
     finishTurn,
+    missTurn(name) {
+      mustGet(name).missesTurn = true;
+    },
     startTask,
     finishTask,
     setReachable(up) {
@@ -326,6 +364,7 @@ export function fakeA12s(): FakeA12s {
         files: new Map(),
         background: [],
         current: null,
+        missesTurn: false,
       });
       setPhase(name, "Ready");
     },

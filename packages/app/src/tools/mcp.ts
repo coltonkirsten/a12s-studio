@@ -18,6 +18,8 @@ import { updateThread } from "./update_thread.ts";
 // What a tool may touch: everything is already scoped to the caller's team, so no tool can name another one.
 export type ToolContext = {
   caller: Caller;
+  // The caller's running Turn, if one runs: a post made from it is set off by what the Turn received.
+  turn: string | null;
   team: TeamRepo;
   a12s: TeamA12s;
   broker: TeamBroker;

@@ -107,7 +107,7 @@ async function liveHome(t: TestContext) {
   });
   await s.twoTeams();
   await s.owner("POST", "/api/teams/web/threads", { title: "Launch", body: "Plan the launch page." });
-  const asked = await s.tool("web-lead", "post", { kind: "ask", to: "dev", title: "Hero", body: "Draft the hero." });
+  const asked = await s.tool("web-lead", "post", { to: "dev", title: "Hero", body: "Draft the hero." });
   assert.equal(asked.error, undefined);
   await s.owner("PUT", "/api/teams/web/credentials/api.example.com", { scheme: "bearer", secret: SECRET });
   await s.owner("POST", "/api/teams/web/grants", { host: "api.example.com", methods: ["GET"], paths: ["/v1/**"] });

@@ -121,7 +121,7 @@ test("firing removes the agent computer, its wakes and its undelivered messages;
   const s = await setup(t);
   await s.app.teams.createTeam(body);
   await s.app.teams.pause("web");
-  const asked = await s.tool("web-lead", "post", { kind: "ask", to: "dev", title: "T", body: "b" });
+  const asked = await s.tool("web-lead", "post", { to: "dev", title: "T", body: "b" });
   s.db
     .prepare(
       "INSERT INTO wakes (id, team_id, agent_id, note, due_at, created_at) VALUES ('w_1', 'web', 'web-dev', 'n', 0, 0)",
@@ -167,10 +167,36 @@ test("a global pause holds every team until resumed", async (t) => {
   await s.app.teams.pause(null);
   assert.equal(s.app.repo.settings().paused, true);
   for (const agent of s.a12s.agents.values()) assert.equal(agent.phase, "Asleep");
-  await s.tool("notes-lead", "post", { kind: "ask", to: "researcher", title: "T", body: "b" });
+  await s.tool("notes-lead", "post", { to: "researcher", title: "T", body: "b" });
   await s.app.dispatcher.run();
   assert.equal(pending(s.a12s, "notes-researcher").length, 0);
   await s.app.teams.resume(null);
   assert.equal(pending(s.a12s, "notes-researcher").length, 1);
   assert.notEqual(s.a12s.agents.get("notes-researcher")?.phase, "Asleep");
+});
+
+test("at start every agent's spec is put again: a changed one reaches the agent, an unchanged one is left alone", async (t) => {
+  const s = await studio();
+  t.after(() => s.close());
+  await s.twoTeams();
+  const dev = s.a12s.agents.get("web-dev");
+  assert.ok(dev);
+  // A spec an earlier release of Studio wrote.
+  const { inbox: _, ...older } = dev.spec;
+  dev.spec = older;
+  const turn = s.a12s.startTurn("web-dev");
+  const put = t.mock.method(s.a12s, "putAgent");
+
+  await s.app.teams.putSpecs();
+  assert.deepEqual(put.mock.calls.map((c) => [c.arguments[0], c.arguments[2]]).sort(), [
+    ["notes-lead", "replace"],
+    ["notes-researcher", "replace"],
+    ["web-dev", "replace"],
+    ["web-lead", "replace"],
+  ]);
+  assert.deepEqual(dev.spec.inbox, { duringTurn: "steer" });
+  const now = structuredClone(dev.spec);
+  await s.app.teams.putSpecs();
+  assert.deepEqual(dev.spec, now, "the same spec again");
+  assert.equal(dev.current?.turn, turn, "the running Turn goes on");
 });
