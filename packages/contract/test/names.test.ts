@@ -1,6 +1,18 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { AGENT_ID, AGENT_SLUG, agentId, agentSlug, newId, TEAM_SLUG, teamOf, teamSlug } from "../src/names.ts";
+import {
+  ADDON_ID,
+  AGENT_ID,
+  AGENT_SLUG,
+  addonName,
+  addonOf,
+  agentId,
+  agentSlug,
+  newId,
+  TEAM_SLUG,
+  teamOf,
+  teamSlug,
+} from "../src/names.ts";
 
 test("team slugs have no hyphen and 2 to 20 characters", () => {
   for (const ok of ["web", "notes2", "a1"]) assert.match(ok, TEAM_SLUG);
@@ -62,4 +74,34 @@ test("agentSlug joins words with hyphens and fits AGENT_SLUG", () => {
     assert.equal(agentSlug(name), slug, name);
     assert.match(slug, AGENT_SLUG);
   }
+});
+
+test("an add-on instance's name has an agent id's shape, also with the longest team and add-on ids", () => {
+  const rows: [string, string][] = [
+    ["web", "narrate"],
+    ["a".repeat(20), "b".repeat(20)],
+    ["t2", "x1"],
+  ];
+  for (const [team, addon] of rows) {
+    assert.match(addon, ADDON_ID);
+    const name = addonName(team, addon);
+    assert.match(name, AGENT_ID);
+    assert.equal(teamOf(name), team);
+    assert.deepEqual(addonOf(name), { team, addon });
+  }
+});
+
+test("addonOf answers null for every name that is not an add-on instance's", () => {
+  for (const name of [
+    "web-lead",
+    "web-addon",
+    "web-addon-",
+    "web-addon-x",
+    "web-addon-9x",
+    "web-addon-a-b",
+    "addon-x",
+  ]) {
+    assert.equal(addonOf(name), null, name);
+  }
+  for (const bad of ["x", "Narrate", "na-rrate", "1x", "a".repeat(21)]) assert.doesNotMatch(bad, ADDON_ID);
 });

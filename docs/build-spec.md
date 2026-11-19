@@ -77,7 +77,8 @@ truth. `npm start` runs the broker and the app in the foreground instead.
 
 **Backup** (`scripts/backup.ts [<folder>]`, run by `com.a12s-studio.backup` at 03:30 with `docker` on its `PATH`):
 copies `app/studio.db` and `broker/vault.db` with SQLite's online backup (the app and the broker keep running),
-`config.json` and `app/files/`, and each home drive the Fleet lists (M8) as a gzipped tar, made by a throwaway
+`config.json` and `app/files/`, and each home drive the Fleet lists (M8; an add-on's state drive holds working files
+only and is not copied) as a gzipped tar, made by a throwaway
 `busybox` container with the drive's volume mounted read-only and no network. It writes `<folder>/<date>.partial`
 (default folder `~/a12s-studio-backups`, date local) and renames it to `<date>` when whole, so a dated folder is
 always complete and a second run that day replaces it. A run that finds the `.partial` of its own date stops, so
@@ -110,7 +111,7 @@ Throwaway code. Each has one decision hanging on it.
 | M6 | Does `tailscale serve` set `Tailscale-User-Login` and `X-Forwarded-For`, strip client-sent `Tailscale-*` headers, and pass on the `Host` the browser used? | `ownerGate` as written. A write's `Origin` is compared with `Host`, so if `tailscale serve` rewrites `Host`, every change through it is refused (reads still work). |
 | M7 | An agent asleep with a pending Message and no `wakeOnMessage`: does it stay asleep until `wake()`? Does `wake()` on a prefix token work and stay outside `maxWakesPerHour`? | The wake design (section 5.3). **Measured:** `POST …/power {"state":"awake"}` on a prefix token wakes it. |
 | M8 | How a Docker volume name maps to an agent computer's home drive (`GET /v1/drives`). | The backup script. **Measured:** `GET /v1/drives` (owner token) lists `{ name, kind, computer, attachedTo?, orphaned? }`; an agent computer's home drive is `home-<computer>` with kind `home`, and it outlives the computer (`orphaned: true`). Its Docker volume is `a12s-<fleet>-<drive name>`, labelled `a12s.fleet`, `a12s.drive` and `a12s.computer`. The backup lists the home drives through the API and reaches each volume by that name. |
-| M9 | A Service a12s runs, named `<team>-addon-<id>`, whose spec `uses` the external Services `broker` and `studio`: is that name stamped as the caller on its calls to both? Do two Services start from one image whose `service.json` carries a third name? Is an agent computer whose spec does not name the Service refused by the proxy? Which tool prefix do agents see for its MCP port? Does a write that names an image the host lacks pull it? | Section 10 as written. It is measured by the first add-on package, not in Phase 0. |
+| M9 | A Service a12s runs, named `<team>-addon-<id>`, whose spec `uses` the external Services `broker` and `studio`: is that name stamped as the caller on its calls to both? Do two Services start from one image whose `service.json` carries a third name? Is an agent computer whose spec does not name the Service refused by the proxy? Which tool prefix do agents see for its MCP port? Does a write that names an image the host lacks pull it? | Section 10 as written. It is measured by the first add-on package, not in Phase 0. **Measured** (a12s 0.12.0): the instance's calls to both carry its own name as the one caller header, with any copy it sent removed, and the `Host` it called; two Services run from one image whose `service.json` names a third; an agent computer whose spec does not name the Service is refused by the proxy with 403; agents see its MCP tools as `mcp__a12s-<instance name>__<tool>`; a write naming an image the host lacks pulls it, and an image without `/a12s/service.json` is refused with `invalid`. Also measured: a12s refuses a tunnel (`CONNECT`) to an `http` port, and Node's `fetch` tunnels through `HTTP_PROXY` even for an `http://` address, so an add-on calls `broker` and `studio` with plain HTTP through the proxy (Node's `http.request` with `NODE_USE_ENV_PROXY=1`); a prefix token reads and removes the instance but may not write it (`out_of_prefix` on `uses: broker`); removing a Service an agent's spec names is refused with `invalid`, and allowed once the agent's spec without it is written, also while that spec waits for a working agent's idle moment; the state drive `<instance>-state` outlives the Service and is attached again, with its files, when the Service is written again. |
 | M10 | With `inbox.duringTurn: steer`: is a Message sent to a `Busy` agent listed by a `turn.steered` event of the running Turn, and does the model read it before that Turn ends? Does one sent as the Turn ends start a new Turn that lists it in `turn.started`, once? | Delivery into a running Turn (section 5.3). It is measured by the a12s step of the steering work, not in Phase 0. Where a12s cannot steer, a message for a working agent starts its next Turn; the app's code is the same, because `turn.steered` is only one more way a message is reported delivered. **Measured** (a12s 0.12.0, Claude Code 2.1.280, by `steer.ts`): a Message sent to an agent in the middle of a one-minute foreground command is listed by a `turn.steered` event of that Turn once the command ends, and the model answers it in the same Turn. In the pair runs about two in five of the messages between the two agents joined a running Turn. |
 | M11 | A `UserPromptSubmit` hook given through `harness.settings` prints text: does it reach the model when a Message starts a Turn, and when one joins a running Turn? Does `curl` in a hook reach `STUDIO_URL`? | How a changed rule reaches an agent (section 6). It is measured by the rules package. If the hook does not run for a Message that joins a Turn, a changed layer arrives with the next Turn instead. If its output never reaches the model, the app sends the changed layer to each agent it applies to as a message from `system`. **Measured** (same releases, by `steer.ts`): the hook runs for a Message that joins a running Turn; after the owner changed the team rules during a long command, the steered Message brought the new text, the model followed it in that Turn, and the agent computer kept its session and container. `curl` in the hook reaches `STUDIO_URL`. |
 
@@ -931,7 +932,7 @@ type StudioState = {
   rev: number;                         // goes up by one with every committed change or live phase change
   a12s: "up" | "down"; broker: "up" | "down";
   settings: Settings;
-  addons: Addon[];                     // the library: each add-on's manifest (section 10.1)
+  addons: AddonManifest[];             // the library (section 10.1)
   teams: TeamView[];
   needsYou: NeedsYouItem[];
   open: ThreadView | null;             // the thread named in the stream URL
@@ -1526,6 +1527,10 @@ Everything a12s needs to run the image (its ports, health check, state path and 
 `/a12s/service.json`, which Studio does not read. An add-on offers its work as MCP tools on a port that file
 declares, so agents find the tools in their tool list; it may serve files to its callers on the same port.
 
+An add-on calls the broker at `BROKER_URL` and the app at `STUDIO_URL` with plain HTTP through the proxy a12s names
+in `HTTP_PROXY`. a12s refuses a tunnel to an `http` port, since a tunnel cannot carry the caller header (M9). It has
+no other way out: its egress is empty.
+
 `PUT /addons/:addon` stores a manifest whose `id` equals the name in the URL. Replacing one that some team has on
 is refused with 409 `in_use` when `access` differs, so a change of outside calls is shown to the owner again at the
 next turn-on; when only the image differs, each instance is written again with the new image. `DELETE` is refused
@@ -1581,7 +1586,11 @@ Turning off (`DELETE /teams/:team/addons/:addon`):
 3. The broker grants in `grant_ids` are revoked. A grant the owner made for the same host is not touched.
 4. The row is deleted. `addon_usage` rows stay: they are the day's spend.
 
-a12s keeps a removed Service's state drive under its name, so an add-on turned on again finds its working files.
+A team has an add-on on or off; it never runs two copies of one. a12s keeps a removed Service's state drive under its
+name, so an add-on turned on again finds its working files. That drive holds working files only and is not backed up.
+
+An agent that is working when the add-on is turned off keeps its spec until its next idle moment, while the instance is
+already gone: a call it makes to the add-on in that Turn fails like a call to any Service that is down.
 
 ### 10.4 Reported cost
 
@@ -1672,7 +1681,7 @@ restored from its history.
 
 | Package | Scope |
 |---|---|
-| P4-0 Measure and contract (first, alone) | Measurement M9, its results written into this file; `contract`: the manifest, `Addon`, `TeamAddon`, the add-on card, the route bodies, `addonName` and the reserved agent slug prefix. |
+| P4-0 Measure and contract (first, alone) | Measurement M9, its results written into this file; `contract`: the manifest, `TeamAddon`, the add-on card, `addonName`, `addonOf` and the reserved agent slug prefix. |
 | P4-A App side | The three tables, `addons.ts`, `addonSpec` and the add-ons in `agentSpec`, the port's Service calls in `real.ts` and `fake.ts`, `service.phase` in `live.ts`, `resolveAddon` and `POST /usage`, reported cost in `spentToday`, the add-on card, the four routes, the tests of section 10.5. |
 | P4-B Web | The library in the global settings sheet, Team settings → Add-ons with the turn-on sheet (the calls it adds, the credentials still missing), the add-on card. Built against the fixture server until P4-A lands. |
 | P4-C Example and exit script (after P4-A) | `addons/example` and the P4 exit script. |

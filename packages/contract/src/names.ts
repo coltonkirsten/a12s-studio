@@ -4,6 +4,10 @@ const AGENT = "[a-z][a-z0-9-]{0,29}";
 export const TEAM_SLUG = new RegExp(`^${TEAM}$`);
 export const AGENT_SLUG = new RegExp(`^${AGENT}$`);
 export const AGENT_ID = new RegExp(`^${TEAM}-${AGENT}$`);
+// An add-on's id has a team slug's shape, so its instance name `<team>-addon-<id>` fits AGENT_ID.
+export const ADDON_ID = new RegExp(`^${TEAM}$`);
+// Agent slugs starting with this are refused at hire: such names belong to add-on instances.
+export const ADDON_SLUG_PREFIX = "addon-";
 // "runs" is the path of the run explorer in the UI, beside the team pages.
 const RESERVED_TEAM_SLUGS: readonly string[] = ["studio", "broker", "owner", "system", "a12s", "runs"];
 
@@ -73,6 +77,19 @@ export function teamPrefix(team: string): string {
 
 export function agentId(team: string, slug: string): string {
   return teamPrefix(team) + slug;
+}
+
+// The a12s Service that is a team's instance of an add-on.
+export function addonName(team: string, addon: string): string {
+  return agentId(team, ADDON_SLUG_PREFIX + addon);
+}
+
+// The team and add-on an instance name stands for, or null when the name is not an instance's.
+export function addonOf(name: string): { team: string; addon: string } | null {
+  if (!AGENT_ID.test(name)) return null;
+  const team = teamOf(name);
+  const addon = name.slice(team.length + 1 + ADDON_SLUG_PREFIX.length);
+  return name === addonName(team, addon) && ADDON_ID.test(addon) ? { team, addon } : null;
 }
 
 export function teamOf(agent: string): string {

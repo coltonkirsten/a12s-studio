@@ -263,6 +263,7 @@ const teams: Omit<TeamView, "threads">[] = [
       }),
       agent("website-writer", "Writes page copy", "asleep", { model: "haiku" }),
     ],
+    addons: [],
   },
   {
     id: "notes",
@@ -276,6 +277,7 @@ const teams: Omit<TeamView, "threads">[] = [
       agent("notes-lead", "Plans the comparison and writes the summary", "asleep"),
       agent("notes-researcher", "Reads sources and takes notes", "waiting", { waitingFor: "cap", queued: 1 }),
     ],
+    addons: [],
   },
 ];
 
@@ -445,6 +447,7 @@ function stateFor(open: string | null): StudioState {
     a12s: "up",
     broker: "up",
     settings,
+    addons: [],
     needsYou: needsYou(),
     open: threads.find((t) => t.id === open) ?? null,
     teams: teams.map((team) => ({
@@ -705,6 +708,7 @@ function write(b: Record<string, unknown>, path: string, method: string): string
       leadId: `${slug}-${b.lead}`,
       budget: { dailyUsd: settings.defaultDailyBudgetUsd, spentTodayUsd: 0, held: false },
       agents: [agent(`${slug}-${b.lead}`, "Leads the team", "asleep")],
+      addons: [],
     });
     return slug;
   }

@@ -46,6 +46,8 @@ function keyOf(item: NeedsYouItem): string {
       return `${item.kind}:${item.teamId}:${item.host}`;
     case "grant_expiring":
       return item.grantId;
+    case "addon_error":
+      return `${item.kind}:${item.teamId}:${item.addonId}`;
   }
 }
 
@@ -112,6 +114,17 @@ function Card({ item, team }: { item: NeedsYouItem; team: TeamView }) {
         `Access to ${item.host} ${expiryText(item.expiresAt, now).toLowerCase()}.`,
         null,
         <ExtendGrant item={item} />,
+      );
+    case "addon_error":
+      return frame(
+        item.addonId,
+        `The add-on cannot run: ${item.error}`,
+        null,
+        <Actions>
+          <a className="button quiet" href={settingsHref(item.teamId)}>
+            Open team settings
+          </a>
+        </Actions>,
       );
   }
 }
