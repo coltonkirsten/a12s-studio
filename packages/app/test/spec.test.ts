@@ -28,12 +28,12 @@ test("the instructions are the basics alone, as the spec writes them", () => {
     .replace("{agent}", "dev")
     .replace("{team}", "Website")
     .replaceAll("{BROKER_URL}", BROKER_URL);
-  assert.equal(agentSpec(team, agent).instructions, core);
+  assert.equal(agentSpec(team, agent, []).instructions, core);
 });
 
 test("the hooks load the three rule layers and the notes at a session's start, and a changed layer per Message", () => {
   const doc = readFileSync(new URL("../../../docs/build-spec.md", import.meta.url), "utf8");
-  const { harness, files } = agentSpec(team, agent);
+  const { harness, files } = agentSpec(team, agent, []);
   const command = (line: string) => ({ type: "command", command: `/home/agent/bin/${line}` });
   assert.deepEqual(harness.settings.hooks, {
     SessionStart: [
@@ -63,7 +63,7 @@ test("the hooks load the three rule layers and the notes at a session's start, a
 });
 
 test("the spec pins the harness, keeps the agent's own settings and adds nothing else", () => {
-  const { instructions: _, files, ...spec } = agentSpec(team, agent);
+  const { instructions: _, files, ...spec } = agentSpec(team, agent, []);
   assert.deepEqual(spec, {
     harness: {
       kind: "claude-code",
@@ -88,6 +88,6 @@ test("the spec pins the harness, keeps the agent's own settings and adds nothing
 });
 
 test("resources appear only for the values that are set", () => {
-  assert.deepEqual(agentSpec(team, { ...agent, cpu: 2 }).resources, { cpu: 2 });
-  assert.deepEqual(agentSpec(team, { ...agent, cpu: 1.5, memory: "4Gi" }).resources, { cpu: 1.5, memory: "4Gi" });
+  assert.deepEqual(agentSpec(team, { ...agent, cpu: 2 }, []).resources, { cpu: 2 });
+  assert.deepEqual(agentSpec(team, { ...agent, cpu: 1.5, memory: "4Gi" }, []).resources, { cpu: 1.5, memory: "4Gi" });
 });

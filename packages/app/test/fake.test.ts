@@ -3,7 +3,7 @@ import { test } from "node:test";
 import { fakeA12s } from "../src/a12s/fake.ts";
 import type { A12sEvent, AgentSpec } from "../src/a12s/port.ts";
 
-const spec = {} as AgentSpec;
+const spec = { uses: [] as AgentSpec["uses"] } as AgentSpec;
 
 test("a team token cannot touch another team's agents", async () => {
   const a12s = fakeA12s();
@@ -62,7 +62,7 @@ test("a sleeping agent keeps its Turn history but refuses its Turn events and fi
 
 test("a Message for a working agent computer that steers joins its Turn; without the policy it waits", async () => {
   const a12s = fakeA12s();
-  await a12s.putAgent("web-lead", { inbox: { duringTurn: "steer" } } as AgentSpec, "create");
+  await a12s.putAgent("web-lead", { ...spec, inbox: { duringTurn: "steer" } }, "create");
   await a12s.putAgent("web-dev", spec, "create");
   const web = a12s.forTeam(await a12s.createToken("web"));
   const feed = a12s.events();
@@ -85,7 +85,7 @@ test("a Message for a working agent computer that steers joins its Turn; without
 
 test("missTurn: the Batch misses the running Turn and starts the next one", async () => {
   const a12s = fakeA12s();
-  await a12s.putAgent("web-lead", { inbox: { duringTurn: "steer" } } as AgentSpec, "create");
+  await a12s.putAgent("web-lead", { ...spec, inbox: { duringTurn: "steer" } }, "create");
   const web = a12s.forTeam(await a12s.createToken("web"));
   const first = a12s.startTurn("web-lead");
   a12s.missTurn("web-lead");

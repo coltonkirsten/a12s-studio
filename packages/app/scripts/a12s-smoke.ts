@@ -53,7 +53,7 @@ try {
 
   let turn = "";
   for await (const event of feed) {
-    if (event.type === "gap" || event.agent !== agent) continue;
+    if (event.type === "gap" || event.type === "service.phase" || event.agent !== agent) continue;
     log("event", event);
     if (event.type === "turn.started" && event.messageIds.includes(sent.id)) turn = event.turn;
     if (event.type === "turn.finished" && event.turn === turn) break;
@@ -91,6 +91,14 @@ try {
   log("turns while asleep", (await smoke.turns(agent, 5)).length);
   await smoke.wake(agent);
   console.log("sleep and wake ok");
+
+  // An add-on instance: the owner writes it, the team's token sees and removes it. busybox has no service.json, so
+  // a12s refuses it after pulling it; that refusal is the port's error.
+  const instance = `${team}-addon-smoke`;
+  await assert.rejects(a12s.putService(instance, { image: "busybox:1.37", uses: [], egress: { allow: [] } }));
+  log("services", await smoke.services());
+  await assert.rejects(smoke.removeService(instance), { code: "not_found" });
+  console.log("services ok");
 } finally {
   feed.close();
   await smoke.removeAgent(agent).catch((error: unknown) => console.error("removeAgent:", error));

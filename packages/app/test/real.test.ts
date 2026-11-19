@@ -138,6 +138,41 @@ test("a12s events become port events", () => {
         modelCostsUsd: {},
       },
     ],
+    [
+      "service.phase: Unhealthy is an error, with the failed check as its reason",
+      {
+        ...envelope,
+        agentComputer: "",
+        type: "service.phase",
+        data: { service: "web-addon-narrate", phase: "Unhealthy", health: "GET /healthz: 500", restarts: 2 },
+      },
+      { type: "service.phase", service: "web-addon-narrate", at, phase: "Error", error: "GET /healthz: 500" },
+    ],
+    [
+      "service.phase: a failed start keeps a12s's reason",
+      {
+        ...envelope,
+        agentComputer: "",
+        type: "service.phase",
+        data: {
+          service: "web-addon-narrate",
+          phase: "Error",
+          restarts: 5,
+          error: { reason: "exited 1", retryable: true },
+        },
+      },
+      { type: "service.phase", service: "web-addon-narrate", at, phase: "Error", error: "exited 1" },
+    ],
+    [
+      "service.phase: Ready",
+      {
+        ...envelope,
+        agentComputer: "",
+        type: "service.phase",
+        data: { service: "web-addon-narrate", phase: "Ready", health: "ok", restarts: 0 },
+      },
+      { type: "service.phase", service: "web-addon-narrate", at, phase: "Ready" },
+    ],
     ["egress.denied is dropped", { ...envelope, type: "egress.denied", data: { host: "x", port: 443 } }, null],
     [
       "inbox.changed is dropped",

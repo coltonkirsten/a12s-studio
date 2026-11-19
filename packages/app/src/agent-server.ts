@@ -1,8 +1,9 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
+import { z } from "zod";
 import type { A12s } from "./a12s/port.ts";
 import type { BrokerClient } from "./broker-client.ts";
-import { resolveCaller } from "./caller.ts";
+import { resolveAddon, resolveCaller } from "./caller.ts";
 import type { Dispatcher } from "./dispatcher.ts";
 import { StudioError } from "./errors.ts";
 import { sendAttachment } from "./files.ts";
@@ -17,6 +18,10 @@ import { CHUNK_MAX } from "./transcript.ts";
 function json(res: ServerResponse, status: number, body: unknown): void {
   res.writeHead(status, { "content-type": "application/json" }).end(JSON.stringify(body));
 }
+
+const usage = z.strictObject({ usd: z.number().gt(0).max(1000), note: z.string().trim().min(1).max(200) });
+const USAGE_MAX = 4096;
+const USAGE_FIX = "Send usd greater than 0 and at most 1000, and a note of 1 to 200 characters.";
 
 const FILE = /^\/files\/([^/]+)\/([^/]+)$/;
 const RULES = /^\/rules\/([^/]+)$/;
@@ -50,6 +55,26 @@ export function createAgentServer(deps: {
       const url = new URL(req.url ?? "/", "http://studio");
       const path = url.pathname;
       if (req.method === "GET" && path === "/healthz") return json(res, 200, { ok: true });
+      // Section 10.4: the one route an agent may not call. The team and add-on come from the caller's name.
+      if (req.method === "POST" && path === "/usage") {
+        const { teamId, addonId } = resolveAddon(deps.repo, req.headersDistinct);
+        const raw = (await body(req, USAGE_MAX)).toString("utf8");
+        const report = usage.safeParse(
+          (() => {
+            try {
+              return JSON.parse(raw);
+            } catch {
+              return null;
+            }
+          })(),
+        );
+        if (!report.success) {
+          throw new StudioError(400, "bad_request", "A report is { usd, note } only.", USAGE_FIX);
+        }
+        deps.repo.forTeam(teamId).insertUsage(addonId, report.data.usd, report.data.note, Date.now());
+        await deps.dispatcher.run();
+        return json(res, 200, { ok: true });
+      }
       const caller = resolveCaller(deps.repo, req.headersDistinct);
       const file = req.method === "GET" ? FILE.exec(path) : null;
       if (file) {

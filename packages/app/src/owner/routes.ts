@@ -17,6 +17,7 @@ import type { AccessRequest } from "@a12s-studio/contract/broker-admin";
 import { teamOf } from "@a12s-studio/contract/names";
 import { z } from "zod";
 import type { A12s, A12sEvent } from "../a12s/port.ts";
+import { type Addons, manifestSchema } from "../addons.ts";
 import type { BrokerClient } from "../broker-client.ts";
 import type { Dispatcher } from "../dispatcher.ts";
 import { StudioError } from "../errors.ts";
@@ -39,6 +40,7 @@ export type OwnerDeps = {
   dispatcher: Dispatcher;
   scheduler: Scheduler;
   teams: ReturnType<typeof createTeams>;
+  addons: Addons;
   live: Live;
   stream: Stream;
   runs: Runs;
@@ -210,7 +212,7 @@ function parse<S extends z.ZodType>(schema: S, body: unknown): z.output<S> {
 }
 
 export function ownerRoutes(deps: OwnerDeps): Route[] {
-  const { repo, a12s, broker, dispatcher, scheduler, teams, stream, runs, filesDir } = deps;
+  const { repo, a12s, broker, dispatcher, scheduler, teams, addons, stream, runs, filesDir } = deps;
   const written = (id?: string): WriteResult => ({ rev: stream.rev(), ...(id === undefined ? {} : { id }) });
   // A change in the broker can add or remove a Needs You card, so the attention answer is read again before the
   // route answers: the state at the returned rev already shows the change. The rev moves even when no card does:
@@ -289,6 +291,39 @@ export function ownerRoutes(deps: OwnerDeps): Route[] {
       async run({ params }) {
         await teams.deleteTeam(team(params[0]).team.id);
         return written();
+      },
+    },
+    // Section 10. Turning an add-on on or off makes or revokes broker grants, so the attention items are read again.
+    {
+      method: "PUT",
+      path: /^\/addons\/([^/]+)$/,
+      async run({ params, body }) {
+        await addons.put(params[0] ?? "", parse(manifestSchema, body));
+        return written();
+      },
+    },
+    {
+      method: "DELETE",
+      path: /^\/addons\/([^/]+)$/,
+      run({ params }) {
+        addons.remove(params[0] ?? "");
+        return written();
+      },
+    },
+    {
+      method: "PUT",
+      path: /^\/teams\/([^/]+)\/addons\/([^/]+)$/,
+      async run({ params }) {
+        await addons.turnOn(team(params[0]).team.id, params[1] ?? "");
+        return relayed();
+      },
+    },
+    {
+      method: "DELETE",
+      path: /^\/teams\/([^/]+)\/addons\/([^/]+)$/,
+      async run({ params }) {
+        await addons.turnOff(team(params[0]).team.id, params[1] ?? "");
+        return relayed();
       },
     },
     {

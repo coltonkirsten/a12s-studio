@@ -1,5 +1,5 @@
 import { basename } from "node:path";
-import { type ThreadId, TOOL_PREFIX, teamOf } from "@a12s-studio/contract/names";
+import { addonOf, type ThreadId, TOOL_PREFIX, teamOf } from "@a12s-studio/contract/names";
 import type { LiveText, Presence, WorkItem } from "@a12s-studio/contract/state";
 import {
   type A12s,
@@ -8,6 +8,7 @@ import {
   type BackgroundItem,
   type EventFeed,
   type Phase,
+  type ServiceStatus,
   type TurnRecord,
 } from "./a12s/port.ts";
 import { turnCost } from "./cost.ts";
@@ -187,6 +188,8 @@ export function createLive(deps: {
 }) {
   const { repo, a12s, dispatcher, changed } = deps;
   const agents = new Map<string, AgentLive>();
+  // Add-on instances by name, as a12s last reported them.
+  const instances = new Map<string, ServiceStatus>();
   let up = false;
   let stopped = false;
   let feed: EventFeed | null = null;
@@ -261,7 +264,7 @@ export function createLive(deps: {
     });
   }
 
-  async function handle(ev: Exclude<A12sEvent, { type: "gap" }>): Promise<void> {
+  async function handle(ev: Exclude<A12sEvent, { type: "gap" | "service.phase" }>): Promise<void> {
     // A phase counts for any name: an agent computer being hired reports its phases before its row is committed.
     if (ev.type === "agent_computer.phase") {
       setPhase(record(ev.agent), ev.phase, ev.error);
@@ -423,6 +426,9 @@ export function createLive(deps: {
       const client = a12s.forTeam(team.a12sToken);
       try {
         const current = new Set(scoped.agents().map((a) => a.id));
+        const listed = (await client.services()).filter((service) => addonOf(service.name));
+        for (const name of instances.keys()) if (teamOf(name) === team.id) instances.delete(name);
+        for (const service of listed) instances.set(service.name, service);
         for (const s of await client.status()) {
           if (!current.has(s.name)) continue;
           const rec = record(s.name);
@@ -476,6 +482,13 @@ export function createLive(deps: {
             await resync();
             continue;
           }
+          if (ev.type === "service.phase") {
+            if (!addonOf(ev.service)) continue;
+            const { service: name, phase, error } = ev;
+            instances.set(name, { name, phase, ...(error ? { error } : {}) });
+            changed();
+            continue;
+          }
           try {
             await handle(ev);
           } catch (error) {
@@ -502,6 +515,7 @@ export function createLive(deps: {
   let running: Promise<void> | null = null;
   return {
     agent: (id: string): AgentLive | undefined => agents.get(id),
+    instance: (name: string): ServiceStatus | undefined => instances.get(name),
     up: () => up,
     start(): void {
       running ??= loop();

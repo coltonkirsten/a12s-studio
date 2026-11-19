@@ -8,11 +8,11 @@ import {
   type AgentSpec,
   type BackgroundItem,
   type EventFeed,
-  type ExternalService,
   type FileEntry,
   type InboxMessage,
   type ModelCosts,
   type Phase,
+  type ServiceSpec,
   type TeamA12s,
   type TurnRecord,
   type TurnStatus,
@@ -40,13 +40,18 @@ export type FakeAgent = {
   missesTurn: boolean;
 };
 
+// spec is null for an external Service, which a12s does not run.
+export type FakeService = { spec: ServiceSpec | null; phase: Phase; error?: string };
+
 export type TurnResult = { status?: TurnStatus; error?: string; modelCostsUsd?: ModelCosts };
 
 export type FakeA12s = A12s & {
-  services: ExternalService[];
+  // Services and agent computers share one namespace, as in a12s.
+  services: Map<string, FakeService>;
   agents: Map<string, FakeAgent>;
   emit(event: A12sEvent): void;
   setPhase(name: string, phase: Phase, error?: string): void;
+  setServicePhase(name: string, phase: Phase, error?: string): void;
   startTurn(name: string): string;
   finishTurn(name: string, result?: TurnResult): void;
   // The next Batch steered into the agent's running Turn misses it: the Turn ends first and the Batch starts the next.
@@ -60,6 +65,11 @@ export type FakeA12s = A12s & {
 
 export function fakeA12s(): FakeA12s {
   const agents = new Map<string, FakeAgent>();
+  // The Fleet as setup leaves it: the app's two external Services.
+  const services = new Map<string, FakeService>([
+    ["studio", { spec: null, phase: "Ready" }],
+    ["broker", { spec: null, phase: "Ready" }],
+  ]);
   const tokens = new Map<string, string>();
   const subscribers = new Set<(event: A12sEvent) => void>();
   const feeds = new Set<() => void>();
@@ -74,7 +84,7 @@ export function fakeA12s(): FakeA12s {
   }
 
   function emit(event: A12sEvent): void {
-    if (event.type !== "gap") {
+    if (event.type !== "gap" && event.type !== "service.phase") {
       const agent = mustGet(event.agent);
       agent.journal.push(event);
       if (event.type === "text.delta" && agent.current?.turn === event.turn) agent.current.text += event.text;
@@ -90,6 +100,23 @@ export function fakeA12s(): FakeA12s {
     agent.phase = phase;
     agent.error = error;
     emit({ type: "agent_computer.phase", agent: name, at: Date.now(), phase, ...(error ? { error } : {}) });
+  }
+
+  function setServicePhase(name: string, phase: Phase, error?: string): void {
+    const service = services.get(name);
+    if (!service) throw new A12sError("not_found", `No Service named ${name}.`);
+    service.phase = phase;
+    service.error = error;
+    emit({ type: "service.phase", service: name, at: Date.now(), phase, ...(error ? { error } : {}) });
+  }
+
+  // a12s refuses a spec that uses a Service the Fleet does not have, and a name the other kind already holds.
+  function checkWrite(name: string, uses: AgentSpec["uses"], other: Map<string, unknown>): void {
+    if (other.has(name)) throw new A12sError("other", `${name} is already taken in the Fleet's one namespace.`);
+    for (const use of uses) {
+      const used = typeof use === "string" ? use : use.name;
+      if (!services.has(used)) throw new A12sError("other", `${name} uses ${used}, but there is no Service ${used}.`);
+    }
   }
 
   function startTurn(name: string): string {
@@ -222,6 +249,21 @@ export function fakeA12s(): FakeA12s {
         mustGet(own(name));
         agents.delete(name);
       },
+      async removeService(name) {
+        if (!services.has(own(name))) throw new A12sError("not_found", `No Service named ${name}.`);
+        for (const [agent, { spec }] of agents) {
+          if (spec.uses.some((use) => (typeof use === "string" ? use : use.name) === name)) {
+            throw new A12sError("other", `${agent} uses ${name}, but there is no Service ${name}.`);
+          }
+        }
+        services.delete(name);
+      },
+      async services() {
+        const prefix = teamPrefix(team());
+        return [...services]
+          .filter(([name]) => name.startsWith(prefix))
+          .map(([name, { phase, error }]) => ({ name, phase, ...(error ? { error } : {}) }));
+      },
       async send(name, message) {
         const agent = mustGet(own(name));
         for (const old of agent.inbox) {
@@ -320,10 +362,11 @@ export function fakeA12s(): FakeA12s {
   }
 
   const fake: FakeA12s = {
-    services: [],
+    services,
     agents,
     emit,
     setPhase,
+    setServicePhase,
     startTurn,
     finishTurn,
     missTurn(name) {
@@ -335,8 +378,8 @@ export function fakeA12s(): FakeA12s {
       reachable = up;
       if (!up) for (const drop of feeds) drop();
     },
-    async ensureServices(services) {
-      fake.services = services;
+    async ensureServices(externals) {
+      for (const { name } of externals) services.set(name, { spec: null, phase: "Ready" });
     },
     async createToken(team) {
       if ([...tokens.values()].includes(team)) throw new A12sError("exists", `A token for ${team} exists.`);
@@ -348,6 +391,7 @@ export function fakeA12s(): FakeA12s {
       for (const [secret, owner] of tokens) if (owner === team) tokens.delete(secret);
     },
     async putAgent(name, spec, mode) {
+      checkWrite(name, spec.uses, services);
       const existing = agents.get(name);
       if (existing && mode === "create") throw new A12sError("exists", `${name} exists.`);
       if (existing) {
@@ -367,6 +411,11 @@ export function fakeA12s(): FakeA12s {
         missesTurn: false,
       });
       setPhase(name, "Ready");
+    },
+    async putService(name, spec) {
+      checkWrite(name, spec.uses, agents);
+      services.set(name, { spec, phase: "Starting" });
+      setServicePhase(name, "Ready");
     },
     events(): EventFeed {
       const queue: A12sEvent[] = [];

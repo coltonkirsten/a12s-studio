@@ -38,6 +38,13 @@ export type ExternalService = {
   healthPath?: string;
 };
 
+// A Service a12s runs from an image. What the image needs to run is in its own /a12s/service.json.
+export type ServiceSpec = {
+  image: string;
+  uses: { name: string; mcp: boolean }[];
+  egress: { allow: string[] };
+};
+
 // Claude Code's hook settings: a group runs its commands for the events its matcher names (all, without one).
 type HookGroup = { matcher?: string; hooks: { type: "command"; command: string; timeout?: number }[] };
 
@@ -130,6 +137,8 @@ export type A12sEvent =
       toolUseId?: string;
     }
   | { type: "task.finished"; agent: string; at: number; id: string }
+  // A Service's phase, health or restarts changed; Unhealthy is reported as Error, with the failed check as error.
+  | { type: "service.phase"; service: string; at: number; phase: Phase; error?: string }
   | { type: "gap" };
 
 // One connection to a12s. ready() resolves once no later event can be missed and rejects when a12s does not answer.
@@ -147,6 +156,8 @@ export type AgentStatus = {
   pending: number;
   background: BackgroundItem[];
 };
+
+export type ServiceStatus = { name: string; phase: Phase; error?: string };
 
 export type Outgoing = { body: string; metadata: Record<string, string>; replaceKey: string };
 
@@ -197,12 +208,14 @@ export type FileResponse =
 
 export type Terminal = { stream: Duplex; resize(rows: number, cols: number): Promise<void> };
 
-// Every call names one agent computer inside the token's prefix; a12s refuses anything else with out_of_prefix,
-// which is how one team's calls can never touch another team's agents. turnEvents, readFile, writeFile and
+// Every call names one agent computer or Service inside the token's prefix; a12s refuses anything else with
+// out_of_prefix, which is how one team's calls can never touch another team's agents or add-ons. turnEvents, readFile, writeFile and
 // openTerminal need the agent awake and are refused with asleep otherwise; the rest work on a sleeping agent.
 // turnEvents yields what the Turn has journaled so far, then ends, whether or not the Turn has finished.
 export type TeamA12s = {
   removeAgent(name: string): Promise<void>;
+  removeService(name: string): Promise<void>;
+  services(): Promise<ServiceStatus[]>;
   send(name: string, message: Outgoing): Promise<{ id: string; state: InboxState }>;
   wake(name: string): Promise<void>;
   sleep(name: string): Promise<void>;
@@ -218,13 +231,14 @@ export type TeamA12s = {
   openTerminal(name: string, size: { rows: number; cols: number }): Promise<Terminal>;
 };
 
-// Owner-token calls. putAgent is here, not on TeamA12s, because a prefix token may not write a spec whose `uses`
-// names a Service outside its prefix, and every agent uses the studio and broker Services.
+// Owner-token calls. putAgent and putService are here, not on TeamA12s, because a prefix token may not write a spec
+// whose `uses` names a Service outside its prefix, and every agent and add-on uses the studio and broker Services.
 export type A12s = {
   ensureServices(services: ExternalService[]): Promise<void>;
   createToken(team: string): Promise<string>;
   removeToken(team: string): Promise<void>;
   putAgent(name: string, spec: AgentSpec, mode: "create" | "replace"): Promise<void>;
+  putService(name: string, spec: ServiceSpec): Promise<void>;
   events(): EventFeed;
   forTeam(token: string): TeamA12s;
 };

@@ -1,7 +1,7 @@
 import type { DatabaseSync, SQLInputValue } from "node:sqlite";
 import type { RunIndex, RunSummary } from "@a12s-studio/contract/api";
 import { agentId, type MessageId, newId, type ThreadId, type WakeId } from "@a12s-studio/contract/names";
-import type { Settings, ThreadStatus } from "@a12s-studio/contract/state";
+import type { AddonManifest, Settings, ThreadStatus } from "@a12s-studio/contract/state";
 import type { Tokens, TurnStatus } from "./a12s/port.ts";
 import type { SessionCosts } from "./cost.ts";
 import { tx } from "./db.ts";
@@ -97,6 +97,9 @@ export type RuleVersion = { id: number; body: string; author: string; createdAt:
 
 // One instruction layer's versions: the owner rules, a team's rules, or one agent's role. Reading is separate from
 // writing so that the owner rules can be read through a team's repo and written only through the unscoped one.
+// An add-on a team has on, with the broker grants turning it on made.
+export type TeamAddonRow = { manifest: AddonManifest; grantIds: string[] };
+
 export type RuleHistory = { layer: "owner" | "team" | "role"; versions(limit: number, before?: number): RuleVersion[] };
 export type RuleScope = RuleHistory & { insert(body: string, author: string, at: number): number };
 
@@ -618,14 +621,58 @@ export function createRepo(db: DatabaseSync, onWrite: () => void = () => {}) {
       ackTurn(id: string, at: number): boolean {
         return run("UPDATE turns SET acked_at = ? WHERE team_id = ? AND id = ?", at, teamId, id) > 0;
       },
+      // Turns and what the team's add-ons reported: one budget covers both.
       spentToday(now: number): number {
+        const since = localMidnight(now);
         return Number(
           one(
-            "SELECT coalesce(sum(cost_usd), 0) AS s FROM turns WHERE team_id = ? AND finished_at >= ?",
+            `SELECT (SELECT coalesce(sum(cost_usd), 0) FROM turns WHERE team_id = ? AND finished_at >= ?)
+               + (SELECT coalesce(sum(usd), 0) FROM addon_usage WHERE team_id = ? AND at >= ?) AS s`,
             teamId,
-            localMidnight(now),
+            since,
+            teamId,
+            since,
           )?.s ?? 0,
         );
+      },
+      addonSpentToday(now: number): Map<string, number> {
+        const rows = all(
+          "SELECT addon_id AS id, sum(usd) AS usd FROM addon_usage WHERE team_id = ? AND at >= ? GROUP BY addon_id",
+          teamId,
+          localMidnight(now),
+        );
+        return new Map(rows.map((r) => [String(r.id), Number(r.usd)]));
+      },
+      insertUsage(addonId: string, usd: number, note: string, at: number): void {
+        run(
+          "INSERT INTO addon_usage (team_id, addon_id, at, usd, note) VALUES (?, ?, ?, ?, ?)",
+          teamId,
+          addonId,
+          at,
+          usd,
+          note,
+        );
+      },
+
+      // The add-ons the team has on, in the order they were turned on.
+      addons(): TeamAddonRow[] {
+        return all(
+          `SELECT a.manifest, ta.grant_ids AS grantIds FROM team_addons ta JOIN addons a ON a.id = ta.addon_id
+           WHERE ta.team_id = ? ORDER BY ta.created_at, ta.rowid`,
+          teamId,
+        ).map((r) => ({ manifest: JSON.parse(String(r.manifest)), grantIds: JSON.parse(String(r.grantIds)) }));
+      },
+      insertAddon(addonId: string, grantIds: string[], at: number): void {
+        run(
+          "INSERT INTO team_addons (team_id, addon_id, grant_ids, created_at) VALUES (?, ?, ?, ?)",
+          teamId,
+          addonId,
+          JSON.stringify(grantIds),
+          at,
+        );
+      },
+      deleteAddon(addonId: string): void {
+        run("DELETE FROM team_addons WHERE team_id = ? AND addon_id = ?", teamId, addonId);
       },
 
       // An agent's own wakes, soonest first.
@@ -764,6 +811,45 @@ export function createRepo(db: DatabaseSync, onWrite: () => void = () => {}) {
         .prepare("DELETE FROM runs WHERE last_at < ? RETURNING turn_id AS id")
         .all(before)
         .map((r) => String(r.id));
+    },
+    // The library, oldest first.
+    addons(): AddonManifest[] {
+      return all("SELECT manifest FROM addons ORDER BY added_at, rowid").map((r) => JSON.parse(String(r.manifest)));
+    },
+    addon(id: string): AddonManifest | undefined {
+      const row = one("SELECT manifest FROM addons WHERE id = ?", id);
+      return row && JSON.parse(String(row.manifest));
+    },
+    putAddon(manifest: AddonManifest, at: number): void {
+      run(
+        `INSERT INTO addons (id, manifest, added_at) VALUES (?, ?, ?)
+         ON CONFLICT (id) DO UPDATE SET manifest = excluded.manifest`,
+        manifest.id,
+        JSON.stringify(manifest),
+        at,
+      );
+    },
+    deleteAddon(id: string): void {
+      run("DELETE FROM addons WHERE id = ?", id);
+    },
+    // The current teams that have the add-on on.
+    addonTeams(id: string): Team[] {
+      return all(
+        `SELECT ${TEAM} FROM teams WHERE deleted_at IS NULL
+         AND id IN (SELECT team_id FROM team_addons WHERE addon_id = ?) ORDER BY created_at, rowid`,
+        id,
+      ).map(toTeam);
+    },
+    // The caller's identity as an add-on instance: an add-on a current team has on. Only caller.ts uses this.
+    callerAddon(team: string, addon: string): boolean {
+      return (
+        one(
+          `SELECT 1 FROM team_addons ta JOIN teams t ON t.id = ta.team_id
+           WHERE ta.team_id = ? AND ta.addon_id = ? AND t.deleted_at IS NULL`,
+          team,
+          addon,
+        ) !== undefined
+      );
     },
     // The caller's identity: a current agent of a current team. Only caller.ts uses this.
     callerAgent(id: string): { id: string; teamId: string } | undefined {

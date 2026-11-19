@@ -21,6 +21,7 @@ import {
   type FileResponse,
   type ModelCosts,
   type Phase,
+  type ServiceStatus,
   type TeamA12s,
   type Terminal,
   type TurnRecord,
@@ -176,9 +177,24 @@ export function toEvent(ev: SdkEvent): A12sEvent | null {
         ...(tokens ? { tokens } : {}),
       };
     }
+    case "service.phase": {
+      const { service, phase } = ev.data;
+      const error = serviceError(phase, ev.data.error?.reason, ev.data.health);
+      return { type: ev.type, service, at, phase: phaseOf(phase), ...(error ? { error } : {}) };
+    }
     default:
       return null;
   }
+}
+
+// A Service that runs but fails its health check is Unhealthy, with the failed check as its only reason.
+function serviceError(phase: SdkPhase, reason: string | undefined, health: string | undefined): string | undefined {
+  return reason ?? (phase === "Unhealthy" && health && health !== "ok" ? health : undefined);
+}
+
+function toService(s: NonNullable<StatusResponse["services"]>[number]): ServiceStatus {
+  const error = serviceError(s.phase, s.error?.reason, s.health);
+  return { name: s.name, phase: phaseOf(s.phase), ...(error ? { error } : {}) };
 }
 
 function toTurn(t: TurnsResponse["turns"][number]): TurnRecord {
@@ -307,6 +323,13 @@ export function realA12s(owner: Controller): A12s {
       async removeAgent(name) {
         await team("DELETE", computer(name));
       },
+      async removeService(name) {
+        await team("DELETE", `/v1/services/${enc(name)}`);
+      },
+      async services() {
+        const status = await team<StatusResponse>("GET", "/v1/status");
+        return (status.services ?? []).map(toService);
+      },
       async send(name, message) {
         const sent = await team<EnqueueResponse>("POST", computer(name, "/inbox"), { ...message, sender: "studio" });
         return { id: sent.id, state: sent.state };
@@ -433,6 +456,9 @@ export function realA12s(owner: Controller): A12s {
     },
     async putAgent(name, spec, mode) {
       await call(owner.token, "PUT", computer(name), spec, mode === "create" ? { "if-none-match": "*" } : {});
+    },
+    async putService(name, spec) {
+      await call(owner.token, "PUT", `/v1/services/${enc(name)}`, spec);
     },
     events() {
       const closing = new AbortController();

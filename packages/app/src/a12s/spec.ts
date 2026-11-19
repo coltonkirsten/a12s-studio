@@ -1,7 +1,8 @@
-import { BROKER_URL, STUDIO_URL } from "@a12s-studio/contract/names";
+import { addonName, BROKER_URL, STUDIO_URL } from "@a12s-studio/contract/names";
+import type { AddonManifest } from "@a12s-studio/contract/state";
 import type { Agent, Team } from "../repo.ts";
 import { CHUNK_MAX } from "../transcript.ts";
-import type { AgentSpec } from "./port.ts";
+import type { AgentSpec, ServiceSpec } from "./port.ts";
 
 // The Claude Code bundle the installed a12s release documents; a version without a bundle fails the write.
 const CLAUDE_CODE_VERSION = "2.1.280";
@@ -98,10 +99,19 @@ done
 exit 0
 `;
 
+// One line per add-on the team has on, so an agent knows what its add-on tools are for.
+function addonLines(team: string, addons: AddonManifest[]): string {
+  if (addons.length === 0) return "";
+  const lines = addons.map(
+    (a) => `- ${a.name}: ${a.description} Its tools start with mcp__a12s-${addonName(team, a.id)}__.`,
+  );
+  return `\n\n# Add-ons\nYour team has these add-ons. Their tools are in your tool list.\n${lines.join("\n")}`;
+}
+
 // The whole spec of an agent computer. Fleet defaults are not used, so this is the one place a spec is decided.
 // The rules, the purpose and the role are not in it: a changed spec restarts the agent computer, and the hooks load
-// them instead (build-spec section 6).
-export function agentSpec(team: Pick<Team, "name">, agent: Agent): AgentSpec {
+// them instead (build-spec section 6). `addons` are the add-ons its team has on; it uses their instances only.
+export function agentSpec(team: Pick<Team, "name">, agent: Agent, addons: AddonManifest[]): AgentSpec {
   const resources = {
     ...(agent.cpu === null ? {} : { cpu: agent.cpu }),
     ...(agent.memory === null ? {} : { memory: agent.memory }),
@@ -139,7 +149,7 @@ export function agentSpec(team: Pick<Team, "name">, agent: Agent): AgentSpec {
     },
     image: "slim",
     credentials: ["anthropic"],
-    instructions: core(agent.slug, team.name),
+    instructions: core(agent.slug, team.name) + addonLines(agent.teamId, addons),
     files: {
       "bin/load-rules": LOAD_RULES,
       "bin/load-notes": LOAD_NOTES,
@@ -155,8 +165,21 @@ export function agentSpec(team: Pick<Team, "name">, agent: Agent): AgentSpec {
     power: { sleepAfterIdle: agent.sleepAfterIdle, compactBeforeSleep: { minTokens: agent.compactMinTokens } },
     inbox: { duringTurn: "steer" },
     grants: { send: [] },
-    uses: ["studio", { name: "broker", mcp: false }],
+    uses: ["studio", { name: "broker", mcp: false }, ...addons.map((a) => addonName(agent.teamId, a.id))],
     egress: { allow: ["*"] },
     ...(Object.keys(resources).length > 0 ? { resources } : {}),
+  };
+}
+
+// A team's instance of an add-on. It holds no credential and has no way out but the broker, which serves it under
+// its own name, so under its team's credentials and grants; it reports cost to the app.
+export function addonSpec(manifest: AddonManifest): ServiceSpec {
+  return {
+    image: manifest.image,
+    uses: [
+      { name: "broker", mcp: false },
+      { name: "studio", mcp: false },
+    ],
+    egress: { allow: [] },
   };
 }
