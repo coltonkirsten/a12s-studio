@@ -82,6 +82,9 @@ export type A12sEvent =
   // Messages the harness took into the running Turn.
   | { type: "turn.steered"; agent: string; at: number; turn: string; messageIds: string[] }
   | { type: "text.delta"; agent: string; at: number; turn: string; text: string }
+  // The model started a thinking block, or started writing a tool call whose tool.started follows.
+  | { type: "thinking"; agent: string; at: number; turn: string }
+  | { type: "tool.composing"; agent: string; at: number; turn: string; id: string; name: string }
   // A background sub-agent's calls carry its launching call as `parent`, and no Turn between the agent's Turns.
   | {
       type: "tool.started";

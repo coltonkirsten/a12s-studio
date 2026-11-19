@@ -28,7 +28,7 @@ export function Now({ agent }: { agent: AgentView }) {
         {turn ? (
           <>
             <p className="now-line">
-              {doing(agent)} <time>since {shortTime(turn.startedAt, now)}</time>
+              {doing(agent)} <time>since {shortTime(agent.since ?? turn.startedAt, now)}</time>
             </p>
             {/* A new line means a new tool call, so the log is read again when it changes. */}
             <ToolLog agent={agent} turn={turn.id} again={agent.line ?? ""} />

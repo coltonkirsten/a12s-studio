@@ -47,8 +47,9 @@ function call(turn: string | undefined, id: string, name: string, input: unknown
   };
 }
 
-function callEnd(turn: string, id: string, name: string): A12sEvent {
-  return { type: "tool.finished", agent: "web-lead", at: Date.now(), turn, id, name, isError: false, output: "" };
+function callEnd(turn: string, id: string, name: string, parent?: string): A12sEvent {
+  const ev = { type: "tool.finished", agent: "web-lead", at: Date.now(), turn, id, name, isError: false, output: "" };
+  return { ...ev, type: "tool.finished", ...(parent ? { parent } : {}) };
 }
 
 test("an agent that hands work to a background sub-agent stays working until the work ends", async (t) => {
@@ -106,6 +107,8 @@ test("a sub-agent inside the Turn is listed from its call and gone when the call
   s.a12s.emit(call(turn, "sub-2", "Grep", { pattern: "href" }, "call-2"));
   await until(() => agentView(s, "web-lead").work[0]?.line === "Searching");
   assert.equal(agentView(s, "web-lead").line, "Working with a sub-agent");
+  s.a12s.emit(callEnd(turn, "sub-2", "Grep", "call-2"));
+  await until(() => agentView(s, "web-lead").work[0]?.line === "Thinking");
   s.a12s.emit(callEnd(turn, "call-2", "Task"));
   await until(() => agentView(s, "web-lead").work.length === 0);
   assert.equal(agentView(s, "web-lead").presence, "working");

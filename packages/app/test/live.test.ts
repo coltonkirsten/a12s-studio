@@ -73,8 +73,42 @@ test("turn.started marks the delivered messages and sets the Turn's thread", asy
   await until(() => delivery(s, posted.message) === "delivered");
   const lead = agentView(s, "web-lead");
   assert.equal(lead?.presence, "working");
-  assert.equal(lead?.line, "Working");
+  assert.equal(lead?.line, "Thinking");
+  assert.equal(lead?.since, lead?.turn?.startedAt);
   assert.equal(lead?.turn?.threadId, posted.thread);
+});
+
+test("the line is what the agent does now, from the latest event, and since when it started", async (t) => {
+  const s = await setup(t);
+  const turn = s.a12s.startTurn("web-lead");
+  const now = () => {
+    const lead = agentView(s, "web-lead");
+    return [lead?.line, lead?.since];
+  };
+  const step = async (ev: A12sEvent, want: unknown[]) => {
+    s.a12s.emit(ev);
+    await until(() => JSON.stringify(now()) === JSON.stringify(want));
+  };
+  const base = { agent: "web-lead", turn };
+  await step({ ...base, type: "text.delta", at: 1000, text: "Let me look." }, ["Writing", 1000]);
+  await step({ ...base, type: "tool.composing", at: 2000, id: "c1", name: "Bash" }, ["Preparing Bash", 2000]);
+  await step({ ...base, type: "tool.started", at: 3000, id: "c1", name: "Bash", input: { command: "ls" } }, [
+    "Running ls",
+    3000,
+  ]);
+  // The call ended: its line goes, and the model reads its result.
+  await step({ ...base, type: "tool.finished", at: 4000, id: "c1", name: "Bash", isError: false, output: "" }, [
+    "Thinking",
+    4000,
+  ]);
+  await step({ ...base, type: "thinking", at: 5000 }, ["Thinking", 4000]);
+  await step({ ...base, type: "tool.composing", at: 6000, id: "c2", name: `${TOOL_PREFIX}post` }, [
+    "Writing a post",
+    6000,
+  ]);
+  s.a12s.finishTurn("web-lead");
+  await until(() => agentView(s, "web-lead")?.turn === null);
+  assert.deepEqual(now(), [null, null]);
 });
 
 test("phases become presence, tools the line, text.delta a live event", async (t) => {

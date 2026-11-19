@@ -22,7 +22,9 @@ export type AgentView = {
   model: string;
   presence: Presence;
   waitingFor?: WaitingFor;
+  // What it is doing now, and since when: the running call, the model's step or the Turn's start.
   line: string | null;
+  since: number | null;
   turn: { id: string; threadId: ThreadId | null; startedAt: number; text: string } | null;
   // Sub-agents and background work running now, oldest first.
   work: WorkItem[];
