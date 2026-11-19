@@ -156,8 +156,9 @@ export function waterfall(steps: RunStep[]): Row[] {
   for (const step of steps) {
     if (step.agent === null || placed.has(step.agent)) continue;
     placed.add(step.agent);
-    // Its task is the prompt it was started with.
-    const label = steps.find((s) => s.agent === step.agent && s.kind === "prompt")?.text ?? "";
+    // Its task is the prompt it was started with, when that is in this run; the harness's own notices are no task.
+    const prompt = steps.find((s) => s.agent === step.agent && s.kind === "prompt" && !s.text.startsWith("<"));
+    const label = prompt?.text || "started in an earlier Turn";
     rows.push({ kind: "agent", id: step.agent, label, text: lastText(steps, step.agent), depth: 1 });
     own(step.agent, 1);
   }

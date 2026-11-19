@@ -124,6 +124,8 @@ test("the waterfall nests each sub-agent's calls and last text under the call th
     step({ id: "c3", name: "Bash" }),
     step({ kind: "prompt", agent: "a9", name: "", text: "Find the links." }),
     step({ id: "c4", agent: "a9", name: "Grep" }),
+    step({ kind: "prompt", agent: "a8", name: "", text: "<task-notification>done</task-notification>" }),
+    step({ id: "c5", agent: "a8", name: "Read" }),
   ]);
   assert.deepEqual(
     rows.map((r) => [r.kind, r.kind === "agent" ? r.id : r.step.id, r.depth, r.kind === "agent" ? r.label : ""]),
@@ -135,6 +137,8 @@ test("the waterfall nests each sub-agent's calls and last text under the call th
       ["call", "c3", 0, ""],
       ["agent", "a9", 1, "Find the links."],
       ["call", "c4", 1, ""],
+      ["agent", "a8", 1, "started in an earlier Turn"],
+      ["call", "c5", 1, ""],
     ],
   );
   assert.equal(rows[1]?.kind === "agent" && rows[1].text, "Found it.");
