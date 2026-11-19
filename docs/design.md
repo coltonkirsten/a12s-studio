@@ -63,6 +63,10 @@ Across teams, nothing passes. You are the only bridge.
 **What teams share:** the owner's Claude login, the Mac, one agent image and the list of add-ons to choose from. A
 team is a wall for work and access, not for billing.
 
+**An agent's computer** runs Studio's one agent image: Python with pip, Node with npm, git, pandoc with a PDF engine
+and headless Chromium. Anything else an agent installs itself, without root, into its home folder, which is the only
+part of the computer that is kept: a package it installs is still there after a restart.
+
 **Creating a team** is one sheet: pick a template, which fills in a name and a purpose to edit, and name the lead;
 the blank template starts with no name or purpose and only a lead. Studio makes the team's id from its name. A template is a folder in the repo (`teams/<name>/`
 with a purpose and one role file per agent). The template only creates the team. After that the app's database is the

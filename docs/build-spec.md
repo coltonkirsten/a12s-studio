@@ -68,7 +68,7 @@ fleet/fleet.yaml       written once by setup; names the Fleet, nothing else
 when the Fleet `studio` has never been started, writes `fleet/fleet.yaml` (`metadata.name: studio`, no agent
 computers) and runs `a12s up` once to start the Controller; prints the `a12s creds set anthropic` command when the
 Controller has no `anthropic` credential; writes `config.json` (asking for the owner's Tailscale login unless given);
-builds the web app; installs the LaunchAgents `com.a12s-studio.app` and `com.a12s-studio.broker` from the
+builds the web app; builds the agent image (section 6) when Docker does not have it; installs the LaunchAgents `com.a12s-studio.app` and `com.a12s-studio.broker` from the
 `launchd/*.plist` templates (`KeepAlive`, logs to `~/Library/Logs/a12s-studio/`) and the nightly backup job
 `com.a12s-studio.backup` (below); and prints
 `tailscale serve --bg 7400` for the owner to run, since exposing the UI on the tailnet is the owner's call. After
@@ -133,7 +133,7 @@ packages/
     src/state.ts        StudioState and its parts (app <-> web)
     src/api.ts          owner API request/response types (app <-> web)
     src/broker-admin.ts admin API types (app <-> broker)
-    src/names.ts        slug rules, id helpers, the two ports and the four M2 constants
+    src/names.ts        slug rules, id helpers, the two ports, the four M2 constants and the agent image's tag
   app/
     src/main.ts         wires everything; the only file that reads env and config
     src/app.ts          createApp(deps): builds the app around an a12s port; main.ts and tests share it
@@ -171,6 +171,7 @@ packages/
     src/p1.ts  p2.ts  p3.ts  p4.ts      one exit script per phase
     src/steer.ts        two agents on tasks that depend on each other; reports the chain (section 12)
 teams/                  templates: blank/, website/, research-notes/
+agent-image/            the agents' image: Dockerfile, chromium-flags, seccomp.json (section 6)
 addons/example/         a reference add-on: Dockerfile, service.json, addon.json and one small server
 scripts/                setup.sh, backup.ts, restore.ts, drives.ts (a home drive saved and loaded through Docker),
                         run-trace.ts (prints runs from the owner API),
@@ -712,6 +713,7 @@ harness:
   version: <the version the installed a12s release documents; one constant>
   model: <agent.model>
   settings:
+    env: { TMPDIR: /home/agent/.tmp }
     hooks:
       SessionStart:
         - matcher: "startup|clear|compact"
@@ -728,7 +730,8 @@ harness:
       Stop:
         - hooks:
             - { type: command, command: /home/agent/bin/send-transcript, timeout: 30 }
-image: slim
+image: <AGENT_IMAGE>                                # a12s-studio/agent:<a12s release>-<n>
+security: { seccomp: <agent-image/seccomp.json> }
 credentials: [anthropic]
 instructions: <core> + <add-ons>
 files:
@@ -759,6 +762,8 @@ files:
         -H 'content-type: application/octet-stream' "<STUDIO_URL>/transcripts/$f?offset=$n"
     done
     exit 0
+  .tmp/README: |
+    Temporary files (TMPDIR). /tmp cannot run programs; this folder can.
   .gitconfig: |
     [url "<BROKER_URL>/github.com/"]
         insteadOf = https://github.com/
@@ -783,6 +788,30 @@ resources: <cpu, memory when set>
 Your team has these add-ons. Their tools are in your tool list.
 - <name>: <description> Its tools start with mcp__a12s-<instance name>__.
 ```
+
+**The agent image.** Every agent computer runs one image, `agent-image/Dockerfile`: a12s's `slim` of the installed
+release plus `python3-pip` and `python3-venv`, `pandoc`, WeasyPrint 66 (from pip on Debian's Pango; Debian's own
+package pulls in SciPy and a compiler through its fonttools) as pandoc's PDF engine, Debian's Chromium, and the DejaVu,
+Liberation and Noto Color Emoji fonts. Its tag, `AGENT_IMAGE` in `contract/names.ts`, is
+`a12s-studio/agent:<a12s release>-<n>`: `setup.sh` builds `FROM ghcr.io/coltonkirsten/a12s/slim:<a12s release>`
+under it on the Mac, when Docker does not have it, and nothing is pushed. a12s pins the image a tag first names and
+admits only an image of its own minor release, so any change to `agent-image/`, and a new a12s minor, takes a new
+tag; the next start of the app puts every spec again with it.
+
+- *Installs survive on the home drive.* The root filesystem is read-only and only the home drive is kept. Debian's
+  `EXTERNALLY-MANAGED` marker is removed, so `pip install` goes to `~/.local` by itself; `/usr/local/etc/npmrc` sets
+  npm's global prefix to `~/.local`; the image's `PATH` starts with `~/.local/bin`, and computerd passes `PATH` on
+  to the harness. pip's and npm's caches are already in the home (`~/.cache/pip`, `~/.npm`).
+- *TMPDIR.* a12s mounts `/tmp` `noexec`, so an installer or `go run` that runs what it unpacked there fails with
+  permission denied. `settings.env` sets `TMPDIR` to `~/.tmp`; computerd passes no other variable from the image, so
+  it is set in the harness settings, and `.tmp/README` is in `files` because a12s makes a file's folder before the
+  harness starts.
+- *Chromium.* `/etc/chromium.d/studio` gives Debian's `/usr/bin/chromium` wrapper `--proxy-server=$HTTPS_PROXY`
+  (Chromium ignores the variable, and the proxy is the only way out) and `--disable-dev-shm-usage`; puppeteer and
+  playwright given that path get both. Chromium's own sandbox stays on: it needs user namespaces, which Docker's
+  default seccomp profile refuses without `CAP_SYS_ADMIN`, so the spec sets `security.seccomp` to
+  `agent-image/seccomp.json`, Docker's default profile plus `clone`, `unshare`, `setns` and `chroot` (the a12s
+  cookbook's browser profile). Only the owner token may set it, and `putAgent` is an owner-token call.
 
 `memory/notes.md` is deliberately not in `files`: a12s rewrites spec files, and the notes belong to the agent. The
 harness takes at most 10,000 characters from one hook, so `load-notes` prints no more than 9,000.
@@ -839,6 +868,12 @@ Access
   addresses already goes that way.
 - A 403 from the broker means your team has no grant for that call. Use access to see what the team can reach
   or to request more. The owner decides.
+
+Your computer
+- It has python3 with pip, node with npm, git, curl, ripgrep, pandoc (PDF: --pdf-engine=weasyprint) and
+  headless Chromium at /usr/bin/chromium, which puppeteer and playwright take as executablePath.
+- Only your home folder is kept. Install there: pip install --user, npm install -g and programs in ~/.local/bin
+  are on your PATH and survive a restart. There is no root and no apt.
 ```
 
 **Instruction layers.** What an agent is told comes from five places. Each has one store, one way to the agent and
@@ -1762,7 +1797,7 @@ from the README alone.
   is shown. `npm run e2e -- p2` runs one script.
   - It needs Docker, a12s, a Claude token in `CLAUDE_CODE_OAUTH_TOKEN` and the three Studio ports free; `p2` and
     `p4` also need a throwaway GitHub repository and a fine-grained token for it in `E2E_GITHUB_REPO`
-    (`<owner>/<repo>`) and `E2E_GITHUB_TOKEN`; `p4` builds the image of `addons/example` and removes it at the end. The ports are constants, so a Studio installed on the same Mac is stopped while it runs.
+    (`<owner>/<repo>`) and `E2E_GITHUB_TOKEN`; `p4` builds the image of `addons/example` and removes it at the end. The agent image must be built (`setup.sh` builds it). The ports are constants, so a Studio installed on the same Mac is stopped while it runs.
     Whatever the chosen scripts need and is missing is named at the start, with its fix, before anything is created.
   - `run.ts` creates a Fleet named `studio-e2e` under a temp `STUDIO_HOME`, sets its `anthropic` credential, starts
     the real broker and the real app there, sets the default model to `haiku`, runs the scripts in order, and

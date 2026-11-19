@@ -8,6 +8,7 @@ import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { AGENT_IMAGE } from "@a12s-studio/contract/names";
 import { p1 } from "./p1.ts";
 import { p2 } from "./p2.ts";
 import { p3 } from "./p3.ts";
@@ -40,6 +41,7 @@ const problems = missing(
   {
     docker: spawnSync("docker", ["info"], { stdio: "ignore" }).status === 0,
     a12s: version.status === 0 ? (/^a12s v([0-9.]+)/.exec(version.stdout)?.[1] ?? null) : null,
+    agentImage: spawnSync("docker", ["image", "inspect", AGENT_IMAGE], { stdio: "ignore" }).status === 0,
     busyPorts: (await Promise.all(PORTS.map(async (port) => ((await portBusy(port)) ? [port] : [])))).flat(),
   },
   chosen,

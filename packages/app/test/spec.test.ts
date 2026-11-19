@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { test } from "node:test";
-import { BROKER_URL, STUDIO_URL } from "@a12s-studio/contract/names";
+import { AGENT_IMAGE, BROKER_URL, STUDIO_URL } from "@a12s-studio/contract/names";
 import { agentSpec } from "../src/a12s/spec.ts";
 import type { Agent } from "../src/repo.ts";
 
@@ -63,7 +63,10 @@ test("the hooks load the three rule layers and the notes at a session's start, a
 });
 
 test("the spec pins the harness, keeps the agent's own settings and adds nothing else", () => {
-  const { instructions: _, files, ...spec } = agentSpec(team, agent, []);
+  const { instructions: _, files, security, ...spec } = agentSpec(team, agent, []);
+  const seccomp = JSON.parse(readFileSync(new URL("../../../agent-image/seccomp.json", import.meta.url), "utf8"));
+  assert.deepEqual(security, { seccomp });
+  assert.equal(spec.harness.settings.env?.TMPDIR, "/home/agent/.tmp");
   assert.deepEqual(spec, {
     harness: {
       kind: "claude-code",
@@ -71,7 +74,7 @@ test("the spec pins the harness, keeps the agent's own settings and adds nothing
       model: "haiku",
       settings: spec.harness.settings,
     },
-    image: "slim",
+    image: AGENT_IMAGE,
     credentials: ["anthropic"],
     power: { sleepAfterIdle: "15m", compactBeforeSleep: { minTokens: 100000 } },
     inbox: { duringTurn: "steer" },
@@ -79,7 +82,13 @@ test("the spec pins the harness, keeps the agent's own settings and adds nothing
     uses: ["studio", { name: "broker", mcp: false }],
     egress: { allow: ["*"] },
   });
-  assert.deepEqual(Object.keys(files), ["bin/load-rules", "bin/load-notes", "bin/send-transcript", ".gitconfig"]);
+  assert.deepEqual(Object.keys(files), [
+    "bin/load-rules",
+    "bin/load-notes",
+    "bin/send-transcript",
+    ".tmp/README",
+    ".gitconfig",
+  ]);
   assert.equal(
     files[".gitconfig"],
     `[url "${BROKER_URL}/github.com/"]\n    insteadOf = https://github.com/\n    insteadOf = git@github.com:\n` +

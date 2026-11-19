@@ -51,6 +51,9 @@ export const STUDIO_HOST = `studio.a12s:${STUDIO_PORT}`;
 export const BROKER_HOST = `broker.a12s:${BROKER_PORT}`;
 export const STUDIO_URL = `http://${STUDIO_HOST}`;
 export const BROKER_URL = `http://${BROKER_HOST}`;
+// agent-image/ built FROM the slim image of the a12s release before the dash, as setup.sh builds it. A changed
+// image takes a new tag, because a12s keeps running the image a tag first named.
+export const AGENT_IMAGE = "a12s-studio/agent:0.12.1-1";
 // a12s stamps the calling agent computer's name in this header and removes any copy the agent sent.
 export const CALLER_HEADER = "a12s-caller";
 export const TOOL_PREFIX = "mcp__a12s-studio__";

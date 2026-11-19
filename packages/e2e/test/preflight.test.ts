@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { missing, type Probes } from "../src/preflight.ts";
 
-const ready: Probes = { docker: true, a12s: "0.12.0", busyPorts: [] };
+const ready: Probes = { docker: true, a12s: "0.12.0", agentImage: true, busyPorts: [] };
 const env = { CLAUDE_CODE_OAUTH_TOKEN: "set" };
 const github = { ...env, E2E_GITHUB_REPO: "example/scratch", E2E_GITHUB_TOKEN: "set" };
 const p1 = ["p1"];
@@ -14,6 +14,7 @@ test("each missing thing is named, all of them at once", () => {
     ["a later patch release", env, { ...ready, a12s: "0.12.1" }, p1, []],
     ["a later major release", env, { ...ready, a12s: "1.0.0" }, p1, []],
     ["Docker stopped", env, { ...ready, docker: false }, p1, ["Docker is not running."]],
+    ["no agent image", env, { ...ready, agentImage: false }, p1, ["The agent image is not built."]],
     ["no a12s", env, { ...ready, a12s: null }, p1, ["a12s is not installed."]],
     ["an old a12s", env, { ...ready, a12s: "0.10.9" }, p1, ["a12s 0.10.9 is too old; 0.12.0 or later is needed."]],
     [
@@ -39,7 +40,7 @@ test("each missing thing is named, all of them at once", () => {
     [
       "everything",
       {},
-      { docker: false, a12s: null, busyPorts: [7410] },
+      { docker: false, a12s: null, agentImage: false, busyPorts: [7410] },
       both,
       [
         "Docker is not running.",
@@ -61,7 +62,7 @@ test("each missing thing is named, all of them at once", () => {
 });
 
 test("every problem comes with its fix", () => {
-  for (const problem of missing({}, { docker: false, a12s: "0.1.0", busyPorts: [7400] }, both)) {
+  for (const problem of missing({}, { docker: true, a12s: "0.1.0", agentImage: false, busyPorts: [7400] }, both)) {
     assert.ok(problem.fix.length > 0, problem.what);
   }
 });
