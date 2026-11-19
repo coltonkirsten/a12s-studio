@@ -6,7 +6,6 @@ import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
-import type { TurnsResponse } from "@a12s-studio/contract/api";
 import type { AccessView, AuditPage } from "@a12s-studio/contract/broker-admin";
 import { addonName } from "@a12s-studio/contract/names";
 import type { AddonManifest, StudioState } from "@a12s-studio/contract/state";
@@ -64,9 +63,11 @@ export async function p4(studio: Studio): Promise<void> {
       await run("docker", ["image", "rm", manifest.image]);
     });
     await studio.api("PUT", `/addons/${manifest.id}`, manifest);
-    assert.deepEqual(
-      studio.state().addons.map((a) => a.id),
-      [manifest.id],
+    // The write answers before the stream sends the state that shows it.
+    await studio.until(
+      `the library holding ${manifest.id}`,
+      (s) => s.addons.length === 1 && s.addons[0]?.id === manifest.id,
+      10_000,
     );
   });
 
@@ -106,8 +107,9 @@ export async function p4(studio: Studio): Promise<void> {
       );
       await studio.open(asked.thread);
       await studio.until(`an answer from ${lead}`, (s) => answerFrom(s, lead, asked.message) !== undefined, ANSWER_MS);
-      const { turns } = await studio.api<TurnsResponse>("GET", `/agents/${lead}/turns`);
-      const first = turns.filter((t) => t.finishedAt >= started).at(-1)?.id ?? null;
+      // The answer is sent from inside the Turn: the app lists the Turn only once it has finished.
+      const first = messages(studio.state()).find((m) => m.id === asked.message)?.delivered?.turn ?? null;
+      await studio.until(`${lead} idle`, (s) => agentOf(s, lead)?.presence !== "working", ANSWER_MS);
       const calls = await toolCalls(studio, lead, first, started, Date.now());
       assert.ok(
         calls.some((c) => c.name === `mcp__a12s-${instance}__repo_facts` && !c.isError),
@@ -169,8 +171,8 @@ export async function p4(studio: Studio): Promise<void> {
   });
 
   await step(`Turned off: ${instance}'s container and grants are gone, and ${lead} no longer reaches it`, async () => {
-    await studio.api("DELETE", `/teams/${web}/addons/${manifest.id}`);
-    assert.deepEqual(teamOf(studio.state(), web).addons, []);
+    await studio.api("DELETE", `/teams/${web}/addons/${manifest.id}`, {});
+    await studio.until(`${web} with no add-on`, (s) => teamOf(s, web).addons.length === 0, 10_000);
     const listed = await run("docker", ["ps", "-a", "--filter", `name=^${container}$`, "--format", "{{.Names}}"]);
     assert.equal(listed.trim(), "", `${container} still exists`);
     const { grants } = await studio.api<AccessView>("GET", `/teams/${web}/access`);
