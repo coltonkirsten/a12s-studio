@@ -1,0 +1,2 @@
+# Sourced by /usr/bin/chromium, so puppeteer and playwright pointed at it get these flags too.
+export CHROMIUM_FLAGS="$CHROMIUM_FLAGS --disable-dev-shm-usage${HTTPS_PROXY:+ --proxy-server=$HTTPS_PROXY}"

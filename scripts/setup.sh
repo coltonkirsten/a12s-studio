@@ -1,6 +1,6 @@
 #!/bin/sh
-# Installs a12s Studio for this user: checks the tools, starts the Fleet once, writes the config and the
-# LaunchAgents (the app, the broker and the nightly backup). Safe to run again.
+# Installs a12s Studio for this user: checks the tools, starts the Fleet once, writes the config, builds the agent
+# image and writes the LaunchAgents (the app, the broker and the nightly backup). Safe to run again.
 # Usage: scripts/setup.sh [--owner-login you@example.com]
 set -eu
 
@@ -73,6 +73,14 @@ fi
 
 [ -d "$repo/node_modules" ] || (cd "$repo" && npm ci --no-audit --no-fund)
 (cd "$repo" && npm run build --silent >/dev/null)
+
+# The agent image is built here, not pulled: its tag says the a12s release its slim base comes from.
+image=$(cd "$repo" && node --input-type=module -e 'import { AGENT_IMAGE } from "./packages/contract/src/names.ts"; console.log(AGENT_IMAGE)')
+if ! docker image inspect "$image" >/dev/null 2>&1; then
+  release=${image##*:}
+  echo "Building the agent image $image…"
+  docker build -q --build-arg "A12S_RELEASE=${release%-*}" -t "$image" "$repo/agent-image" >/dev/null
+fi
 
 mkdir -p "$logs" "$agents"
 for template in "$repo"/launchd/*.plist; do

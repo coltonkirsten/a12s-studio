@@ -1,11 +1,15 @@
-import { addonName, BROKER_URL, STUDIO_URL } from "@a12s-studio/contract/names";
+import { AGENT_IMAGE, addonName, BROKER_URL, STUDIO_URL } from "@a12s-studio/contract/names";
 import type { AddonManifest } from "@a12s-studio/contract/state";
+import chromiumSeccomp from "../../../../agent-image/seccomp.json" with { type: "json" };
 import type { Agent, Team } from "../repo.ts";
 import { CHUNK_MAX } from "../transcript.ts";
 import type { AgentSpec, ServiceSpec } from "./port.ts";
 
 // The Claude Code bundle the installed a12s release documents; a version without a bundle fails the write.
 const CLAUDE_CODE_VERSION = "2.1.280";
+
+// /tmp is mounted noexec, so an installer that runs what it unpacked there fails; the home drive lets it run.
+const TMPDIR = "/home/agent/.tmp";
 
 const core = (
   agent: string,
@@ -58,7 +62,13 @@ Access
   ${BROKER_URL}/<host>/<path>, for example ${BROKER_URL}/api.github.com/user. git with https://github.com/
   addresses already goes that way.
 - A 403 from the broker means your team has no grant for that call. Use access to see what the team can reach
-  or to request more. The owner decides.`;
+  or to request more. The owner decides.
+
+Your computer
+- It has python3 with pip, node with npm, git, curl, ripgrep, pandoc (PDF: --pdf-engine=weasyprint) and
+  headless Chromium at /usr/bin/chromium, which puppeteer and playwright take as executablePath.
+- Only your home folder is kept. Install there: pip install --user, npm install -g and programs in ~/.local/bin
+  are on your PATH and survive a restart. There is no root and no apt.`;
 
 const BIN = "/home/agent/bin";
 const LAYERS = ["owner", "team", "role"] as const;
@@ -122,6 +132,7 @@ export function agentSpec(team: Pick<Team, "name">, agent: Agent, addons: AddonM
       version: CLAUDE_CODE_VERSION,
       model: agent.model,
       settings: {
+        env: { TMPDIR },
         hooks: {
           SessionStart: [
             {
@@ -147,13 +158,17 @@ export function agentSpec(team: Pick<Team, "name">, agent: Agent, addons: AddonM
         },
       },
     },
-    image: "slim",
+    image: AGENT_IMAGE,
+    // Chromium's own sandbox needs user namespaces, which Docker's default profile refuses without CAP_SYS_ADMIN.
+    security: { seccomp: chromiumSeccomp },
     credentials: ["anthropic"],
     instructions: core(agent.slug, team.name) + addonLines(agent.teamId, addons),
     files: {
       "bin/load-rules": LOAD_RULES,
       "bin/load-notes": LOAD_NOTES,
       "bin/send-transcript": SEND_TRANSCRIPT,
+      // Writing a file makes its folder, which must exist before the harness starts with it as TMPDIR.
+      ".tmp/README": "Temporary files (TMPDIR). /tmp cannot run programs; this folder can.\n",
       ".gitconfig": `[url "${BROKER_URL}/github.com/"]
     insteadOf = https://github.com/
     insteadOf = git@github.com:

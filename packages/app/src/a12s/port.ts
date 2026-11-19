@@ -54,6 +54,7 @@ export type AgentSpec = {
     version: string;
     model: string;
     settings: {
+      env?: Record<string, string>;
       hooks: {
         SessionStart: HookGroup[];
         UserPromptSubmit: HookGroup[];
@@ -62,6 +63,8 @@ export type AgentSpec = {
     };
   };
   image: string;
+  // A seccomp profile in Docker's JSON format; only an owner-token write may set it.
+  security?: { seccomp: object };
   credentials: string[];
   instructions: string;
   files: Record<string, string>;
