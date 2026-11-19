@@ -79,7 +79,7 @@ async function hook(t: { after(fn: () => unknown): void }, s: Studio, agent: str
   const script = join(home, "send-transcript");
   const dev = s.app.repo.forTeam("web").agent("web-dev");
   assert.ok(dev);
-  const text = agentSpec({ name: "Web" }, dev).files["bin/send-transcript"] ?? "";
+  const text = agentSpec({ name: "Web" }, dev, []).files["bin/send-transcript"] ?? "";
   writeFileSync(script, text.replaceAll(STUDIO_URL, `http://127.0.0.1:${(proxy.address() as AddressInfo).port}`));
   const projects = join(home, ".claude", "projects", "-home-agent");
   mkdirSync(join(projects, SESSION, "subagents"), { recursive: true });

@@ -26,6 +26,7 @@ const spec = agentSpec(
     memory: null,
     createdAt: 0,
   },
+  [],
 );
 
 const listen = (server: Server) =>

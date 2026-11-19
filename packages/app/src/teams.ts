@@ -1,9 +1,10 @@
 import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { CreateTeamBody, HireBody, PatchAgentBody, PatchTeamBody, Template } from "@a12s-studio/contract/api";
-import { AGENT_SLUG, agentId, teamSlug } from "@a12s-studio/contract/names";
+import { ADDON_SLUG_PREFIX, AGENT_SLUG, agentId, teamSlug } from "@a12s-studio/contract/names";
 import { type A12s, A12sError } from "./a12s/port.ts";
 import { agentSpec } from "./a12s/spec.ts";
+import type { Addons } from "./addons.ts";
 import type { BrokerClient } from "./broker-client.ts";
 import type { Dispatcher } from "./dispatcher.ts";
 import { StudioError } from "./errors.ts";
@@ -16,6 +17,9 @@ const RESERVED_AGENT_SLUGS = ["owner", "system"];
 const PAUSED_WHILE_WORKING =
   "You were paused while working, and any background work was stopped. Continue where you stopped.";
 
+// The add-ons a team has on, which every spec of its agents names.
+const on = (scoped: TeamRepo) => scoped.addons().map((row) => row.manifest);
+
 type TemplateFiles = Template & { roles: { slug: string; role: string }[] };
 
 export function createTeams(deps: {
@@ -23,9 +27,10 @@ export function createTeams(deps: {
   a12s: A12s;
   broker: BrokerClient;
   dispatcher: Dispatcher;
+  addons: Addons;
   templatesDir: string;
 }) {
-  const { repo, a12s, broker, dispatcher, templatesDir } = deps;
+  const { repo, a12s, broker, dispatcher, addons, templatesDir } = deps;
   // Slugs of creates under way; their rows are written only after the a12s work.
   const creating = new Set<string>();
 
@@ -56,12 +61,12 @@ export function createTeams(deps: {
 
   // The agent's row and its role, checked before any a12s work so a refusal leaves nothing behind.
   function newAgent(scoped: TeamRepo, teamId: string, slug: string, role: string, model: string) {
-    if (!AGENT_SLUG.test(slug) || RESERVED_AGENT_SLUGS.includes(slug)) {
+    if (!AGENT_SLUG.test(slug) || RESERVED_AGENT_SLUGS.includes(slug) || slug.startsWith(ADDON_SLUG_PREFIX)) {
       throw new StudioError(
         400,
         "bad_slug",
         `"${slug}" is not a usable agent name.`,
-        'Use a lower-case letter, then up to 29 letters, digits or hyphens; not "owner" or "system".',
+        `Use a lower-case letter, then up to 29 letters, digits or hyphens; not "owner" or "system", and not starting with "${ADDON_SLUG_PREFIX}".`,
       );
     }
     if (scoped.slugUsed(slug)) {
@@ -179,7 +184,7 @@ export function createTeams(deps: {
         const created: Agent[] = [];
         try {
           for (const { agent } of hired) {
-            await a12s.putAgent(agent.id, agentSpec(team, agent), "create");
+            await a12s.putAgent(agent.id, agentSpec(team, agent, []), "create");
             created.push(agent);
           }
         } catch (error) {
@@ -200,7 +205,7 @@ export function createTeams(deps: {
     async hire(teamId: string, input: HireBody): Promise<Agent> {
       const { team, scoped } = live(teamId);
       const { agent, role } = newAgent(scoped, team.id, input.slug, input.role, input.model);
-      await a12s.putAgent(agent.id, agentSpec(team, agent), "create");
+      await a12s.putAgent(agent.id, agentSpec(team, agent, on(scoped)), "create");
       scoped.tx(() => insertAgent(scoped, agent, role));
       return agent;
     },
@@ -220,10 +225,11 @@ export function createTeams(deps: {
       scoped.tx(() => scoped.removeAgent(id, Date.now()));
     },
 
-    // The broker first: if the purge fails the team stays, so its credentials are never left with no team to remove
-    // them from.
+    // Add-ons, then the broker: if a step fails the team stays, so its instances and credentials are never left with
+    // no team to remove them from.
     async deleteTeam(teamId: string): Promise<void> {
       const { team, scoped } = live(teamId);
+      await addons.turnOffAll(team.id);
       await broker.forTeam(team.id).purge();
       for (const agent of scoped.agents()) await removeComputer(team, agent.id);
       await a12s.removeToken(team.id);
@@ -236,7 +242,9 @@ export function createTeams(deps: {
       const { team, scoped } = live(teamId);
       const next = { ...team, ...patch };
       if (next.name !== team.name) {
-        for (const agent of scoped.agents()) await a12s.putAgent(agent.id, agentSpec(next, agent), "replace");
+        for (const agent of scoped.agents()) {
+          await a12s.putAgent(agent.id, agentSpec(next, agent, on(scoped)), "replace");
+        }
       }
       scoped.updateTeam(patch);
       await dispatcher.run();
@@ -251,7 +259,7 @@ export function createTeams(deps: {
       if (role !== undefined) checkBody("role", role);
       if (Object.keys(settings).length > 0) {
         const next = { ...agent, ...settings };
-        await a12s.putAgent(id, agentSpec(team, next), "replace");
+        await a12s.putAgent(id, agentSpec(team, next, on(scoped)), "replace");
         scoped.updateAgent(next);
       }
       if (role !== undefined) write(scoped.roleRules(id), role, "owner");
@@ -261,9 +269,10 @@ export function createTeams(deps: {
     // every agent. a12s compares a spec's hash with what runs and leaves an unchanged agent computer alone.
     async putSpecs(): Promise<void> {
       for (const team of repo.teams()) {
-        for (const agent of repo.forTeam(team.id).agents()) {
+        const scoped = repo.forTeam(team.id);
+        for (const agent of scoped.agents()) {
           try {
-            await a12s.putAgent(agent.id, agentSpec(team, agent), "replace");
+            await a12s.putAgent(agent.id, agentSpec(team, agent, on(scoped)), "replace");
           } catch (error) {
             console.error(`teams: putting the spec of ${agent.id} again failed:`, error);
           }

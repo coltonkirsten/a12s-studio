@@ -200,6 +200,30 @@ export const migrations: string[] = [
     PRIMARY KEY (agent_id, path)
   ) STRICT;
   `,
+  // Add-ons: the library, which teams have each on, and the cost their instances report.
+  `
+  CREATE TABLE addons (
+    id TEXT PRIMARY KEY,
+    manifest TEXT NOT NULL,
+    added_at INTEGER NOT NULL
+  ) STRICT;
+  CREATE TABLE team_addons (
+    team_id TEXT NOT NULL REFERENCES teams(id),
+    addon_id TEXT NOT NULL REFERENCES addons(id),
+    grant_ids TEXT NOT NULL,
+    created_at INTEGER NOT NULL,
+    PRIMARY KEY (team_id, addon_id)
+  ) STRICT;
+  CREATE TABLE addon_usage (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    team_id TEXT NOT NULL REFERENCES teams(id),
+    addon_id TEXT NOT NULL,
+    at INTEGER NOT NULL,
+    usd REAL NOT NULL CHECK (usd > 0),
+    note TEXT NOT NULL
+  ) STRICT;
+  CREATE INDEX addon_usage_spend ON addon_usage (team_id, at);
+  `,
 ];
 
 // Migrations run with foreign keys off, as SQLite's procedure for rebuilding a table requires (dropping the old table

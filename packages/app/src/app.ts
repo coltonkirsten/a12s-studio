@@ -1,5 +1,6 @@
 import type { DatabaseSync } from "node:sqlite";
 import type { A12s } from "./a12s/port.ts";
+import { createAddons } from "./addons.ts";
 import { createAgentServer } from "./agent-server.ts";
 import { createBrokerClient } from "./broker-client.ts";
 import { createDispatcher } from "./dispatcher.ts";
@@ -30,7 +31,8 @@ export function createApp(deps: {
   const broker = createBrokerClient(deps.brokerSocket, stream.changed);
   const dispatcher = createDispatcher(repo, a12s);
   const scheduler = createScheduler({ repo, broker, dispatcher, changed: stream.changed });
-  const teams = createTeams({ repo, a12s, broker, dispatcher, templatesDir: deps.templatesDir });
+  const addons = createAddons({ repo, a12s, broker });
+  const teams = createTeams({ repo, a12s, broker, dispatcher, addons, templatesDir: deps.templatesDir });
   const live = createLive({ repo, a12s, dispatcher, changed: stream.changed, text: stream.live });
   const runs = createRuns({ repo, live, dir: deps.runsDir });
   const { filesDir } = deps;
@@ -42,6 +44,7 @@ export function createApp(deps: {
     dispatcher,
     scheduler,
     teams,
+    addons,
     live,
     stream,
     runs,
@@ -49,5 +52,5 @@ export function createApp(deps: {
     ownerLogin: deps.ownerLogin,
     webDir: deps.webDir,
   });
-  return { repo, broker, dispatcher, scheduler, teams, live, stream, runs, agentServer, ownerServer };
+  return { repo, broker, dispatcher, scheduler, teams, addons, live, stream, runs, agentServer, ownerServer };
 }

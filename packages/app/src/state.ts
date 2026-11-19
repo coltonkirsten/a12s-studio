@@ -1,13 +1,16 @@
 import type { ServerResponse } from "node:http";
 import type { MessagesPage } from "@a12s-studio/contract/api";
+import { addonName } from "@a12s-studio/contract/names";
 import type {
   LiveText,
   MessageView,
   NeedsYouItem,
   StudioState,
+  TeamAddon,
   TeamView,
   ThreadView,
 } from "@a12s-studio/contract/state";
+import type { ServiceStatus } from "./a12s/port.ts";
 import type { BrokerClient } from "./broker-client.ts";
 import { blockedReason, freeDiskGb, overBudget } from "./dispatcher.ts";
 import { doingOf, type Live, presenceOf } from "./live.ts";
@@ -36,6 +39,13 @@ export function messageView(m: Message): MessageView {
         ? { turn: m.turnId, steered: m.steered, at: m.deliveredAt ?? m.createdAt, costUsd: m.turnCostUsd }
         : null,
   };
+}
+
+// An add-on instance's status from its a12s phase; one a12s has not reported yet is starting.
+function addonStatus(service: ServiceStatus | undefined): Pick<TeamAddon, "status" | "error"> {
+  if (service?.phase === "Ready") return { status: "ready" };
+  if (service?.phase === "Error") return { status: "error", error: service.error ?? "a12s reports an error." };
+  return { status: "starting" };
 }
 
 // The newest `MESSAGES` before `before`, and whether older ones exist.
@@ -95,6 +105,14 @@ export function deriveState(
     const spent = scoped.spentToday(now);
     const held = overBudget(team, spent);
     if (held) needsYou.push({ kind: "budget", teamId: team.id, dailyUsd: team.dailyBudgetUsd, spentTodayUsd: spent });
+    const addonSpend = scoped.addonSpentToday(now);
+    const addons: TeamAddon[] = scoped.addons().map(({ manifest: { id } }) => {
+      const status = addonStatus(live.instance(addonName(team.id, id)));
+      if (status.status === "error") {
+        needsYou.push({ kind: "addon_error", teamId: team.id, addonId: id, error: status.error ?? "" });
+      }
+      return { id, ...status, spentTodayUsd: addonSpend.get(id) ?? 0 };
+    });
     const blocked = (asleep: boolean) => blockedReason(settings, team, spent, asleep ? { awake, freeDiskGb } : null);
     return {
       id: team.id,
@@ -157,7 +175,7 @@ export function deriveState(
         preview: (t.last?.body ?? "").slice(0, PREVIEW),
         unread: t.unread,
       })),
-      addons: [],
+      addons,
     };
   });
 
@@ -180,7 +198,7 @@ export function deriveState(
     a12s: live.up() ? "up" : "down",
     broker: broker.up() ? "up" : "down",
     settings,
-    addons: [],
+    addons: repo.addons(),
     teams,
     needsYou,
     open,
