@@ -7,6 +7,7 @@ import { teamOf } from "@a12s-studio/contract/names";
 export type Route = { team: string | null; thread: string | null; settings: boolean; inspect: string | null };
 
 const SETTINGS = "settings";
+const RUNS = "runs";
 
 export function parseRoute(hash: string): Route {
   const [path = "", query = ""] = hash.replace(/^#?\/?/, "").split("?");
@@ -14,6 +15,20 @@ export function parseRoute(hash: string): Route {
   const settings = part === SETTINGS;
   const inspect = new URLSearchParams(query).get("inspect") || null;
   return { team: team || null, thread: (!settings && part) || null, settings, inspect };
+}
+
+/** `#/runs`, `#/runs/<group>`, `#/runs/<group>/<turn>`: the run explorer; null for any other page. */
+export function parseRuns(hash: string): { group: string | null; turn: string | null } | null {
+  const [path = ""] = hash.replace(/^#?\/?/, "").split("?");
+  const [head, group, turn] = path.split("/").map(decodeURIComponent);
+  return head === RUNS ? { group: group || null, turn: turn || null } : null;
+}
+
+export function runsHref(group?: string, turn?: string): string {
+  return ["#", RUNS, group, turn]
+    .filter((part) => part !== undefined)
+    .map((p) => (p === "#" ? p : encodeURIComponent(p)))
+    .join("/");
 }
 
 export function href(team?: string | null, thread?: string | null): string {

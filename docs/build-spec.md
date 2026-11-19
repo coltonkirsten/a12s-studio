@@ -1087,7 +1087,7 @@ GET    /agents/:agent                 (the six fields PATCH takes, as they are n
 GET    /agents/:agent/turns           GET /agents/:agent/turns/:turn/events
 GET    /agents/:agent/inbox           DELETE /agents/:agent/inbox/:id    POST /agents/:agent/inbox/clear
 GET    /agents/:agent/files?path=     PUT /agents/:agent/files?path=   { content, encoding: "utf-8" | "base64" }
-GET    /runs?thread=|agent=           GET /runs/:turn?full=1             GET /runs/:turn/transcript   (section 7.8)
+GET    /runs[?thread=|agent=]         GET /runs/:turn?full=1             GET /runs/:turn/transcript   (section 7.8)
 GET    /agents/:agent/terminal?rows=&cols=   (WebSocket, bridged to a12s's terminal upgrade)
 GET    /files/:message/:name          (an attachment, downloaded)
 GET    /teams/:team/access            (credentials without values, grants, requests)
@@ -1217,12 +1217,29 @@ no current team or agent: deleting a team or firing an agent leaves them. A send
 disk is under `min_free_disk_gb`; the bytes stay in the agent's transcript and go with a later send. Measured on
 real Turns of a research lead (sonnet): 5 to 280 KB a Turn, median 29 KB.
 
-*Reading.* `GET /runs?thread=` or `?agent=` answers `RunsResponse`, the 50 newest runs with their index and what
-a12s said of the Turn (status, times, cost; null until the Turn is stored). `GET /runs/:turn` answers `RunResponse`:
-the run and its steps (`RunStep`), texts cut at 4,000 characters; with `full=1` uncut, with every context line the
-harness added. `GET /runs/:turn/transcript` downloads the lines as they were written. A run is looked up by its own
+*Reading.* `GET /runs` answers `RunsResponse`, the 500 newest runs of every current team; `?thread=` the thread's
+500 newest, `?agent=` the agent's 50 newest. Each has its index and what a12s said of the Turn (status, times, cost;
+null until the Turn is stored). The index also holds each tool's longest call and largest input, and the longest
+stall: the longest time between two lines that no tool call spans. `GET /runs/:turn` answers `RunResponse`: the run,
+its steps (`RunStep`; a tool step has its call's id and the sub-agent the call started), texts cut at 4,000
+characters, and each agent's share of the cost: the run's cost split by the tokens each agent's model calls used, with
+input 1, cache writes 1.25, cache reads 0.1 and output 5, as every Claude model prices them (exact when one model
+served the whole run). With `full=1` the texts are uncut, with every context line the harness added. `GET /runs/:turn/transcript` downloads the lines as they were written. A run is looked up by its own
 row, so it is found after its team is gone. `scripts/run-trace.ts <turn | thread | agent>` prints the same, one line
 per step, `--full` for everything. Transcript text is the agent's data, shown and never acted on.
+
+*The run explorer* (`#/runs` in the UI, beside Needs You) reads only these routes and the thread's messages.
+
+- **Runs**: one row per thread with runs (a team's Turns in no thread are one row), newest activity first, with
+  its team, Turns, agents, summed cost and red flags from the index: errors, tool or API retries, a stall of 2
+  minutes or more, a call of 2 minutes or more, a `post` whose input has 4,000 characters or more.
+- **A thread**: one lane for the owner and one per agent, a block per Turn from its start to its end with its cost,
+  outlined red when it failed, had errors or stalled. An arrow per message runs from the time it was sent on the
+  sender's lane to the time it was taken on the receiver's; hovering shows its text. A stretch over 90 seconds in which
+  no Turn runs and no message is sent or taken is drawn 22 px wide, labelled with how long it was.
+- **A Turn**: its tool calls and API errors as a waterfall on the Turn's own time, each sub-agent's calls nested
+  under the call that started it with its last text and its share of the cost (a sub-agent started in an earlier
+  Turn is listed at the end, under the prompt it was given). Clicking a call shows its input and output uncut.
 
 ## 8. Templates
 

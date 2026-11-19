@@ -604,9 +604,10 @@ export function createRepo(db: DatabaseSync, onWrite: () => void = () => {}) {
         const row = one(`SELECT ${RUN} WHERE r.team_id = ? AND r.turn_id = ?`, teamId, turnId);
         return row && toRun(row);
       },
-      // Newest first.
-      runs(by: { agentId: string } | { threadId: string }, limit: number): RunSummary[] {
-        const [where, id] = "agentId" in by ? ["r.agent_id", by.agentId] : ["t.thread_id", by.threadId];
+      // Newest first; with no agent or thread, all of the team's.
+      runs(by: { agentId: string } | { threadId: string } | null, limit: number): RunSummary[] {
+        const [where, id] =
+          by === null ? ["1", 1] : "agentId" in by ? ["r.agent_id", by.agentId] : ["t.thread_id", by.threadId];
         return all(
           `SELECT ${RUN} WHERE r.team_id = ? AND ${where} = ? ORDER BY r.last_at DESC, r.rowid DESC LIMIT ?`,
           teamId,

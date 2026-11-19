@@ -1,11 +1,12 @@
 import { useEffect, useState } from "react";
 import { Rev } from "./api.ts";
-import { parseRoute } from "./logic/route.ts";
+import { parseRoute, parseRuns } from "./logic/route.ts";
 import { Icon } from "./parts/icons.tsx";
 import { HireSheet } from "./screens/hire.tsx";
 import { Inspector } from "./screens/inspector/inspector.tsx";
 import { NeedsYou } from "./screens/needs-you.tsx";
 import { NewTeamSheet } from "./screens/new-team.tsx";
+import { RunsScreen } from "./screens/runs.tsx";
 import { Sidebar } from "./screens/sidebar.tsx";
 import { TeamScreen } from "./screens/team.tsx";
 import { TeamSettings } from "./screens/team-settings.tsx";
@@ -22,7 +23,8 @@ export function App() {
     return () => removeEventListener("hashchange", onHash);
   }, []);
 
-  const route = parseRoute(hash);
+  const runs = parseRuns(hash);
+  const route = parseRoute(runs ? "" : hash);
   const { state, connected } = useStudio(route.thread === "new" ? null : route.thread);
   if (!state) return <div className="app" />;
 
@@ -32,7 +34,11 @@ export function App() {
   const close = () => setSheet(null);
   return (
     <Rev.Provider value={state.rev}>
-      <div className="app" data-depth={!team ? 0 : route.thread ? 2 : 1} data-sidebar={sidebar ? "shown" : "hidden"}>
+      <div
+        className="app"
+        data-depth={runs ? 1 : !team ? 0 : route.thread ? 2 : 1}
+        data-sidebar={sidebar ? "shown" : "hidden"}
+      >
         <button
           type="button"
           className="icon-button sidebar-toggle"
@@ -42,9 +48,17 @@ export function App() {
         >
           <Icon name="sidebar" />
         </button>
-        <Sidebar state={state} route={shown} connected={connected} onNewTeam={() => setSheet("team")} />
+        <Sidebar
+          state={state}
+          route={shown}
+          runs={runs !== null}
+          connected={connected}
+          onNewTeam={() => setSheet("team")}
+        />
         <main className="main">
-          {!team ? (
+          {runs ? (
+            <RunsScreen state={state} group={runs.group} turn={runs.turn} />
+          ) : !team ? (
             <NeedsYou state={state} />
           ) : route.settings ? (
             <TeamSettings key={team.id} team={team} />

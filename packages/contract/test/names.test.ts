@@ -31,6 +31,7 @@ test("teamSlug runs words together, fits TEAM_SLUG and numbers a reserved or tak
     ["3D Prints", "dprints"],
     ["A very long team name that keeps going", "averylongteamnametha"],
     ["Studio", "studio2"],
+    ["Runs", "runs2"],
     ["!!", "team"],
     ["X", "team"],
   ];

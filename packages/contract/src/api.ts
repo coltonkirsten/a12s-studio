@@ -108,8 +108,11 @@ export type RunIndex = {
   unparsed: number;
   firstAt: number | null;
   lastAt: number | null;
-  // Each tool in the order it was first called; ms is the time from the calls to their results.
-  tools: { name: string; calls: number; errors: number; ms: number }[];
+  // Each tool in the order it was first called; ms is the time from the calls to their results, maxMs the longest
+  // one call took and maxInput the most characters one call's input had.
+  tools: { name: string; calls: number; errors: number; ms: number; maxMs: number; maxInput: number }[];
+  // The longest time no line was written while no tool call was running: the model or the API was slow.
+  stallMs: number;
   errors: number;
   retries: { tool: number; api: number };
   hooks: { runs: number; errors: number };
@@ -135,7 +138,10 @@ export type RunsResponse = { runs: RunSummary[] };
 // One step of a Turn as its transcript records it, in the order written. agent is the sub-agent's id, null for the
 // agent itself. A tool step's text is its input and output its result (null until there is one); a hook step's text
 // is what the hook printed. Texts are cut at a few thousand characters unless the full run is asked for.
+// A tool step's id is its call's; child is the sub-agent that call started, whose steps have it as their agent.
 export type RunStep = {
+  id: string | null;
+  child: string | null;
   at: number | null;
   kind: "prompt" | "text" | "tool" | "hook" | "context" | "error";
   agent: string | null;
@@ -145,4 +151,10 @@ export type RunStep = {
   isError: boolean;
   ms: number | null;
 };
-export type RunResponse = { run: RunSummary; steps: RunStep[] };
+// costUsd: each agent's share of the run's cost (null for the agent itself), by the tokens its model calls used, priced
+// alike; null while the run's cost is not known.
+export type RunResponse = {
+  run: RunSummary;
+  steps: RunStep[];
+  agents: { agent: string | null; costUsd: number | null }[];
+};
