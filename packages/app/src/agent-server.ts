@@ -1,4 +1,4 @@
-import { createServer, type Server, type ServerResponse } from "node:http";
+import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import type { A12s } from "./a12s/port.ts";
 import type { BrokerClient } from "./broker-client.ts";
@@ -9,8 +9,10 @@ import { sendAttachment } from "./files.ts";
 import type { Live } from "./live.ts";
 import type { Repo } from "./repo.ts";
 import { text } from "./rules.ts";
+import type { Runs } from "./runs.ts";
 import type { Scheduler } from "./scheduler.ts";
 import { mcpServer } from "./tools/mcp.ts";
+import { CHUNK_MAX } from "./transcript.ts";
 
 function json(res: ServerResponse, status: number, body: unknown): void {
   res.writeHead(status, { "content-type": "application/json" }).end(JSON.stringify(body));
@@ -18,6 +20,19 @@ function json(res: ServerResponse, status: number, body: unknown): void {
 
 const FILE = /^\/files\/([^/]+)\/([^/]+)$/;
 const RULES = /^\/rules\/([^/]+)$/;
+const TRANSCRIPT = /^\/transcripts\/(.+)$/;
+
+// A request body up to `max` bytes; a longer one is refused before it is all read.
+async function body(req: IncomingMessage, max: number): Promise<Buffer> {
+  const chunks: Buffer[] = [];
+  let size = 0;
+  for await (const chunk of req as AsyncIterable<Buffer>) {
+    size += chunk.length;
+    if (size > max) throw new StudioError(413, "too_large", `A body is at most ${max} bytes here.`, "Send less.");
+    chunks.push(chunk);
+  }
+  return Buffer.concat(chunks);
+}
 
 // The listener agents reach as the external Service `studio`. It serves no owner route.
 export function createAgentServer(deps: {
@@ -27,11 +42,13 @@ export function createAgentServer(deps: {
   dispatcher: Dispatcher;
   scheduler: Scheduler;
   live: Pick<Live, "agent">;
+  runs: Runs;
   filesDir: string;
 }): Server {
   return createServer(async (req, res) => {
     try {
-      const path = new URL(req.url ?? "/", "http://studio").pathname;
+      const url = new URL(req.url ?? "/", "http://studio");
+      const path = url.pathname;
       if (req.method === "GET" && path === "/healthz") return json(res, 200, { ok: true });
       const caller = resolveCaller(deps.repo, req.headersDistinct);
       const file = req.method === "GET" ? FILE.exec(path) : null;
@@ -44,6 +61,19 @@ export function createAgentServer(deps: {
       if (layer === "owner" || layer === "team" || layer === "role") {
         const body = text(layer, deps.repo.forTeam(caller.teamId), caller);
         return res.writeHead(200, { "content-type": "text/plain; charset=utf-8" }).end(body);
+      }
+      // The Stop hook's two calls (build-spec section 7.8).
+      if (req.method === "GET" && path === "/transcripts") {
+        return res.writeHead(200, { "content-type": "text/plain; charset=utf-8" }).end(deps.runs.sources(caller));
+      }
+      const transcript = req.method === "POST" ? TRANSCRIPT.exec(path)?.[1] : undefined;
+      if (transcript !== undefined) {
+        const offset = Number(url.searchParams.get("offset") || Number.NaN);
+        if (!Number.isSafeInteger(offset) || offset < 0) {
+          throw new StudioError(400, "bad_offset", "offset: not a byte count.", "Send ?offset=<bytes Studio holds>.");
+        }
+        const chunk = await body(req, CHUNK_MAX);
+        return json(res, 200, { bytes: deps.runs.receive(caller, decodeURIComponent(transcript), offset, chunk) });
       }
       if (path !== "/mcp") throw new StudioError(404, "not_found", `No route ${path}.`);
       if (req.method !== "POST") throw new StudioError(405, "method", "Use POST for /mcp.");

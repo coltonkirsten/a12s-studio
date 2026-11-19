@@ -179,6 +179,27 @@ export const migrations: string[] = [
   CREATE INDEX messages_a12s ON messages (a12s_message_id);
   CREATE INDEX messages_turn ON messages (turn_id);
   `,
+  // Run capture: each Turn's part of the harness transcript, as a file app/runs/<turn>.jsonl, with its index here.
+  `
+  CREATE TABLE runs (
+    turn_id TEXT PRIMARY KEY,
+    team_id TEXT NOT NULL REFERENCES teams(id),
+    agent_id TEXT NOT NULL REFERENCES agents(id),
+    session TEXT NOT NULL,
+    bytes INTEGER NOT NULL,
+    last_at INTEGER NOT NULL,
+    summary TEXT NOT NULL
+  ) STRICT;
+  CREATE INDEX runs_agent ON runs (agent_id, last_at DESC);
+  CREATE INDEX runs_age ON runs (last_at);
+  CREATE TABLE run_sources (
+    team_id TEXT NOT NULL REFERENCES teams(id),
+    agent_id TEXT NOT NULL REFERENCES agents(id),
+    path TEXT NOT NULL,
+    bytes INTEGER NOT NULL,
+    PRIMARY KEY (agent_id, path)
+  ) STRICT;
+  `,
 ];
 
 // Migrations run with foreign keys off, as SQLite's procedure for rebuilding a table requires (dropping the old table

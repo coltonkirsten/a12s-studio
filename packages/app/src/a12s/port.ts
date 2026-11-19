@@ -50,6 +50,7 @@ export type AgentSpec = {
       hooks: {
         SessionStart: HookGroup[];
         UserPromptSubmit: HookGroup[];
+        Stop: HookGroup[];
       };
     };
   };

@@ -13,7 +13,7 @@ const spec: AgentSpec = {
     kind: "claude-code",
     version: "2.1.280",
     model: "haiku",
-    settings: { hooks: { SessionStart: [], UserPromptSubmit: [] } },
+    settings: { hooks: { SessionStart: [], UserPromptSubmit: [], Stop: [] } },
   },
   image: "slim",
   credentials: ["anthropic"],

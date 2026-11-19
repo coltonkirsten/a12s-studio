@@ -34,6 +34,7 @@ export async function studio(
   const a12s = opts.a12s ?? fakeA12s();
   const webDir = mkdtempSync(join(tmpdir(), "studio-web-"));
   const filesDir = mkdtempSync(join(tmpdir(), "studio-files-"));
+  const runsDir = mkdtempSync(join(tmpdir(), "studio-runs-"));
   writeFileSync(join(webDir, "index.html"), "<!doctype html><title>Studio</title>");
   const brokerSocket = opts.broker ?? join(mkdtempSync(join(tmpdir(), "studio-broker-")), "admin.sock");
   const admin =
@@ -50,6 +51,7 @@ export async function studio(
     templatesDir: TEMPLATES,
     webDir,
     filesDir,
+    runsDir,
     ownerLogin: OWNER_LOGIN,
   });
   await new Promise<void>((resolve) => app.agentServer.listen(0, "127.0.0.1", resolve));
@@ -194,7 +196,7 @@ export async function studio(
     db.close();
   }
 
-  return { app, a12s, db, dbFile, filesDir, ownerPort, raw, rpc, tool, owner, stream, twoTeams, close };
+  return { app, a12s, db, dbFile, filesDir, runsDir, ownerPort, raw, rpc, tool, owner, stream, twoTeams, close };
 }
 
 export type Studio = Awaited<ReturnType<typeof studio>>;

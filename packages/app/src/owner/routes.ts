@@ -1,9 +1,12 @@
+import { readFile } from "node:fs/promises";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { Duplex } from "node:stream";
 import type {
   AgentSettings,
   InboxResponse,
   RulesPage,
+  RunResponse,
+  RunsResponse,
   SteeredMessage,
   ToolCall,
   TurnEventsResponse,
@@ -22,9 +25,11 @@ import { doingNow, type Live } from "../live.ts";
 import type { Repo, Team, TeamRepo } from "../repo.ts";
 import { BODY_MAX, changeThread, markSeen, ownerPost, ownerThread, systemMessage, TITLE_MAX } from "../router.ts";
 import { current, versions, write } from "../rules.ts";
+import type { Runs } from "../runs.ts";
 import type { Scheduler } from "../scheduler.ts";
 import { deriveState, messagesPage, messageView, type Stream } from "../state.ts";
 import type { createTeams } from "../teams.ts";
+import { steps } from "../transcript.ts";
 import { bridgeTerminal } from "./terminal.ts";
 
 export type OwnerDeps = {
@@ -36,6 +41,7 @@ export type OwnerDeps = {
   teams: ReturnType<typeof createTeams>;
   live: Live;
   stream: Stream;
+  runs: Runs;
   filesDir: string;
 };
 
@@ -54,6 +60,7 @@ const DURATION = z.string().min(1).max(20);
 // How many past Turns the inspector lists, and how much of a tool call's input or output it shows.
 const TURN_LIST = 20;
 const CALL_TEXT_MAX = 4000;
+const RUN_LIST = 50;
 
 const schemas = {
   createTeam: z.strictObject({
@@ -201,7 +208,7 @@ function parse<S extends z.ZodType>(schema: S, body: unknown): z.output<S> {
 }
 
 export function ownerRoutes(deps: OwnerDeps): Route[] {
-  const { repo, a12s, broker, dispatcher, scheduler, teams, stream, filesDir } = deps;
+  const { repo, a12s, broker, dispatcher, scheduler, teams, stream, runs, filesDir } = deps;
   const written = (id?: string): WriteResult => ({ rev: stream.rev(), ...(id === undefined ? {} : { id }) });
   // A change in the broker can add or remove a Needs You card, so the attention answer is read again before the
   // route answers: the state at the returned rev already shows the change. The rev moves even when no card does:
@@ -237,6 +244,14 @@ export function ownerRoutes(deps: OwnerDeps): Route[] {
     const agent = found && scoped.agent(id ?? "");
     if (!agent) throw new StudioError(404, "not_found", `No agent ${id}.`);
     return { team: found, scoped, agent, id: agent.id, client: a12s.forTeam(found.a12sToken) };
+  }
+
+  // A run is kept after its team is deleted, so it is found through its own row, not through a current team.
+  function runOf(turn: string) {
+    const teamId = repo.runTeam(turn);
+    const run = teamId === undefined ? undefined : repo.forTeam(teamId).run(turn);
+    if (!run) throw new StudioError(404, "not_found", `No run of Turn ${turn}.`, "Runs are kept for 30 days.");
+    return run;
   }
 
   return [
@@ -513,6 +528,47 @@ export function ownerRoutes(deps: OwnerDeps): Route[] {
         const teamId = repo.messageTeam(id);
         const scoped = teamId === undefined ? undefined : repo.forTeam(teamId);
         await sendAttachment(res, filesDir, scoped?.team() && scoped.message(id), params[1] ?? "");
+      },
+    },
+    {
+      method: "GET",
+      path: /^\/runs$/,
+      run({ query }): RunsResponse {
+        const thread = query.get("thread");
+        const agent = query.get("agent");
+        if (thread) {
+          const teamId = repo.threadTeam(thread);
+          if (teamId === undefined) throw new StudioError(404, "not_found", `No thread ${thread}.`);
+          return { runs: repo.forTeam(teamId).runs({ threadId: thread }, RUN_LIST) };
+        }
+        if (agent) return { runs: repo.forTeam(teamOf(agent)).runs({ agentId: agent }, RUN_LIST) };
+        throw new StudioError(400, "bad_request", "Name a thread or an agent.", "Add ?thread=<id> or ?agent=<id>.");
+      },
+    },
+    {
+      method: "GET",
+      path: /^\/runs\/([^/]+)$/,
+      run({ params, query }): RunResponse {
+        const run = runOf(params[0] ?? "");
+        const full = query.get("full") === "1";
+        return { run, steps: steps(runs.lines(run.turn), full ? Number.POSITIVE_INFINITY : CALL_TEXT_MAX, full) };
+      },
+    },
+    {
+      method: "GET",
+      path: /^\/runs\/([^/]+)\/transcript$/,
+      async run({ params, res }) {
+        const run = runOf(params[0] ?? "");
+        const content = await readFile(runs.file(run.turn));
+        // The agent wrote every byte of it, so it is a download like an attachment.
+        res.writeHead(200, {
+          "content-type": "application/octet-stream",
+          "content-disposition": `attachment; filename="${run.turn}.jsonl"`,
+          "x-content-type-options": "nosniff",
+          "content-security-policy": "sandbox",
+          "cache-control": "no-store",
+        });
+        res.end(content);
       },
     },
     {

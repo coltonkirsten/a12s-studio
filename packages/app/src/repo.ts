@@ -1,4 +1,5 @@
 import type { DatabaseSync, SQLInputValue } from "node:sqlite";
+import type { RunIndex, RunSummary } from "@a12s-studio/contract/api";
 import { agentId, type MessageId, newId, type ThreadId, type WakeId } from "@a12s-studio/contract/names";
 import type { Settings, ThreadStatus } from "@a12s-studio/contract/state";
 import type { Tokens, TurnStatus } from "./a12s/port.ts";
@@ -90,6 +91,8 @@ export type Wake = {
   repeatSeconds: number | null;
 };
 
+export type StoredRun = { turnId: string; session: string; lastAt: number; index: RunIndex };
+
 export type RuleVersion = { id: number; body: string; author: string; createdAt: number };
 
 // One instruction layer's versions: the owner rules, a team's rules, or one agent's role. Reading is separate from
@@ -126,6 +129,10 @@ const MESSAGE = `id, team_id AS teamId, thread_id AS threadId, from_id AS fromId
   file_name AS fileName, cause_id AS causeId, depth, delivery, a12s_message_id AS a12sMessageId, turn_id AS turnId,
   steered, created_at AS createdAt, delivered_at AS deliveredAt,
   (SELECT cost_usd FROM turns WHERE turns.team_id = messages.team_id AND turns.id = messages.turn_id) AS turnCostUsd`;
+// A run with what a12s said of its Turn, once the Turn is stored; `r` is the run's alias.
+const RUN = `r.turn_id AS turn, r.team_id AS team, r.agent_id AS agent, t.thread_id AS thread, r.session,
+  t.status, t.error, t.started_at AS startedAt, t.finished_at AS finishedAt, t.cost_usd AS costUsd, r.summary
+  FROM runs r LEFT JOIN turns t ON t.id = r.turn_id`;
 // A message to the owner that the owner has not seen; `m` is the message's alias and `t` its thread's.
 const UNREAD = "m.to_id = 'owner' AND m.created_at > t.owner_seen_at";
 
@@ -139,6 +146,10 @@ function localMidnight(now: number): number {
 }
 
 const toTeam = (row: Row): Team => ({ ...(row as Team), paused: row.paused === 1 });
+const toRun = ({ summary, ...row }: Row): RunSummary => ({
+  ...(row as Omit<RunSummary, "index">),
+  index: JSON.parse(String(summary)),
+});
 const toMessage = (row: Row): Message => ({ ...(row as Message), steered: row.steered === 1 });
 
 export type Repo = ReturnType<typeof createRepo>;
@@ -540,6 +551,69 @@ export function createRepo(db: DatabaseSync, onWrite: () => void = () => {}) {
           teamId,
         ) as { id: string; agentId: string; error: string | null; finishedAt: number }[];
       },
+      // Run capture: how much of each transcript file the agent has sent, the Turns its lines go to, and the runs.
+      runSources(agentId: string): { path: string; bytes: number }[] {
+        return all(
+          "SELECT path, bytes FROM run_sources WHERE team_id = ? AND agent_id = ? ORDER BY path",
+          teamId,
+          agentId,
+        ) as { path: string; bytes: number }[];
+      },
+      turnStarts(agentId: string, since: number): { id: string; at: number }[] {
+        return all(
+          `SELECT id, started_at AS at FROM turns WHERE team_id = ? AND agent_id = ? AND started_at >= ?
+           ORDER BY started_at, rowid`,
+          teamId,
+          agentId,
+          since,
+        ) as { id: string; at: number }[];
+      },
+      runBytes(turnId: string): number {
+        return Number(one("SELECT bytes FROM runs WHERE team_id = ? AND turn_id = ?", teamId, turnId)?.bytes ?? 0);
+      },
+      // One file's lines, committed with how far into it they reach. Runs are not part of the state, so these
+      // writes move no rev.
+      saveRuns(agentId: string, path: string, bytes: number, runs: StoredRun[]): void {
+        tx(db, () => {
+          const write = (sql: string, ...params: SQLInputValue[]) => db.prepare(sql).run(...params);
+          write(
+            `INSERT INTO run_sources (team_id, agent_id, path, bytes) VALUES (?, ?, ?, ?)
+             ON CONFLICT (agent_id, path) DO UPDATE SET bytes = excluded.bytes`,
+            teamId,
+            agentId,
+            path,
+            bytes,
+          );
+          for (const r of runs) {
+            write(
+              `INSERT INTO runs (turn_id, team_id, agent_id, session, bytes, last_at, summary) VALUES (?, ?, ?, ?, ?, ?, ?)
+               ON CONFLICT (turn_id) DO UPDATE SET bytes = excluded.bytes, last_at = excluded.last_at,
+                 summary = excluded.summary`,
+              r.turnId,
+              teamId,
+              agentId,
+              r.session,
+              r.index.bytes,
+              r.lastAt,
+              JSON.stringify(r.index),
+            );
+          }
+        });
+      },
+      run(turnId: string): RunSummary | undefined {
+        const row = one(`SELECT ${RUN} WHERE r.team_id = ? AND r.turn_id = ?`, teamId, turnId);
+        return row && toRun(row);
+      },
+      // Newest first.
+      runs(by: { agentId: string } | { threadId: string }, limit: number): RunSummary[] {
+        const [where, id] = "agentId" in by ? ["r.agent_id", by.agentId] : ["t.thread_id", by.threadId];
+        return all(
+          `SELECT ${RUN} WHERE r.team_id = ? AND ${where} = ? ORDER BY r.last_at DESC, r.rowid DESC LIMIT ?`,
+          teamId,
+          id,
+          limit,
+        ).map(toRun);
+      },
       ackTurn(id: string, at: number): boolean {
         return run("UPDATE turns SET acked_at = ? WHERE team_id = ? AND id = ?", at, teamId, id) > 0;
       },
@@ -678,6 +752,17 @@ export function createRepo(db: DatabaseSync, onWrite: () => void = () => {}) {
     turnTeam(id: string): string | undefined {
       const row = one("SELECT team_id AS t FROM turns WHERE id = ?", id);
       return row && String(row.t);
+    },
+    runTeam(turnId: string): string | undefined {
+      const row = one("SELECT team_id AS t FROM runs WHERE turn_id = ?", turnId);
+      return row && String(row.t);
+    },
+    // Removes the index of every run last written before `before` and answers their Turns, whose files go next.
+    pruneRuns(before: number): string[] {
+      return db
+        .prepare("DELETE FROM runs WHERE last_at < ? RETURNING turn_id AS id")
+        .all(before)
+        .map((r) => String(r.id));
     },
     // The caller's identity: a current agent of a current team. Only caller.ts uses this.
     callerAgent(id: string): { id: string; teamId: string } | undefined {
