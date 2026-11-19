@@ -43,7 +43,7 @@ sleep, per-agent network isolation, the event journal, files and terminal access
 
 ## 3. Teams and walls
 
-A team has a name, a purpose (one paragraph, the team's brief), its rules, a roster of agents, an access list and
+A team has a name, a purpose (one paragraph: what the team works on), its rules, a roster of agents, an access list and
 a daily budget. Every team has one lead. A message you do not address goes to the lead, and the lead may change the
 team's rules and its agents' roles (section 6).
 
@@ -63,14 +63,14 @@ Across teams, nothing passes. You are the only bridge.
 **What teams share:** the owner's Claude login, the Mac, one agent image and the list of add-ons to choose from. A
 team is a wall for work and access, not for billing.
 
-**Creating a team** is one sheet: pick a template, which fills in a name and a purpose to edit; the blank template
-starts with none and only a lead. Studio makes the team's id from its name. A template is a folder in the repo (`teams/<name>/`
-with a brief and one role file per agent). The template only creates the team. After that the app's database is the
+**Creating a team** is one sheet: pick a template, which fills in a name and a purpose to edit, and name the lead;
+the blank template starts with no name or purpose and only a lead. Studio makes the team's id from its name. A template is a folder in the repo (`teams/<name>/`
+with a purpose and one role file per agent). The template only creates the team. After that the app's database is the
 truth, and the folder is not read again.
 
 ## 4. Threads and messages
 
-**All work lives in threads.** A thread has a title, one owner agent and a status: open, needs you, or done. When you
+**All work lives in threads.** A thread has a title, one owner agent and a status: open or done. When you
 write to a team you start a thread or continue one. Agents talk to each other inside the thread, so the whole story
 of a piece of work is in one place. The list of threads is the team's board. There is no separate task tracker.
 
@@ -81,7 +81,7 @@ team. What it does depends only on what its receiver is doing when it arrives.
 |---|---|
 | An agent in the middle of a Turn | It joins that Turn. The agent reads it between two steps of its work and adjusts. This is steering; no new Turn starts. |
 | An agent that is idle or asleep | It wakes the agent and starts a Turn. |
-| You | It is shown in the thread, and the thread needs you until you answer or mark it read. |
+| You | It is shown in the thread, and the thread is unread until you open it or write in it. |
 
 Your messages and the messages agents send each other follow the same table. What you type in the composer goes to
 the agent you address with @, else to the thread's owner; if that agent is working, your words reach it mid-Turn.
@@ -91,8 +91,9 @@ the agent you address with @, else to the thread's owner; if that agent is worki
 - The app is the only thing that wakes an agent. a12s is configured so that no message wakes an agent by itself.
 - A message for a working agent is handed over inside its running Turn. If the Turn ends first, the message starts
   the next one. Either way it arrives once.
-- A thread needs you when an agent has written to you in it since you last wrote there or marked it read. It shows a
-  card in the Needs You list, with the message and a reply box.
+- A thread is unread when an agent has written to you in it since you last opened it or wrote there: the thread
+  list marks it, and the team in the sidebar counts it. A thread you start shows each answer to you this way, so
+  you see the reply without a card for every message. Needs You is for real asks only (section 11).
 - An agent's plain output is not a message. Other agents and the thread record see only what an agent posts. The UI
   streams the plain output live while the agent works, so you can watch it.
 
@@ -132,7 +133,7 @@ You give three fields: name, role and model. Defaults fill the rest, and each de
   |---|---|---|---|
   | 1. Studio basics | How threads, messages and the tools work, and how to behave toward teammates and the owner. | Nobody. It is fixed text in Studio's code. | Every agent. |
   | 2. Owner rules | Your rules for every agent. | You, in the global settings. | Every agent of every team. |
-  | 3. Team rules | How this team works. They travel with the team's brief. | You, or the team's lead with the `rules` tool. | The team's agents. |
+  | 3. Team rules | How this team works. They travel with the team's purpose. | You, or the team's lead with the `rules` tool. | The team's agents. |
   | 4. Role | What this agent is for. | You, or the team's lead. | That agent. |
   | 5. Notes | What the agent has learned, in `~/memory/notes.md`. | The agent. | That agent. |
 
@@ -224,8 +225,9 @@ hour.
    it tells the app, and the app sends a message to the team's lead.
 5. **Requests go to you.** A team starts with a baseline you set when you create it (for example, read and write on
    two repositories). After that an agent uses `access` to request more. The request becomes a card in Needs You that
-   shows the exact change: who asks, which host, which methods, which paths, for how long, and why. You approve or
-   deny there. Approval takes effect at once. No agent ever decides, and there is no rules engine.
+   shows the exact change: who asks, which host, which methods, which paths, for how long, and why. Asking again for
+   a change that already waits, by any agent of the team, joins that request, so each change is one card. You
+   approve or deny there. Approval takes effect at once. No agent ever decides, and there is no rules engine.
 6. **Audit.** Every call (allowed or refused) and every change to credentials, grants and requests is written to an
    audit log, visible per team. The log never contains a secret, a request body or a query string.
 
@@ -303,7 +305,8 @@ whether an exchange is useful. That is left to the agents' instructions and to y
 **The feel.** Calm and quiet by default. Depth is one click away, never in your face.
 
 - **Layout.** Three columns: a translucent sidebar (Needs You, then your teams), the thread list, the conversation.
-  An inspector slides in from the right.
+  The sidebar folds away with one button in the window's corner, so one team fills the window. Clicking an agent
+  opens its inspector, which slides in from the right.
 - **Look.** The system font. Light and dark follow the system. One accent colour per team. Space instead of borders.
   No dashboard tiles.
 - **Live.** Each agent has a presence dot: asleep, awake, working. Under a working agent there is one plain line of
@@ -337,11 +340,11 @@ whether an exchange is useful. That is left to the agents' instructions and to y
 
 | Screen | What it is |
 |---|---|
-| 1. Teams | The sidebar and home. Each team: name, agent dots, open threads, a needs-you count, today's usage as a thin bar. "New team" is one sheet. Global settings (awake cap, defaults, the owner rules with their history, the add-on library, pause everything) live here. |
+| 1. Teams | The sidebar and home. Each team: name, agent dots, open threads, an unread-threads count, a needs-you count, today's usage as a thin bar. "New team" is one sheet. Global settings (awake cap, defaults, the owner rules with their history, the add-on library, pause everything) live here. |
 | 2. Team | The main screen: threads on the left, the conversation, a composer. The first time it is empty except for one line: "Tell the team what you want." |
-| 3. Needs You | One list across all teams: messages for you, access requests, an agent in error, a failed Turn, a team at its budget, a rejected credential, an add-on that cannot run. Each card says who, what exactly changes, and has Approve and Deny, or a reply box with Mark read. This is the only place approvals happen. |
-| 4. Agent inspector | Now (the live Turn with its tool log and the messages that joined it), Inbox (queued messages, with Remove and Clear), Role (with its history) and notes, Files, Terminal, Settings (model, sleep, compaction, size). |
-| 5. Team settings | Brief, Rules (with their history), Access (write-only credentials, grants with expiry, the audit log), Add-ons (one switch each, with today's spend), Budget, and a danger zone (pause, delete). |
+| 3. Needs You | One list across all teams of what only you can settle: access requests, an agent in error, a failed Turn, a team at its budget, a rejected credential, a grant about to expire, an add-on that cannot run. A message to you is not a card; its thread is unread. Each card says who, what exactly changes, and has its action, such as Approve and Deny. This is the only place approvals happen. |
+| 4. Agent inspector | Opened by clicking an agent. Its header has Wake or Put to sleep, and Stop while the agent works. Tabs: Now (the live Turn with its tool log and the messages that joined it), Inbox (queued messages, with Remove and Clear), Role (with its history) and notes, Files, Terminal, Settings (model, sleep, compaction, size, and Remove for any agent but the lead). |
+| 5. Team settings | Purpose, Rules (with their history), Access (write-only credentials, grants with expiry, the audit log), Add-ons (one switch each, with today's spend), Budget, and a danger zone (pause, delete). |
 
 **How it stays live.** The server derives one state and pushes it over one stream. The browser renders that state and
 keeps none of its own. The app is the only writer to its database, so there are no database triggers and no polling
@@ -398,7 +401,7 @@ login never run in CI.
 - Mechanical limits on how agents talk: a cap on answers, messages that cannot wake, a limit per thread, loop
   detection.
 - An add-on instance shared between teams, and per-team settings for an add-on. What changes from call to call is
-  an input of the add-on's tools; what a team prefers goes in its brief.
+  an input of the add-on's tools; what a team prefers goes in its purpose.
 - Triggers from GitHub, email or files. Only wakes an agent sets for itself.
 - A costs page built on billing data, artifact hosting.
 - A native Mac or phone app, and push notifications.

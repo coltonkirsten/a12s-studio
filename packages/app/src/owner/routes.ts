@@ -61,6 +61,7 @@ const schemas = {
     purpose: TEXT.max(4000),
     accent: z.string().regex(/^#[0-9a-fA-F]{6}$/),
     template: SLUG,
+    lead: SLUG,
   }),
   patchTeam: z.strictObject({
     name: TEXT.max(80).optional(),

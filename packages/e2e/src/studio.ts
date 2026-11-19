@@ -78,7 +78,13 @@ export function answerFrom(state: StudioState, from: string, after: string, to =
 }
 
 export async function createTeam(studio: Studio, name: string, template: string, purpose: string): Promise<string> {
-  const { id } = await studio.api<WriteResult>("POST", "/teams", { name, purpose, accent: "#4f6bed", template });
+  const { id } = await studio.api<WriteResult>("POST", "/teams", {
+    name,
+    purpose,
+    accent: "#4f6bed",
+    template,
+    lead: "lead",
+  });
   if (!id) throw new Error(`creating ${name} answered no id`);
   return id;
 }

@@ -5,7 +5,7 @@ export type Draft = { template: Template | null; name: string; purpose: string }
 
 export const EMPTY_DRAFT: Draft = { template: null, name: "", purpose: "" };
 
-// The blank template has no brief, and a blank team has no name until the owner gives it one.
+// The blank template has no purpose, and a blank team has no name until the owner gives it one.
 function filled(t: Template | null): { name: string; purpose: string } {
   return { name: t?.purpose ? title(t.id) : "", purpose: t?.purpose ?? "" };
 }

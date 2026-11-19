@@ -25,8 +25,8 @@ export function TeamSettings({ team }: { team: TeamView }) {
       </header>
 
       <section className="settings-section">
-        <h2>Brief</h2>
-        <Brief key={team.purpose} team={team} />
+        <h2>Purpose</h2>
+        <Purpose key={team.purpose} team={team} />
       </section>
 
       <section className="settings-section">
@@ -68,13 +68,13 @@ export function TeamSettings({ team }: { team: TeamView }) {
   );
 }
 
-function Brief({ team }: { team: TeamView }) {
+function Purpose({ team }: { team: TeamView }) {
   const [purpose, setPurpose] = useState(team.purpose);
   const action = useAction();
   const changed = purpose.trim() !== team.purpose && purpose.trim() !== "";
   return (
     <form
-      className={action.pending ? "brief pending" : "brief"}
+      className={action.pending ? "purpose pending" : "purpose"}
       onSubmit={(event) => {
         event.preventDefault();
         if (changed) action.run(() => api.patchTeam(team.id, { purpose: purpose.trim() }));
@@ -91,7 +91,7 @@ function Brief({ team }: { team: TeamView }) {
             Revert
           </button>
           <button type="submit" className="button primary">
-            Save brief
+            Save purpose
           </button>
         </div>
       )}

@@ -1,5 +1,5 @@
-import type { BoardStatus, MessageView, TeamView, ThreadView } from "@a12s-studio/contract/state";
-import { useLayoutEffect, useRef, useState } from "react";
+import type { MessageView, TeamView, ThreadStatus, ThreadView } from "@a12s-studio/contract/state";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { api, useAction } from "../api.ts";
 import { deliveryLine } from "../logic/chain.ts";
 import { type Entry, fold } from "../logic/fold.ts";
@@ -13,9 +13,9 @@ import { Markdown } from "./markdown.tsx";
 import { Dot, doing, WorkList } from "./presence.tsx";
 import { Problem } from "./problem.tsx";
 
-const STATUS: Record<BoardStatus, string> = { open: "Open", needs_you: "Needs you", done: "Done" };
+const STATUS: Record<ThreadStatus, string> = { open: "Open", done: "Done" };
 
-export function StatusChip({ status }: { status: BoardStatus }) {
+export function StatusChip({ status }: { status: ThreadStatus }) {
   return <span className={`chip chip-${status}`}>{STATUS[status]}</span>;
 }
 
@@ -23,6 +23,7 @@ type Props = { team: TeamView; thread: ThreadView; route: Route };
 
 export function Conversation({ team, thread, route }: Props) {
   const action = useAction();
+  const seen = useAction();
   const [chain, setChain] = useState(false);
   const scroller = useRef<HTMLDivElement>(null);
   const pinned = useRef(true);
@@ -31,6 +32,13 @@ export function Conversation({ team, thread, route }: Props) {
   );
   const now = Date.now();
   const done = thread.status === "done";
+
+  // The thread is open on screen, so what it holds for the owner is read, also what arrives while it stays open.
+  const unread = team.threads.find((t) => t.id === thread.id)?.unread ?? 0;
+  const markSeen = seen.run;
+  useEffect(() => {
+    if (unread > 0) markSeen(() => api.seen(thread.id));
+  }, [thread.id, unread, markSeen]);
 
   // Follow new words only while the reader is at the bottom; reading further up is never interrupted.
   const liveText = working.map((a) => a.turn?.text.length).join();
@@ -62,7 +70,7 @@ export function Conversation({ team, thread, route }: Props) {
         >
           {done ? "Reopen" : "Mark as done"}
         </button>
-        <Problem problem={action.problem} />
+        <Problem problem={action.problem ?? seen.problem} />
       </header>
       {chain ? (
         <ChainView thread={thread} />

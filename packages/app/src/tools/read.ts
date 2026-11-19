@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { StudioError } from "../errors.ts";
 import { attachmentUrl } from "../files.ts";
-import { boardStatus, nameOf } from "../router.ts";
+import { nameOf } from "../router.ts";
 import type { Tool } from "./mcp.ts";
 
 const PREVIEW_MAX = 200;
@@ -27,7 +27,7 @@ export const read: Tool<typeof input> = {
           id: t.id,
           title: t.title,
           owner: nameOf(t.ownerAgentId),
-          status: boardStatus(t),
+          status: t.status,
           updated: iso(t.updatedAt),
           last: t.last && `${nameOf(t.last.fromId)}: ${t.last.body.slice(0, PREVIEW_MAX)}`,
         })),

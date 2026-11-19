@@ -38,7 +38,7 @@ const listen = (server: Server) =>
 async function harness(t: { after(fn: () => unknown): void }) {
   const texts: Record<string, string> = {
     owner: "# Owner rules, for every agent\nBe brief.",
-    team: "# Team: Web\nThe site.\n\n## Team rules\nNone.",
+    team: "# Team: Web\n\n## Purpose\nThe site.\n\n## Team rules\nNone.",
     role: "# Your role\nWrites the code.",
   };
   const server = createServer((req, res) => {

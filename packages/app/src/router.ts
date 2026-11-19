@@ -1,9 +1,9 @@
 import type { MessageId, ThreadId } from "@a12s-studio/contract/names";
-import type { BoardStatus, ThreadStatus } from "@a12s-studio/contract/state";
+import type { ThreadStatus } from "@a12s-studio/contract/state";
 import type { TurnStatus } from "./a12s/port.ts";
 import type { Caller } from "./caller.ts";
 import { StudioError } from "./errors.ts";
-import type { Agent, BoardRow, NewMessage, TeamRepo, Thread } from "./repo.ts";
+import type { Agent, NewMessage, TeamRepo, Thread } from "./repo.ts";
 
 type PostInput = { body: string; to: string; thread?: string; title?: string };
 type Posted = { message: MessageId; thread: ThreadId };
@@ -26,12 +26,6 @@ const BOTH_FIX = "Give thread to continue one, or title to start one.";
 // How an id is shown to agents: an agent by its slug, "owner" and "system" as they are.
 export function nameOf(id: string): string {
   return id.slice(id.indexOf("-") + 1);
-}
-
-// Section 5.4: an open thread needs the owner while it holds a message to them they have not seen.
-export function boardStatus(thread: BoardRow): BoardStatus {
-  if (thread.status === "done") return "done";
-  return thread.forOwner > 0 ? "needs_you" : "open";
 }
 
 function refuse(code: string, message: string, fix: string): never {
@@ -137,7 +131,7 @@ export function ownerThread(team: TeamRepo, input: { title?: string; body: strin
   });
 }
 
-// Mark read: the thread's messages to the owner so far need them no more.
+// The owner opened the thread: its messages to the owner so far are read.
 export function markSeen(team: TeamRepo, threadId: string): void {
   team.tx(() => team.markSeen(mustThread(team, threadId).id, Date.now()));
 }

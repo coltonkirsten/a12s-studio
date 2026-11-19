@@ -108,7 +108,13 @@ export async function studio(
       ["web", "website"],
       ["notes", "research-notes"],
     ] as const) {
-      await app.teams.createTeam({ name: slug, purpose: `The ${slug} team.`, accent: "#888888", template });
+      await app.teams.createTeam({
+        name: slug,
+        purpose: `The ${slug} team.`,
+        accent: "#888888",
+        template,
+        lead: "lead",
+      });
     }
   }
 

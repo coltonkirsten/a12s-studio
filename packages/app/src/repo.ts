@@ -97,9 +97,9 @@ export type RuleVersion = { id: number; body: string; author: string; createdAt:
 export type RuleHistory = { layer: "owner" | "team" | "role"; versions(limit: number, before?: number): RuleVersion[] };
 export type RuleScope = RuleHistory & { insert(body: string, author: string, at: number): number };
 
-export type BoardRow = Thread & {
-  // Messages to the owner since owner_seen_at.
-  forOwner: number;
+type BoardRow = Thread & {
+  // Messages to the owner since owner_seen_at: the thread is unread while there are any.
+  unread: number;
   last: { fromId: string; body: string } | null;
 };
 
@@ -127,7 +127,7 @@ const MESSAGE = `id, team_id AS teamId, thread_id AS threadId, from_id AS fromId
   steered, created_at AS createdAt, delivered_at AS deliveredAt,
   (SELECT cost_usd FROM turns WHERE turns.team_id = messages.team_id AND turns.id = messages.turn_id) AS turnCostUsd`;
 // A message to the owner that the owner has not seen; `m` is the message's alias and `t` its thread's.
-const FOR_OWNER = "m.to_id = 'owner' AND m.created_at > t.owner_seen_at";
+const UNREAD = "m.to_id = 'owner' AND m.created_at > t.owner_seen_at";
 
 type Row = Record<string, unknown>;
 
@@ -310,7 +310,7 @@ export function createRepo(db: DatabaseSync, onWrite: () => void = () => {}) {
           id,
         );
       },
-      // When the owner wrote in the thread or marked it read; messages to the owner after it need them.
+      // When the owner last opened the thread or wrote in it; messages to the owner after it are unread.
       markSeen(id: string, at: number): void {
         run("UPDATE threads SET owner_seen_at = ? WHERE team_id = ? AND id = ?", at, teamId, id);
       },
@@ -319,7 +319,7 @@ export function createRepo(db: DatabaseSync, onWrite: () => void = () => {}) {
         const last = (column: string) =>
           `(SELECT ${column} FROM messages m WHERE m.thread_id = t.id ORDER BY m.created_at DESC, m.rowid DESC LIMIT 1)`;
         const rows = all(
-          `SELECT ${THREAD}, (SELECT count(*) FROM messages m WHERE m.thread_id = t.id AND ${FOR_OWNER}) AS forOwner,
+          `SELECT ${THREAD}, (SELECT count(*) FROM messages m WHERE m.thread_id = t.id AND ${UNREAD}) AS unread,
              ${last("from_id")} AS lastFrom, ${last("body")} AS lastBody
            FROM threads t WHERE team_id = ? AND (? = 'all' OR status = ?)
              AND (? IS NULL OR (updated_at, id) < (SELECT updated_at, id FROM threads WHERE team_id = ? AND id = ?))
@@ -481,20 +481,6 @@ export function createRepo(db: DatabaseSync, onWrite: () => void = () => {}) {
           teamId,
         );
         return new Map(rows.map((r) => [String(r.id), { count: Number(r.n), inApp: r.q === 1 }]));
-      },
-      // Each open thread that needs the owner (section 5.4), oldest first: its newest message to them, and how many
-      // more wait.
-      forOwner(): { message: Message; more: number }[] {
-        return all(
-          `SELECT ${MESSAGE}, (SELECT count(*) - 1 FROM messages m JOIN threads t ON t.id = m.thread_id
-             WHERE m.thread_id = messages.thread_id AND ${FOR_OWNER}) AS more
-           FROM messages WHERE team_id = ? AND rowid IN (SELECT (SELECT m.rowid FROM messages m
-             WHERE m.thread_id = t.id AND ${FOR_OWNER} ORDER BY m.created_at DESC, m.rowid DESC LIMIT 1)
-             FROM threads t WHERE t.team_id = ? AND t.status = 'open')
-           ORDER BY created_at, rowid`,
-          teamId,
-          teamId,
-        ).map(({ more, ...row }) => ({ message: toMessage(row), more: Number(more) }));
       },
       // A thread's totals for the chain view (section 5.9).
       chain(threadId: string): { depth: number; turns: number; costUsd: number } {

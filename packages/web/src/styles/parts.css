@@ -114,6 +114,10 @@
   background: var(--fill);
 }
 
+.agent-row.selected {
+  background: var(--fill-2);
+}
+
 .agent-row .dot {
   margin-top: 5px;
 }
@@ -146,28 +150,6 @@
 
 .doing-error {
   color: var(--red);
-}
-
-.agent-more {
-  padding: 2px 10px 10px 28px;
-  animation: drop var(--move);
-}
-
-.agent-role {
-  color: var(--text);
-  line-height: 1.45;
-}
-
-.agent-model {
-  color: var(--text-3);
-  font-size: var(--size-small);
-  margin: 2px 0 8px;
-}
-
-.agent-actions {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
 }
 
 @keyframes drop {
@@ -215,6 +197,15 @@
   font-weight: 600;
 }
 
+.unread-dot {
+  align-self: center;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--accent);
+  flex: none;
+}
+
 .thread-top time {
   font-size: var(--size-small);
   flex: none;
@@ -229,6 +220,10 @@
   overflow: hidden;
 }
 
+.thread-row.unread .thread-preview {
+  color: var(--text);
+}
+
 .chip {
   display: inline-block;
   padding: 1px 7px;
@@ -237,11 +232,6 @@
   font-weight: 500;
   color: var(--text-3);
   background: var(--fill);
-}
-
-.chip-needs_you {
-  color: var(--accent-text);
-  background: var(--accent-soft);
 }
 
 .chip-done {
