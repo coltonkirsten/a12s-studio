@@ -60,6 +60,7 @@ export function Sidebar({ state, route, connected, onNewTeam }: Props) {
 function TeamRow({ team, selected, needs }: { team: TeamView; selected: boolean; needs: number }) {
   const { dailyUsd, spentTodayUsd } = team.budget;
   const used = budgetUsed(spentTodayUsd, dailyUsd);
+  const unread = team.threads.filter((t) => t.unread > 0).length;
   return (
     <a
       className={selected ? "side-row team-row selected" : "side-row team-row"}
@@ -69,6 +70,11 @@ function TeamRow({ team, selected, needs }: { team: TeamView; selected: boolean;
       <span className="team-top">
         <span className="side-name">{team.name}</span>
         {team.paused && <span className="paused-tag">Paused</span>}
+        {unread > 0 && (
+          <span className="count quiet" title={`${unread} unread ${unread === 1 ? "thread" : "threads"}`}>
+            {unread}
+          </span>
+        )}
         {needs > 0 && <span className="count">{needs}</span>}
       </span>
       <span className="team-dots">

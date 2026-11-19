@@ -90,8 +90,11 @@ gives the command to export it.
 is given it refuses, before changing anything, when the data folder already holds any of what the backup would put
 back (`config.json`, `app/`, `broker/`) or the Fleet the backup names already has a home drive the backup would
 load. With `--force` it removes each of those entries before copying it back, so no old write-ahead log stays
-beside a restored database. It loads each saved drive into the drive of the same name, emptied first, and names
-any drive the Fleet no longer has instead of creating it. It ends by naming the vault-key step for another Mac.
+beside a restored database. A saved drive the Fleet no longer has replaces nothing, so it needs no `--force`: before
+anything else is put back, the script makes it again as the Docker volume a12s would (`a12s-<fleet>-<drive>`, with
+the `a12s.fleet`, `a12s.drive` and `a12s.computer` labels of M8), refusing a volume Docker already holds that a12s
+does not list, and a12s takes it as the computer's home drive when the computer is put again. It then loads each
+saved drive into the drive of the same name, emptied first. It ends by naming the vault-key step for another Mac.
 
 ## 2. Phase 0 measurements
 
@@ -359,7 +362,7 @@ CREATE INDEX addon_usage_spend ON addon_usage (team_id, at);
 `teams.paused`. Per-agent: the `agents` columns. All are edited in the UI and read fresh by the dispatcher on every
 run; nothing is cached.
 
-**Not stored, derived:** "needs you" on a thread (section 5.4); the Needs You
+**Not stored, derived:** a thread's unread count (section 5.4); the Needs You
 list (section 7.3); presence, the "doing now" line and streaming text (memory, from a12s events).
 
 **The one code path for `team_id`.** `repo.ts` exports `forTeam(teamId)`, which returns every read and write the
@@ -435,7 +438,7 @@ read: {
   limit?: number,                        // default 30, max 100
   before?: string                        // message or thread id, for paging
 }
-// board  -> { threads: [{ id, title, owner, status: "open"|"needs_you"|"done", updated, last }] }
+// board  -> { threads: [{ id, title, owner, status: "open"|"done", updated, last }] }
 // thread -> { thread: {...}, messages: [{ id, from, to, body, file, at }] }   (file: the attachment's URL)
 
 update_thread: { thread: string, status?: "open" | "done", owner?: string, title?: string }
@@ -478,7 +481,7 @@ access: {
 // list    -> { grants: [{ host, methods, paths, expires }], pending: [{ id, host, methods, paths }] }
 //            grants that are not revoked and not expired; the team's pending requests
 // request -> { request: id, status: "pending" }   (a card appears in Needs You)
-// a team has at most 10 pending requests; another is refused until the owner decides one
+// asking for a change that already waits (same host, methods and paths, in any order) answers that request's id
 ```
 
 ### 5.3 Delivery
@@ -570,16 +573,18 @@ A message with no thread (from `system`) has no `thread` line. A file adds
 `file: <STUDIO_URL>/files/<message id>/<name>`. The body says nothing about answering: whether a message deserves
 an answer is the receiver's judgement, under the basics (section 6).
 
-### 5.4 The owner's messages, and "needs you"
+### 5.4 The owner's messages, and unread threads
 
 - Everything the owner writes is a message to the agent addressed with @, else to the thread's owner. A new thread
   goes to the agent addressed, else to the lead, and that agent owns it.
-- A thread **needs you** while it is open and holds a message with `to_id = 'owner'` whose `created_at` is later
-  than the thread's `owner_seen_at`. Each such thread has one card in the Needs You list (section 7.3).
+- A thread's **unread** count is its messages with `to_id = 'owner'` whose `created_at` is later than the thread's
+  `owner_seen_at`, whatever the thread's status. A thread with any is unread: the thread list marks it and the
+  sidebar counts it for its team. A message to the owner is never a Needs You card (section 7.3).
 - `owner_seen_at` is set to now when the owner posts in the thread, in the same transaction as the message, and by
-  `POST /threads/:thread/seen` (Mark read). A thread set to done needs nobody.
-- The reply box of the card posts in the card's thread to the sender of its newest message for the owner.
-- Agents see the same status on the board that `read` returns.
+  `POST /threads/:thread/seen`, which the web sends whenever the open thread's unread count is above zero: opening
+  a thread reads it, and so does a message that arrives while it is open.
+- Agents see a thread's status, open or done, on the board that `read` returns; whether the owner has read it is
+  not theirs to see.
 
 ### 5.5 When an agent answers without posting
 
@@ -695,7 +700,7 @@ A Service has one port number: agents call `http://studio.a12s:7410` and the Con
 spec; `addons` are the manifests of the add-ons the team has on. Fleet `defaults` are not used: the function is the
 single place a spec is decided. Hiring calls `putAgent(create-only)`; any edit to the team's name or an agent
 setting, and turning an add-on on or off, calls `putAgent` again with the fresh spec, which a12s applies at the
-agent's next idle moment. A brief, a rule or a role is not in the spec (see "Instruction layers" below), so editing
+agent's next idle moment. A purpose, a rule or a role is not in the spec (see "Instruction layers" below), so editing
 one writes no spec. At every start the app puts each agent's spec again, as it does the external Services; a12s
 leaves an agent computer whose spec has not changed alone, so a spec that a release of Studio has changed reaches
 every agent at its next idle moment.
@@ -865,7 +870,9 @@ stored author is `caller.agentId`. No agent route writes the owner rules, and th
 owner    # Owner rules, for every agent
          <the owner rules, or "None.">
 team     # Team: <name>
-         <purpose>
+
+         ## Purpose
+         <the purpose, or "None.">
 
          ## Team rules
          <the team rules, or "None.">
@@ -903,7 +910,8 @@ and then inserts the team and agent rows, with each agent's first role version, 
 claimed in memory before the first a12s call and released once the rows are in or the create has failed, so two
 creates running at once get different slugs and neither can remove the other's token or agent computers. If an a12s
 step fails, the agent computers and the token made so far are removed and nothing is written, so the slug stays
-free.
+free. The lead is hired under the slug the owner gives it (`lead` in the body), with the template's `lead.md` role;
+a slug another agent of the template has is refused (409 `slug_used`) before any a12s work.
 
 ## 7. Live state
 
@@ -937,13 +945,14 @@ type AgentView = { id, slug, roleLine, model,
                    presence: "unknown" | "asleep" | "awake" | "working" | "waiting" | "error",
                    waitingFor?: "cap" | "budget" | "paused" | "disk",
                    line: string | null,                              // what it is doing now
+                   since: number | null,                             // when that started
                    turn: { id, threadId, startedAt, text } | null,   // text: last 4000 chars so far
                    work: WorkItem[],                                 // sub-agents and background tasks running now, oldest first
                    queued: number, error?: string };                 // queued: messages it has not received yet
 type WorkItem = { id, kind: "agent" | "task", description, threadId: ThreadId | null, startedAt,
                   line: string | null };                             // line: what a sub-agent is doing now
-type ThreadSummary = { id, title, ownerId, status: "open" | "needs_you" | "done", updatedAt, preview,
-                       forYou };                                     // messages to the owner since owner_seen_at
+type ThreadSummary = { id, title, ownerId, status: "open" | "done", updatedAt, preview,
+                       unread };                                     // messages to the owner since owner_seen_at
 type ThreadView = { id, teamId, title, ownerId, status, messages: MessageView[], hasMore,   // newest 200
                     chain: { depth, turns, costUsd } };              // the thread's totals (section 5.9)
 type MessageView = { id, from, to, body, file, at,
@@ -968,18 +977,26 @@ later; every feed that becomes ready is followed by a resync.
 | a12s event | Effect |
 |---|---|
 | `agent_computer.phase` | Presence: `Asleep` → asleep; `Busy` → working; `Ready` with at least one work item → working; `Error` → error (with its message); any other → awake; unknown until a12s has reported a phase. An agent with a queued message that `blockedReason` holds shows waiting. A phase other than `Busy` or `Ready` empties the agent's work items: no harness session lives through it. Recorded for any agent computer name, because a new agent reports its phases before its row is committed. Runs the dispatcher. |
-| `turn.started` | Marks each Studio message whose `a12s_message_id` is in `inbox.messages` as `delivered`, with this Turn and `steered` 0. Sets the Turn's thread to that of the first one; a Turn with no Messages (the harness starts one by itself when background work ends) takes the thread of the work item that ended last, once. Line: "Working". Clears text. |
+| `turn.started` | Marks each Studio message whose `a12s_message_id` is in `inbox.messages` as `delivered`, with this Turn and `steered` 0. Sets the Turn's thread to that of the first one; a Turn with no Messages (the harness starts one by itself when background work ends) takes the thread of the work item that ended last, once. Clears text, the running calls and the model's step. |
 | `turn.steered` | Marks each Studio message whose `a12s_message_id` it lists as `delivered`, with this Turn and `steered` 1. The Turn keeps its thread, line and text. |
-| `text.delta` | Appends to the Turn's text and emits `live`. If no tool is running, line: "Writing". |
-| `tool.started` | With no `parent`: sets the agent's line from the table below; an `Agent` or `Task` call also adds a work item of kind agent (id: the call's id; description: the call's `description`; thread: the Turn's). With a `parent` (a sub-agent's call): sets the line of the work item whose launching call is the `parent`, from the same table. A background sub-agent's calls arrive between Turns too, with no Turn. |
-| `tool.finished` | With no `parent`: removes the work item that call started, unless a12s has reported it as background work. Nothing for the lines; the inspector's log shows it. |
+| `text.delta` | Appends to the Turn's text and emits `live`. Step: "Writing". |
+| `thinking` | Step: "Thinking". |
+| `tool.composing` | Step: "Writing a post" for the Studio `post` tool, else "Preparing <tool>" (a Studio tool without its prefix). |
+| `tool.started` | With no `parent`: adds a running call with its line from the table below and its start, and clears the step; an `Agent` or `Task` call also adds a work item of kind agent (id: the call's id; description: the call's `description`; thread: the Turn's). With a `parent` (a sub-agent's call): sets the line of the work item whose launching call is the `parent`, from the same table. A background sub-agent's calls arrive between Turns too, with no Turn. |
+| `tool.finished` | With no `parent`: removes the running call and the work item that call started, unless a12s has reported it as background work; when no call is left running, step: "Thinking", from this event. With a `parent`: when it is the call the sub-agent's line names, that line becomes "Thinking". |
 | `task.started` | Work that runs on in the background: a sub-agent or a command the agent ran in the background, or a process it detached. Marks the work item whose launching call is `toolUseId` as background, or adds one: kind agent for the a12s kinds `local_agent` and `agent`, task for any other; a12s's `id` and `description`; the thread of the running Turn, if any. |
 | `task.finished` | Removes the work item, whatever its status, and keeps its thread for the Turn that follows. |
-| `turn.finished` | Writes the `turns` row (section 7.4), applies sections 5.5 and 5.6, clears the line and text, removes the work items that are not background work (their calls end with the Turn), runs the dispatcher. A Turn followed whole (every event from `turn.started` on, no resync since) is stored from its events; any other is read from a12s `turns`, which has all its text, Messages and tool calls; a12s stores the Turn before it sends the event. |
+| `turn.finished` | Writes the `turns` row (section 7.4), applies sections 5.5 and 5.6, clears the running calls, the step and the text, removes the work items that are not background work (their calls end with the Turn), runs the dispatcher. A Turn followed whole (every event from `turn.started` on, no resync since) is stored from its events; any other is read from a12s `turns`, which has all its text, Messages and tool calls; a12s stores the Turn before it sends the event. |
 | `service.phase` | For an add-on instance, its status: `Ready` → ready; `Error` or `Unhealthy` → error (with its message); any other → starting. Other Services are ignored. |
 | `gap`, or a new feed | Resync: `status()` for phases and background work (an item a12s no longer lists is removed; one it lists that is not known is added with a12s's id, kind, description, start time and launching call, and no thread; a known one keeps its thread and line; work that is not background is dropped); for each agent, recent Turns not yet in `turns`, stored the same way; for each `sent` message, its a12s state, with the Turn that took it (whether it joined that Turn is read from the Turn's record when the Turn is stored); `services()` for add-on statuses. Running Turns are no longer whole. |
 
 The same resync runs at app start, which is how state survives a restart.
+
+**The line** is derived from the record each time the state is built, never stored: during a Turn, the latest
+running call's line since it started; else the step (a step does not change while its line stays the same) since its
+event; else "Thinking" since the Turn started. With no Turn: "Working in the background" since the oldest work item
+started, while there is one; else none. `thinking` and `tool.composing` come from Claude Code only; with another
+harness the step is "Writing" or "Thinking".
 
 **Work that outlives a Turn.** a12s keeps an agent's harness session alive between Turns. A sub-agent or a command
 the agent runs in the background, and a process it detaches, run on after the Turn that started them has ended.
@@ -994,7 +1011,8 @@ event that ends it. No clock in the app or the browser decides that an agent is 
 - A work item belongs to the thread of the Turn it started in. The Turn that follows its end has that thread, so
   the agent's words about the result stream into the conversation the work was for.
 - a12s stops a background task at its time limit and tells the agent; the app sets no limit of its own. `stop()`
-  ends the Turn and the background work together, so Stop is offered whenever presence is working.
+  ends the Turn and the background work together, so the inspector's header offers Stop whenever presence is
+  working.
 - After an app restart a running item is known from `status()` alone. It is listed under its agent, a sub-agent
   with its line, in no thread.
 - Background work spends: a sub-agent's cost is in the model totals of the agent's next Turn (section 7.4).
@@ -1018,11 +1036,11 @@ Turn. For a sleeping agent the route answers `asleep`, and the inspector offers 
 
 ### 7.3 Needs You
 
-Derived on every state build, never stored:
+Derived on every state build, never stored. Only what the owner alone can settle is a card; a message to the owner
+is not one (its thread is unread, section 5.4).
 
 | Item | Source | Actions |
 |---|---|---|
-| message | A thread that needs you (section 5.4). The card shows its newest message to the owner and how many more wait. | Reply box, Mark read. |
 | access request | The broker's pending requests (section 9.6). | Approve (with expiry), Deny; add the credential first if the host has none. |
 | agent error | a12s phase `Error`. | Open inspector, Wake. |
 | failed Turn | An agent's latest Turn has status `failed` and `acked_at` is null. | Open inspector, Dismiss. |
@@ -1049,7 +1067,7 @@ All under `/api`, all behind `ownerGate`. Bodies are zod-checked.
 ```
 GET    /stream?thread=
 GET    /templates
-POST   /teams                         { name, purpose, accent, template }     (answers the new team's id)
+POST   /teams                         { name, purpose, accent, template, lead }   (answers the new team's id)
 PATCH  /teams/:team                   { name?, purpose?, accent?, dailyBudgetUsd?, paused? }
 DELETE /teams/:team
 POST   /teams/:team/agents            { slug, role, model }
@@ -1208,12 +1226,13 @@ per step, `--full` for everything. Transcript text is the agent's data, shown an
 
 ## 8. Templates
 
-`teams/<template>/brief.md` (the purpose) and `teams/<template>/roles/<slug>.md` (one per agent; `lead.md` is
-required and becomes the lead). Every agent takes the default model. Creating a team from a template inserts rows
-and hires the agents; the folder is never read again for that team. The New team sheet starts with the template; a
-template's name and brief fill the form, which the owner then edits. Three ship:
+`teams/<template>/purpose.md` and `teams/<template>/roles/<slug>.md` (one per agent; `lead.md` is required and is
+the lead's role, hired under the name the owner gives the lead). Every agent takes the default model. Creating a team
+from a template inserts rows and hires the agents; the folder is never read again for that team. The New team sheet
+starts with the template; a template's name and purpose fill the form, which the owner then edits, and the owner
+names the lead (`Lead` until changed). Three ship:
 
-- `blank`: an empty brief and only `lead`, for a team that starts from nothing. Every team keeps a lead, because an
+- `blank`: an empty purpose and only `lead`, for a team that starts from nothing. Every team keeps a lead, because an
   unaddressed message goes to the lead.
 
 - `website`: `lead` (plans, talks to the owner, reviews) and `dev` (writes and tests the code).
@@ -1383,7 +1402,13 @@ DELETE /teams/:team                            removes its credentials, grants a
 ```
 
 Every change writes an audit row in the same transaction, with actor `owner`; `request.create` has actor `agent`
-and the agent's id. `POST /grants/:id/warned` is the one write without a row: it records that the app passed a
+and the agent's id, and its detail is the request's id.
+
+**One request per change.** A request keeps its methods and its paths as sorted sets. A team's pending request for
+the same host, methods and paths is the same request: asking for it again, by any agent of the team, creates no row,
+answers the waiting request and writes a `request.create` row naming it, so Needs You shows one card per change and
+the audit log shows every ask. A request once decided is not joined; the same ask after it is a new request. Nothing
+caps how many different requests wait. `POST /grants/:id/warned` is the one write without a row: it records that the app passed a
 warning on and changes no one's access. No admin route returns a secret.
 
 - Answers: `GET /teams/:team/access` returns every credential, grant and request of the team, newest first; the
@@ -1391,9 +1416,7 @@ warning on and changes no one's access. No admin route returns a secret.
   decisions the request. The deletes and `warned` answer 204.
 - Refusals are `{ code, message, fix? }`: 400 `invalid` (a body, host, method, pattern, team slug or expiry that
   breaks a rule; an `agentId` that is not of the team), 404 `not_found` (also for another team's grant or
-  request), 409 `already_decided`, 409 `no_credential`, 409 `too_many_pending` (the team already has 10 pending
-  requests, so a misled agent cannot flood Needs You; the fix is to wait for the owner to decide). A refused change
-  writes nothing.
+  request), 409 `already_decided`, 409 `no_credential`. A refused change writes nothing.
 - A grant may be created for a host that has no credential yet; it gives nothing until one is stored. Storing a
   credential for a host that has one replaces it.
 
@@ -1616,7 +1639,7 @@ default-deny tests pass; an agent clones and pushes a repository and its contain
 | P3-A Limits | Awake cap and queue order, the cost rule, budget hold with its card in Needs You, free-disk check, the `schedule` tool and scheduled wakes, the global settings sheet and Team settings → Budget, so that every global and team limit is edited in the UI. |
 | P3-B Inspector | The agent inspector: Now with the tool log, Inbox with Remove and Clear, Role and notes, Files, Terminal, Settings (model, sleep, compaction, size: every agent limit). The `file` field of `post` and attachment download. |
 | P3-D Live view | Background work under an agent: `task.started` and `task.finished` and a sub-agent's tool calls in the port, `real.ts`, `fake.ts` and `live.ts`; background work in `status()`; `work` in `AgentView`; presence working while work runs; the work list under an agent and in the conversation; the pause message for an agent with background work. The first line of a Turn is "Working". Message bodies as markdown (section 7.6). |
-| P3-E Messages | One kind of message: the schema change, `post` and `read` without kinds, the router and the dispatcher without their rules for kinds; `inbox.duringTurn: steer` in the spec and `turn.steered` in the port, `real.ts`, `fake.ts` and `live.ts` (M10); the chain record; "needs you" from `owner_seen_at`, with Mark read; the basics' rules for messaging; the spec put again at every start; folded talk, the delivery line and the Chain view (section 7.7). It needs the a12s release that steers. |
+| P3-E Messages | One kind of message: the schema change, `post` and `read` without kinds, the router and the dispatcher without their rules for kinds; `inbox.duringTurn: steer` in the spec and `turn.steered` in the port, `real.ts`, `fake.ts` and `live.ts` (M10); the chain record; unread threads from `owner_seen_at`; the basics' rules for messaging; the spec put again at every start; folded talk, the delivery line and the Chain view (section 7.7). It needs the a12s release that steers. |
 | P3-F Rules | The `rules` table and `rules.ts`, the `rules` tool, `GET /rules/<layer>`, the hooks and `load-rules` (M11), the rules routes; the owner rules in the global settings, Team settings → Rules and the role in the inspector, each with its history, differences and restore. |
 | P3-G Steering run (after P3-E and P3-F) | `steer.ts`; the P1 script's check that a lead does not poll. |
 | P3-C Durability (merges last of the first four) | `scripts/backup.ts` (both databases with SQLite's backup, `config.json`, the attachments, each home drive as a tar, to `~/a12s-studio-backups/<date>/`, 14 kept) with a nightly LaunchAgent; `scripts/restore.ts`; the documented command to export the vault key; the P3 exit script. |
@@ -1686,7 +1709,7 @@ from the README alone.
   - *Rules:* a `set` by an agent that is not its team's lead is refused and writes nothing; a lead cannot name
     another team's agent; no agent route writes the owner rules; `GET /rules/<layer>` answers only the caller's own
     text; every write is one new row with its author, an equal text writes none, and a restore is a new version;
-    editing a brief, a rule or a role makes no `putAgent` call. `load-rules` is run as the script it is, against a
+    editing a purpose, a rule or a role makes no `putAgent` call. `load-rules` is run as the script it is, against a
     local server: it prints every layer at a session's start, only a changed layer on a prompt, nothing while the
     server is down, and the layer again on the first prompt after a failed start.
   - *Add-ons:* section 10.5.
@@ -1697,8 +1720,9 @@ from the README alone.
 - **Backup and restore** (`scripts/test/`): a data folder in use by the real app and broker is backed up and
   restored with every row of both databases, the attachments and the drives equal; the drive step is the one
   function a test replaces with a folder and the host's `tar`, so the test needs no Docker. Retention, the
-  unfinished folder as a lock, the refusal without `--force` (data folder and drives), and that no secret is
-  printed are tested too.
+  unfinished folder as a lock, the refusal without `--force` (data folder and drives), a drive the Fleet no longer
+  has made again and loaded (without `--force` onto an empty Mac), a drive that cannot be made stopping the restore
+  before it has replaced anything, and that no secret is printed are tested too.
 - **`real.ts` against real a12s:** `node packages/app/scripts/a12s-smoke.ts <fleet>` runs every port call once against a
   running Fleet (one haiku agent, removed at the end). Manual, never in CI.
 - **End-to-end against real a12s is manual, never in CI.** `npm run e2e` (`packages/e2e`) is run before each phase

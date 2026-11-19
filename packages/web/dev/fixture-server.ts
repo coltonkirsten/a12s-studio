@@ -43,6 +43,7 @@ function agent(
     model: "sonnet",
     presence,
     line: null,
+    since: null,
     turn: null,
     work: [],
     queued: 0,
@@ -220,7 +221,7 @@ const seen = new Map<ThreadId, number>(threads.map((t) => [t.id, now]));
 seen.set("th_fixturecopy", 0);
 seen.set("th_fixtureformat", 0);
 
-const forOwner = (t: ThreadView) => t.messages.filter((m) => m.to === "owner" && m.at > (seen.get(t.id) ?? 0));
+const unread = (t: ThreadView) => t.messages.filter((m) => m.to === "owner" && m.at > (seen.get(t.id) ?? 0));
 
 const teams: Omit<TeamView, "threads">[] = [
   {
@@ -235,6 +236,7 @@ const teams: Omit<TeamView, "threads">[] = [
       // Its Turn has ended and its work runs on: working, with the work listed.
       agent("website-lead", "Plans the work, talks to you, reviews", "working", {
         line: "Working in the background",
+        since: now - 7 * MIN,
         work: [
           {
             id: "task-fixture-1",
@@ -256,6 +258,7 @@ const teams: Omit<TeamView, "threads">[] = [
       }),
       agent("website-dev", "Writes and tests the code", "working", {
         line: "Running tests",
+        since: now - 40_000,
         turn: { id: "turn-fixture", threadId: "th_fixturemenu", startedAt: now - 2 * MIN, text: "" },
       }),
       agent("website-writer", "Writes page copy", "asleep", { model: "haiku" }),
@@ -394,13 +397,7 @@ function teamAccess(team: string): TeamAccess {
 
 /** The broker's three cards, derived the way the app derives them from its attention answer. */
 function needsYou(): NeedsYouItem[] {
-  const items: NeedsYouItem[] = threads.flatMap((t) => {
-    const waiting = forOwner(t);
-    const newest = waiting.at(-1);
-    return t.status === "open" && newest
-      ? [{ kind: "message", teamId: t.teamId, threadId: t.id, message: newest, more: waiting.length - 1 } as const]
-      : [];
-  });
+  const items: NeedsYouItem[] = [];
   for (const [teamId, a] of Object.entries(access)) {
     const stored = (host: string) => a.credentials.some((c) => c.host === host);
     for (const r of a.requests.filter((x) => x.status === "pending")) {
@@ -456,15 +453,14 @@ function stateFor(open: string | null): StudioState {
         .filter((t) => t.teamId === team.id)
         .map((t) => {
           const last = t.messages.at(-1);
-          const forYou = forOwner(t).length;
           return {
             id: t.id,
             title: t.title,
             ownerId: t.ownerId,
-            status: t.status === "open" && forYou > 0 ? "needs_you" : t.status,
+            status: t.status,
             updatedAt: last?.at ?? now,
             preview: last?.body ?? "",
-            forYou,
+            unread: unread(t).length,
           } as const;
         })
         .sort((a, b) => b.updatedAt - a.updatedAt),
@@ -706,9 +702,9 @@ function write(b: Record<string, unknown>, path: string, method: string): string
       purpose: String(b.purpose),
       accent: String(b.accent),
       paused: false,
-      leadId: `${slug}-lead`,
+      leadId: `${slug}-${b.lead}`,
       budget: { dailyUsd: settings.defaultDailyBudgetUsd, spentTodayUsd: 0, held: false },
-      agents: [agent(`${slug}-lead`, "Leads the team", "asleep")],
+      agents: [agent(`${slug}-${b.lead}`, "Leads the team", "asleep")],
     });
     return slug;
   }

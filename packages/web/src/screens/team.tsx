@@ -1,6 +1,6 @@
 import type { AgentView, StudioState, TeamView } from "@a12s-studio/contract/state";
 import { type CSSProperties, useState } from "react";
-import { api, useAction } from "../api.ts";
+import { api } from "../api.ts";
 import { displayName } from "../logic/names.ts";
 import { href, inspectHref, type Route, settingsHref } from "../logic/route.ts";
 import { shortTime } from "../logic/time.ts";
@@ -8,7 +8,6 @@ import { Composer } from "../parts/composer.tsx";
 import { Conversation, StatusChip } from "../parts/conversation.tsx";
 import { Icon } from "../parts/icons.tsx";
 import { Dot, doing, WorkList } from "../parts/presence.tsx";
-import { Problem } from "../parts/problem.tsx";
 
 type Props = { state: StudioState; team: TeamView; route: Route; onHire: () => void };
 
@@ -65,7 +64,7 @@ export function TeamScreen({ state, team, route, onHire }: Props) {
             key={agent.id}
             agent={agent}
             lead={agent.id === team.leadId}
-            inspect={inspectHref(agent.id, route)}
+            inspect={{ href: inspectHref(agent.id, route), selected: agent.id === route.inspect }}
           />
         ))}
 
@@ -78,8 +77,14 @@ export function TeamScreen({ state, team, route, onHire }: Props) {
         <ul className="threads">
           {team.threads.map((t) => (
             <li key={t.id}>
-              <a className={t.id === route.thread ? "thread-row selected" : "thread-row"} href={href(team.id, t.id)}>
+              <a
+                className={["thread-row", t.id === route.thread && "selected", t.unread > 0 && "unread"]
+                  .filter(Boolean)
+                  .join(" ")}
+                href={href(team.id, t.id)}
+              >
                 <span className="thread-top">
+                  {t.unread > 0 && <span className="unread-dot" title={`${t.unread} unread`} />}
                   <span className="thread-title">{t.title}</span>
                   <time>{shortTime(t.updatedAt, now)}</time>
                 </span>
@@ -118,14 +123,19 @@ export function TeamScreen({ state, team, route, onHire }: Props) {
   );
 }
 
-function AgentRow({ agent, lead, inspect }: { agent: AgentView; lead: boolean; inspect: string }) {
-  const [open, setOpen] = useState(false);
-  const [removing, setRemoving] = useState(false);
-  const action = useAction();
-  const asleep = agent.presence === "asleep";
+/** Opens the agent's inspector, where it is woken, put to sleep, stopped and removed. */
+function AgentRow({
+  agent,
+  lead,
+  inspect,
+}: {
+  agent: AgentView;
+  lead: boolean;
+  inspect: { href: string; selected: boolean };
+}) {
   return (
-    <div className={open ? "agent open" : "agent"}>
-      <button type="button" className="agent-row" aria-expanded={open} onClick={() => setOpen(!open)}>
+    <div>
+      <a className={inspect.selected ? "agent-row selected" : "agent-row"} href={inspect.href}>
         <Dot presence={agent.presence} />
         <span className="agent-text">
           <span className="agent-name">
@@ -134,45 +144,8 @@ function AgentRow({ agent, lead, inspect }: { agent: AgentView; lead: boolean; i
           </span>
           <span className={`agent-doing doing-${agent.presence}`}>{doing(agent)}</span>
         </span>
-      </button>
+      </a>
       <WorkList items={agent.work} />
-      {open && (
-        <div className="agent-more">
-          <p className="agent-role">{agent.roleLine}</p>
-          <p className="agent-model">
-            {agent.model}
-            {agent.queued > 0 && ` · ${agent.queued} waiting in its inbox`}
-          </p>
-          <div className={action.pending ? "agent-actions pending" : "agent-actions"}>
-            <a className="button" href={inspect}>
-              Inspect
-            </a>
-            <button
-              type="button"
-              className="button"
-              onClick={() => action.run(() => api.power(agent.id, asleep ? "awake" : "asleep"))}
-            >
-              {asleep ? "Wake" : "Put to sleep"}
-            </button>
-            {agent.presence === "working" && (
-              <button type="button" className="button" onClick={() => action.run(() => api.stop(agent.id))}>
-                Stop
-              </button>
-            )}
-            {!lead &&
-              (removing ? (
-                <button type="button" className="button danger" onClick={() => action.run(() => api.fire(agent.id))}>
-                  Remove {displayName(agent.id)}
-                </button>
-              ) : (
-                <button type="button" className="button quiet" onClick={() => setRemoving(true)}>
-                  Remove…
-                </button>
-              ))}
-          </div>
-          <Problem problem={action.problem} />
-        </div>
-      )}
     </div>
   );
 }

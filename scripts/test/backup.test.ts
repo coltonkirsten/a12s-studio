@@ -30,6 +30,10 @@ function folderDrives(folders: Record<string, string>): Drives {
       mkdirSync(folder(drive));
       execFileSync("tar", ["-C", folder(drive), "-xzf", file]);
     },
+    create: async (drive) => {
+      assert.equal(folders[drive], undefined, `drive ${drive} was created again`);
+      folders[drive] = temp("drive");
+    },
   };
 }
 
@@ -236,12 +240,51 @@ test("restore refuses to load a drive the Fleet has, unless forced, and has then
   assert.deepEqual(listing(live["home-web-lead"]), { "memory/notes.md": "Then.\n" });
 });
 
-test("restore names a drive the Fleet does not have and refuses a folder that is not a whole backup", async (t) => {
+test("restore makes a drive the Fleet no longer has and loads it, beside one it replaces", async (t) => {
   const { home } = await liveHome(t);
-  const [folder] = await printed(t, () => backup(home, temp("backups"), folderDrives({ "home-gone": drive({}) }), AT));
-  const [, lines] = await printed(t, () => restore(folder, temp("target"), folderDrives({}), true));
-  assert.match(lines, /^skipped drive home-gone: the Fleet has no such drive$/m);
+  const saved = {
+    "home-web-lead": drive({ "memory/notes.md": "Lead then.\n" }),
+    "home-web-dev": drive({ "memory/notes.md": "Dev then.\n", "src/app.ts": "export {};\n" }),
+  };
+  const [folder] = await printed(t, () => backup(home, temp("backups"), folderDrives(saved), AT));
+  const live: Record<string, string> = { "home-web-lead": drive({ "memory/notes.md": "Lead now.\n" }) };
 
+  const [, lines] = await printed(t, () => restore(folder, temp("target"), folderDrives(live), true));
+  assert.deepEqual(Object.keys(live).sort(), ["home-web-dev", "home-web-lead"]);
+  assert.deepEqual(listing(live["home-web-dev"] ?? ""), listing(saved["home-web-dev"]));
+  assert.deepEqual(listing(live["home-web-lead"] ?? ""), listing(saved["home-web-lead"]));
+  assert.match(lines, /^created drive home-web-dev$/m);
+  assert.doesNotMatch(lines, /created drive home-web-lead/);
+});
+
+test("restore onto an empty data folder and a Fleet without the drives needs no --force", async (t) => {
+  const { home } = await liveHome(t);
+  const saved = { "home-web-lead": drive({ "memory/notes.md": "Then.\n" }) };
+  const [folder] = await printed(t, () => backup(home, temp("backups"), folderDrives(saved), AT));
+  const live: Record<string, string> = {};
+  await printed(t, () => restore(folder, temp("target"), folderDrives(live), false));
+  assert.deepEqual(listing(live["home-web-lead"] ?? ""), { "memory/notes.md": "Then.\n" });
+});
+
+test("restore stops at a drive it cannot make, before it replaces anything", async (t) => {
+  const { home } = await liveHome(t);
+  const saved = { "home-web-dev": drive({ "a.txt": "a" }), "home-web-lead": drive({ "b.txt": "b" }) };
+  const [folder] = await printed(t, () => backup(home, temp("backups"), folderDrives(saved), AT));
+  const live = { "home-web-lead": drive({ "b.txt": "now" }) };
+  const held: Drives = {
+    ...folderDrives(live),
+    create: (drive) => Promise.reject(new Error(`Docker already has the volume a12s-studio-${drive}`)),
+  };
+  const target = temp("target");
+  await assert.rejects(
+    printed(t, () => restore(folder, target, held, true)),
+    /Docker already has the volume a12s-studio-home-web-dev/,
+  );
+  assert.deepEqual(listing(live["home-web-lead"]), { "b.txt": "now" });
+  assert.deepEqual(readdirSync(target), []);
+});
+
+test("restore refuses a folder that is not a whole backup", async () => {
   await assert.rejects(
     restore(temp("not-a-backup"), temp("target"), folderDrives({}), true),
     /is not a whole backup: it has no config\.json, app\/studio\.db, broker\/vault\.db, drives/,

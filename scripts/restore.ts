@@ -7,7 +7,7 @@ import { DATABASES, DRIVES, TAR } from "./backup.ts";
 import { type Drives, fleetDrives, fleetOf } from "./drives.ts";
 
 // Without `force` it refuses, before it changes anything, when the data folder or the Fleet already holds something
-// the backup would replace. The Fleet is the one the backup names, whatever the data folder: a restore into a spare
+// the backup would replace; a drive the Fleet does not have replaces nothing. The Fleet is the one the backup names, whatever the data folder: a restore into a spare
 // folder still loads the drives of that Fleet's agents.
 export async function restore(folder: string, home: string, drives: Drives, force: boolean): Promise<void> {
   const lacking = ["config.json", ...DATABASES, DRIVES].filter((file) => !existsSync(join(folder, file)));
@@ -26,6 +26,12 @@ export async function restore(folder: string, home: string, drives: Drives, forc
     ];
     throw new Error(`${held.join(", and ")}. To replace them, run this again with --force.`);
   }
+  // A drive the Fleet no longer has is made again, so its agent finds its home when its computer is put again. They
+  // are made first: a drive that cannot be made stops the restore before it has replaced anything.
+  for (const drive of saved.filter((d) => !known.has(d))) {
+    await drives.create(drive);
+    console.log(`created drive ${drive}`);
+  }
   mkdirSync(home, { recursive: true, mode: 0o700 });
   for (const entry of data) {
     // Removed first, so no file of the old data (a database's write-ahead log above all) stays beside the copy.
@@ -34,10 +40,6 @@ export async function restore(folder: string, home: string, drives: Drives, forc
     console.log(`restored ${entry}`);
   }
   for (const drive of saved) {
-    if (!known.has(drive)) {
-      console.log(`skipped drive ${drive}: the Fleet has no such drive`);
-      continue;
-    }
     await drives.load(drive, join(folder, DRIVES, `${drive}${TAR}`));
     console.log(`restored drive ${drive}`);
   }

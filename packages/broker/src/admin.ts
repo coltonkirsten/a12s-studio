@@ -55,8 +55,6 @@ const MAX_ITEMS = 50;
 const WARN_AHEAD_MS = 3 * 24 * 60 * 60 * 1000;
 const AUDIT_PAGE = 50;
 const AUDIT_PAGE_MAX = 200;
-// A misled agent must not be able to flood Needs You.
-const MAX_PENDING = 10;
 // Never the nonce or the ciphertext: a view is built from these columns only.
 const CREDENTIAL_COLUMNS = "team_id, host, scheme, username, header_name, created_at, updated_at, rejected_at";
 // Printable and on one line, so a stored value is always a legal header value.
@@ -121,6 +119,12 @@ function reach(body: Record<string, unknown>): { host: string; methods: string; 
     methods: JSON.stringify(list(body.methods, "methods", (method) => METHODS.includes(method))),
     paths: JSON.stringify(list(body.paths, "paths", isPattern)),
   };
+}
+
+// A request's reach as a set: the same methods and paths in another order, or named twice, are the same request.
+function asSet(to: ReturnType<typeof reach>): ReturnType<typeof reach> {
+  const sorted = (json: string) => JSON.stringify([...new Set(JSON.parse(json) as string[])].sort());
+  return { host: to.host, methods: sorted(to.methods), paths: sorted(to.paths) };
 }
 
 function toCredentialView(row: CredentialRow): CredentialView {
@@ -265,23 +269,22 @@ function routes({ db, vault, now }: AdminDeps): Route[] {
       const agentId = text(input.agentId, "agentId", AGENT_ID);
       // The app names the agent from the caller header; an agent of another team here means a bug in the app.
       if (teamOf(agentId) !== team) invalid('"agentId" is not an agent of this team.');
-      const to = reach(input);
+      const to = asSet(reach(input));
       const reason = text(input.reason, "reason");
       const days = input.days === undefined ? null : count(input.days, "days");
-      if (all("SELECT 1 FROM requests WHERE team_id = ? AND status = 'pending'", team).length >= MAX_PENDING) {
-        throw new Refusal(
-          409,
-          "too_many_pending",
-          `Team ${team} already has ${MAX_PENDING} requests waiting for the owner.`,
-          "Wait for the owner to decide on them, then request again.",
+      // One card for one change: asking again for what already waits joins that request, whoever asks.
+      const [same] = all<RequestRow>(
+        `SELECT * FROM requests WHERE team_id = ? AND status = 'pending' AND host = ? AND methods = ? AND paths = ?`,
+        ...[team, to.host, to.methods, to.paths],
+      );
+      const id = same?.id ?? newId("rq_");
+      if (!same) {
+        run(
+          `INSERT INTO requests (id, team_id, agent_id, host, methods, paths, reason, days, status, created_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?)`,
+          ...[id, team, agentId, to.host, to.methods, to.paths, reason, days, now()],
         );
       }
-      const id = newId("rq_");
-      run(
-        `INSERT INTO requests (id, team_id, agent_id, host, methods, paths, reason, days, status, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?)`,
-        ...[id, team, agentId, to.host, to.methods, to.paths, reason, days, now()],
-      );
       audit(db, now(), { teamId: team, agentId, actor: "agent", action: "request.create", host: to.host, detail: id });
       return request(id) ?? missing("request");
     }),

@@ -14,7 +14,6 @@ export type Settings = {
 export type Presence = "unknown" | "asleep" | "awake" | "working" | "waiting" | "error";
 export type WaitingFor = "cap" | "budget" | "paused" | "disk";
 export type ThreadStatus = "open" | "done";
-export type BoardStatus = "open" | "needs_you" | "done";
 
 export type AgentView = {
   id: string;
@@ -23,7 +22,9 @@ export type AgentView = {
   model: string;
   presence: Presence;
   waitingFor?: WaitingFor;
+  // What it is doing now, and since when: the running call, the model's step or the Turn's start.
   line: string | null;
+  since: number | null;
   turn: { id: string; threadId: ThreadId | null; startedAt: number; text: string } | null;
   // Sub-agents and background work running now, oldest first.
   work: WorkItem[];
@@ -45,11 +46,11 @@ export type ThreadSummary = {
   id: ThreadId;
   title: string;
   ownerId: string;
-  status: BoardStatus;
+  status: ThreadStatus;
   updatedAt: number;
   preview: string;
-  // Messages to the owner since the owner last wrote in the thread or marked it read.
-  forYou: number;
+  // Messages to the owner since the owner last opened the thread or wrote in it; the thread is unread while any wait.
+  unread: number;
 };
 
 export type TeamView = {
@@ -91,15 +92,13 @@ export type ThreadView = {
   teamId: string;
   title: string;
   ownerId: string;
-  status: BoardStatus;
+  status: ThreadStatus;
   messages: MessageView[];
   hasMore: boolean;
   chain: Chain;
 };
 
 export type NeedsYouItem =
-  // A thread that needs you: its newest message to you, and how many more wait.
-  | { kind: "message"; teamId: string; threadId: ThreadId; message: MessageView; more: number }
   | { kind: "access_request"; teamId: string; request: AccessRequest; hostHasCredential: boolean }
   | { kind: "agent_error"; teamId: string; agentId: string; error: string }
   | { kind: "failed_turn"; teamId: string; agentId: string; turnId: string; error: string | null; at: number }

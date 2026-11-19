@@ -5,7 +5,7 @@ import { type CSSProperties, type ReactNode, useState } from "react";
 import { api, inOrder, useAccess, useAction } from "../api.ts";
 import { expiresAt, expiryText, type Lifetime, lifetimeLabel } from "../logic/grants.ts";
 import { displayName } from "../logic/names.ts";
-import { href, inspectHref, settingsHref } from "../logic/route.ts";
+import { inspectHref, settingsHref } from "../logic/route.ts";
 import { shortTime } from "../logic/time.ts";
 import { CredentialForm } from "../parts/access/credentials.tsx";
 import { GrantLines } from "../parts/access/grants.tsx";
@@ -34,8 +34,6 @@ export function NeedsYou({ state }: { state: StudioState }) {
 
 function keyOf(item: NeedsYouItem): string {
   switch (item.kind) {
-    case "message":
-      return item.threadId;
     case "access_request":
       return item.request.id;
     case "agent_error":
@@ -66,8 +64,6 @@ function Card({ item, team }: { item: NeedsYouItem; team: TeamView }) {
   );
 
   switch (item.kind) {
-    case "message":
-      return frame(displayName(item.message.from), item.message.body, item.message.at, <ReplyBox item={item} />);
     case "access_request": {
       const r = item.request;
       return frame(
@@ -141,55 +137,6 @@ function ActionButton({ label, write }: { label: string; write: () => Promise<Wr
       </button>
       <Problem problem={action.problem} />
     </>
-  );
-}
-
-/** Replies in the card's thread to the agent that wrote the newest message, or marks the thread read. */
-function ReplyBox({ item }: { item: Extract<NeedsYouItem, { kind: "message" }> }) {
-  const [body, setBody] = useState("");
-  const reply = useAction();
-  const seen = useAction();
-  const busy = reply.pending || seen.pending;
-  const to = item.message.from.slice(item.teamId.length + 1);
-  const send = () => body.trim() && !busy && reply.run(() => api.post(item.threadId, { body: body.trim(), to }));
-  return (
-    <div className="reply-box">
-      {item.more > 0 && (
-        <p className="card-more">
-          {item.more} more {item.more === 1 ? "message" : "messages"} for you in this thread
-        </p>
-      )}
-      <textarea
-        rows={2}
-        placeholder={`Reply to ${displayName(item.message.from)}`}
-        value={body}
-        readOnly={reply.pending}
-        className={reply.pending ? "pending" : undefined}
-        onChange={(event) => setBody(event.target.value)}
-        onKeyDown={(event) => {
-          if (event.key !== "Enter" || event.shiftKey || event.nativeEvent.isComposing) return;
-          event.preventDefault();
-          send();
-        }}
-      />
-      <Actions>
-        <a className="button quiet" href={href(item.teamId, item.threadId)}>
-          Open thread
-        </a>
-        <button
-          type="button"
-          className={seen.pending ? "button pending" : "button"}
-          disabled={busy}
-          onClick={() => seen.run(() => api.seen(item.threadId))}
-        >
-          Mark read
-        </button>
-        <button type="button" className="button primary" disabled={!body.trim() || busy} onClick={send}>
-          Reply
-        </button>
-      </Actions>
-      <Problem problem={reply.problem ?? seen.problem} />
-    </div>
   );
 }
 

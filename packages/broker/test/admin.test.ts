@@ -1,5 +1,8 @@
 import assert from "node:assert/strict";
-import { statSync } from "node:fs";
+import { mkdtempSync, rmSync, statSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { test } from "node:test";
 import type {
   AccessRequest,
@@ -9,6 +12,7 @@ import type {
   CredentialView,
   Grant,
 } from "@a12s-studio/contract/broker-admin";
+import { migrations, openDb } from "../src/db.ts";
 import { HOST, SECRET, startBroker } from "./harness.ts";
 
 const DAY = 24 * 60 * 60 * 1000;
@@ -131,7 +135,7 @@ test("every change writes one audit row, by the owner except for an agent's requ
   await broker.credential("web");
   const grant = await broker.grant("web");
   const first = await broker.admin<AccessRequest>("POST", "/teams/web/requests", wish);
-  const second = await broker.admin<AccessRequest>("POST", "/teams/web/requests", { ...wish, days: 7 });
+  const second = await broker.admin<AccessRequest>("POST", "/teams/web/requests", { ...wish, paths: ["/v1/other"] });
   await broker.admin("POST", `/teams/web/requests/${first.body.id}/approve`, { expiresAt: broker.clock.now + DAY });
   await broker.admin("POST", `/teams/web/requests/${second.body.id}/deny`);
   await broker.admin("POST", `/grants/${grant.id}/warned`);
@@ -216,7 +220,7 @@ test("attention lists pending requests and the grants that expire within three d
   await broker.admin("DELETE", `/teams/ops/grants/${revoked.id}`);
   const sooner = await broker.grant("ops", { expiresAt: now + DAY });
   const pending = await broker.admin<AccessRequest>("POST", "/teams/web/requests", wish);
-  const decided = await broker.admin<AccessRequest>("POST", "/teams/web/requests", wish);
+  const decided = await broker.admin<AccessRequest>("POST", "/teams/web/requests", { ...wish, methods: ["POST"] });
   await broker.admin("POST", `/teams/web/requests/${decided.body.id}/deny`);
 
   const attention = async () => {
@@ -254,26 +258,73 @@ test("attention lists pending requests and the grants that expire within three d
   assert.deepEqual(await attention(), expected);
 });
 
-test("a team has at most ten pending requests; a decision makes room for another", async (t) => {
+test("asking again for a change that waits joins its request; nothing caps how many different ones wait", async (t) => {
   const broker = await startBroker(t);
-  const ask = (team = "web") =>
-    broker.admin<AccessRequest & { code?: string; fix?: string }>("POST", `/teams/${team}/requests`, {
-      ...wish,
-      agentId: `${team}-dev`,
-    });
-  const first = await ask();
-  for (let i = 1; i < 10; i++) assert.equal((await ask()).status, 200);
-  const before = broker.auditAfter(0).length;
+  const ask = (body: object, team = "web") =>
+    broker.admin<AccessRequest>("POST", `/teams/${team}/requests`, { ...wish, ...body });
+  const first = await ask({ methods: ["POST", "GET"], paths: ["/v1/b", "/v1/a"] });
+  assert.deepEqual(
+    [first.body.methods, first.body.paths],
+    [
+      ["GET", "POST"],
+      ["/v1/a", "/v1/b"],
+    ],
+  );
+  const again = await ask({ agentId: "web-lead", methods: ["GET", "POST", "GET"], paths: ["/v1/a", "/v1/b"] });
+  assert.deepEqual([again.status, again.body], [200, first.body]);
+  assert.notEqual((await ask({ methods: ["GET"], paths: ["/v1/a", "/v1/b"] })).body.id, first.body.id);
+  assert.notEqual(
+    (await ask({ methods: ["POST", "GET"], paths: ["/v1/a", "/v1/b"], agentId: "ops-dev" }, "ops")).body.id,
+    first.body.id,
+  );
+  for (let i = 0; i < 20; i++) assert.equal((await ask({ paths: [`/v1/items/${i}`] })).status, 200);
 
-  const refused = await ask();
-  assert.deepEqual([refused.status, refused.body.code], [409, "too_many_pending"]);
-  assert.match(refused.body.fix ?? "", /Wait for the owner to decide/);
-  assert.equal(broker.auditAfter(0).length, before);
-  assert.equal((await ask("ops")).status, 200);
+  const { body } = await broker.admin<Attention>("GET", "/attention");
+  assert.equal(body.requests.filter((r) => r.teamId === "web").length, 22);
+  // The repeat is in the audit log under the agent that asked, pointing at the request it joined.
+  const repeats = broker.auditAfter(0).filter((row) => row.action === "request.create" && row.detail === first.body.id);
+  assert.deepEqual(
+    repeats.map((row) => row.agentId),
+    ["web-dev", "web-lead"],
+  );
 
   await broker.admin("POST", `/teams/web/requests/${first.body.id}/deny`);
-  assert.equal((await ask()).status, 200);
-  assert.equal((await ask()).status, 409);
+  const later = await ask({ methods: ["GET", "POST"], paths: ["/v1/a", "/v1/b"] });
+  assert.notEqual(later.body.id, first.body.id);
+  assert.equal(later.body.status, "pending");
+});
+
+test("opening a broker database merges the pending requests that wait for the same change", () => {
+  const dir = mkdtempSync(join(tmpdir(), "broker-db-"));
+  const file = join(dir, "vault.db");
+  const old = new DatabaseSync(file);
+  old.exec(migrations[0] ?? "");
+  old.exec("PRAGMA user_version = 1");
+  old.exec(`INSERT INTO requests (id, team_id, agent_id, host, methods, paths, reason, status, created_at) VALUES
+    ('rq_a', 'web', 'web-dev', 'api.example.com', '["POST","GET"]', '["/v1/a"]', 'First.', 'pending', 10),
+    ('rq_b', 'web', 'web-lead', 'api.example.com', '["GET","POST"]', '["/v1/a"]', 'Again.', 'pending', 20),
+    ('rq_c', 'web', 'web-dev', 'api.example.com', '["GET","POST"]', '["/v1/a"]', 'Decided.', 'denied', 5),
+    ('rq_d', 'ops', 'ops-dev', 'api.example.com', '["GET","POST"]', '["/v1/a"]', 'Other team.', 'pending', 30),
+    ('rq_e', 'web', 'web-dev', 'api.example.com', '["GET"]', '["/v1/a"]', 'Less.', 'pending', 40)`);
+  old.close();
+  const db = openDb(file);
+  try {
+    assert.deepEqual(
+      db
+        .prepare("SELECT id, methods, status FROM requests ORDER BY id")
+        .all()
+        .map((r) => [r.id, r.methods, r.status]),
+      [
+        ["rq_a", '["GET","POST"]', "pending"],
+        ["rq_c", '["GET","POST"]', "denied"],
+        ["rq_d", '["GET","POST"]', "pending"],
+        ["rq_e", '["GET"]', "pending"],
+      ],
+    );
+  } finally {
+    db.close();
+    rmSync(dir, { recursive: true });
+  }
 });
 
 test("the audit log is paged newest first and shows one team only", async (t) => {

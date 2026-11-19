@@ -8,7 +8,8 @@ export type WriteResult = { rev: number; id?: string };
 export type Template = { id: string; purpose: string; agents: string[] };
 export type TemplatesResponse = { templates: Template[] };
 
-export type CreateTeamBody = { name: string; purpose: string; accent: string; template: string };
+// lead: the slug of the agent the template's lead role is hired as.
+export type CreateTeamBody = { name: string; purpose: string; accent: string; template: string; lead: string };
 
 export type PatchTeamBody = {
   name?: string;

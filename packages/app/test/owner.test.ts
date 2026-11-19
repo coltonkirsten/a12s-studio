@@ -84,6 +84,7 @@ test("stream: a state on connect, then one after each write, with rising revs", 
     purpose: "The site.",
     accent: "#007aff",
     template: "website",
+    lead: "lead",
   });
   assert.equal(created.status, 200);
   const { rev, id } = created.body as { rev: number; id: string };
@@ -136,12 +137,10 @@ test("owner thread and post: a message goes to the lead, the thread's owner or t
   await state.next(1);
   const view = state.last();
   assert.equal(view.open?.id, threadId);
-  assert.equal(view.open?.status, "needs_you");
-  assert.deepEqual(
-    view.needsYou.map((n) => n.kind === "message" && [n.threadId, n.message.id, n.more]),
-    [[threadId, asked.message, 0]],
-  );
-  assert.equal(view.teams.find((x) => x.id === "web")?.threads[0]?.forYou, 1);
+  assert.equal(view.open?.status, "open");
+  assert.equal(view.open?.messages.at(-1)?.id, asked.message);
+  assert.deepEqual(view.needsYou, []);
+  assert.equal(view.teams.find((x) => x.id === "web")?.threads[0]?.unread, 1);
 
   const answer = await s.owner("POST", `/api/threads/${threadId}/messages`, { body: "Blue." });
   assert.equal(answer.status, 200);
@@ -158,17 +157,20 @@ test("owner thread and post: a message goes to the lead, the thread's owner or t
   );
 });
 
-test("Mark read: the seen route clears needs you for that thread only", async (t) => {
+test("opening a thread: the seen route reads that thread only", async (t) => {
   const s = await setup(t);
   await s.twoTeams();
   const posted = await s.tool("web-lead", "post", { to: "owner", title: "Colour", body: "Blue or green?" });
   const thread = String(posted.thread);
   await s.tool("notes-lead", "post", { to: "owner", title: "Sources", body: "Which?" });
-  const needs = () => deriveState(s.app, null).needsYou.filter((n) => n.kind === "message").length;
-  assert.equal(needs(), 2);
+  const unread = () =>
+    deriveState(s.app, null)
+      .teams.flatMap((team) => team.threads)
+      .filter((x) => x.unread > 0).length;
+  assert.equal(unread(), 2);
   const seen = await s.owner("POST", `/api/threads/${thread}/seen`, {});
   assert.equal(seen.status, 200);
-  assert.equal(needs(), 1);
+  assert.equal(unread(), 1);
   assert.equal((await s.owner("POST", "/api/threads/th_000000000000/seen", {})).status, 404);
 });
 

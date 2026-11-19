@@ -22,7 +22,8 @@ scripts/setup.sh
 
 Without `--force` the restore changes nothing when the data folder already holds Studio's data or the Fleet
 already has a home drive that the backup would replace. The drives it loads are those of the Fleet the backup
-names, also when `STUDIO_HOME` points at another folder.
+names, also when `STUDIO_HOME` points at another folder. A saved drive that Fleet no longer has is made again and
+loaded, so each agent finds its home when its computer comes back.
 
 The credentials the broker stores are encrypted with a vault key that lives in the login Keychain, not in the backup.
 Export it once and keep it in your password manager; without it the stored credentials cannot be read on another

@@ -1,9 +1,11 @@
 import type { AgentView, TeamView } from "@a12s-studio/contract/state";
 import { type CSSProperties, lazy, Suspense, useEffect, useState } from "react";
+import { api, useAction } from "../../api.ts";
 import { displayName } from "../../logic/names.ts";
 import { inspectHref, type Route } from "../../logic/route.ts";
 import { Icon } from "../../parts/icons.tsx";
 import { Dot, doing } from "../../parts/presence.tsx";
+import { Problem } from "../../parts/problem.tsx";
 import { Files } from "./files.tsx";
 import { Inbox } from "./inbox.tsx";
 import { Now } from "./now.tsx";
@@ -40,6 +42,7 @@ export function Inspector({ team, agent, route }: { team: TeamView; agent: Agent
           <h2>{displayName(agent.id)}</h2>
           <p className={`agent-doing doing-${agent.presence}`}>{doing(agent)}</p>
         </div>
+        <Power agent={agent} />
         <a className="icon-button" href={closed} title="Close">
           <Icon name="close" />
         </a>
@@ -62,8 +65,31 @@ export function Inspector({ team, agent, route }: { team: TeamView; agent: Agent
             <Terminal agent={agent} />
           </Suspense>
         )}
-        {tab === "Settings" && <Settings agent={agent} />}
+        {tab === "Settings" && <Settings agent={agent} lead={agent.id === team.leadId} />}
       </div>
     </aside>
+  );
+}
+
+/** Wake or Put to sleep, and Stop while the agent works: what a12s stops is its Turn and its background work. */
+function Power({ agent }: { agent: AgentView }) {
+  const action = useAction();
+  const asleep = agent.presence === "asleep";
+  return (
+    <div className={action.pending ? "inspector-power pending" : "inspector-power"}>
+      <button
+        type="button"
+        className="button"
+        onClick={() => action.run(() => api.power(agent.id, asleep ? "awake" : "asleep"))}
+      >
+        {asleep ? "Wake" : "Put to sleep"}
+      </button>
+      {agent.presence === "working" && (
+        <button type="button" className="button" onClick={() => action.run(() => api.stop(agent.id))}>
+          Stop
+        </button>
+      )}
+      <Problem problem={action.problem} />
+    </div>
   );
 }
