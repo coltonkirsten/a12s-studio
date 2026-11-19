@@ -1760,9 +1760,9 @@ from the README alone.
   running Fleet (one haiku agent, removed at the end). Manual, never in CI.
 - **End-to-end against real a12s is manual, never in CI.** `npm run e2e` (`packages/e2e`) is run before each phase
   is shown. `npm run e2e -- p2` runs one script.
-  - It needs Docker, a12s, a Claude token in `CLAUDE_CODE_OAUTH_TOKEN` and the three Studio ports free; `p2` also
-    needs a throwaway GitHub repository and a fine-grained token for it in `E2E_GITHUB_REPO` (`<owner>/<repo>`) and
-    `E2E_GITHUB_TOKEN`. The ports are constants, so a Studio installed on the same Mac is stopped while it runs.
+  - It needs Docker, a12s, a Claude token in `CLAUDE_CODE_OAUTH_TOKEN` and the three Studio ports free; `p2` and
+    `p4` also need a throwaway GitHub repository and a fine-grained token for it in `E2E_GITHUB_REPO`
+    (`<owner>/<repo>`) and `E2E_GITHUB_TOKEN`; `p4` builds the image of `addons/example` and removes it at the end. The ports are constants, so a Studio installed on the same Mac is stopped while it runs.
     Whatever the chosen scripts need and is missing is named at the start, with its fix, before anything is created.
   - `run.ts` creates a Fleet named `studio-e2e` under a temp `STUDIO_HOME`, sets its `anthropic` credential, starts
     the real broker and the real app there, sets the default model to `haiku`, runs the scripts in order, and
