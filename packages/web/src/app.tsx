@@ -34,7 +34,11 @@ export function App() {
   const close = () => setSheet(null);
   return (
     <Rev.Provider value={state.rev}>
-      <div className="app" data-depth={runs ? 1 : !team ? 0 : route.thread ? 2 : 1} data-sidebar={sidebar ? "shown" : "hidden"}>
+      <div
+        className="app"
+        data-depth={runs ? 1 : !team ? 0 : route.thread ? 2 : 1}
+        data-sidebar={sidebar ? "shown" : "hidden"}
+      >
         <button
           type="button"
           className="icon-button sidebar-toggle"
