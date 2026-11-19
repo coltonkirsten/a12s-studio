@@ -2,7 +2,7 @@ import { DatabaseSync } from "node:sqlite";
 import type { AuditAction, AuditActor, Grant } from "@a12s-studio/contract/broker-admin";
 import type { GrantId, RequestId } from "@a12s-studio/contract/names";
 
-const migrations: string[] = [
+export const migrations: string[] = [
   `
   CREATE TABLE credentials (
     team_id TEXT NOT NULL, host TEXT NOT NULL,
@@ -44,6 +44,18 @@ const migrations: string[] = [
     status INTEGER, grant_id TEXT, detail TEXT
   ) STRICT;
   CREATE INDEX audit_team ON audit (team_id, id DESC);
+  `,
+  // A pending request's methods and paths are kept as sorted sets, and requests that wait for the same change become
+  // the oldest of them: one card per change.
+  `
+  UPDATE requests SET
+    methods = (SELECT json_group_array(value) FROM (SELECT DISTINCT value FROM json_each(requests.methods) ORDER BY value)),
+    paths = (SELECT json_group_array(value) FROM (SELECT DISTINCT value FROM json_each(requests.paths) ORDER BY value))
+    WHERE status = 'pending';
+  DELETE FROM requests WHERE status = 'pending' AND EXISTS (
+    SELECT 1 FROM requests o WHERE o.status = 'pending' AND o.team_id = requests.team_id AND o.host = requests.host
+      AND o.methods = requests.methods AND o.paths = requests.paths
+      AND (o.created_at, o.id) < (requests.created_at, requests.id));
   `,
 ];
 

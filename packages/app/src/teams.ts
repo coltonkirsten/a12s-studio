@@ -37,7 +37,7 @@ export function createTeams(deps: {
       .map((f) => f.slice(0, -3))
       .sort((a, b) => Number(b === "lead") - Number(a === "lead") || a.localeCompare(b));
     const roles = slugs.map((slug) => ({ slug, role: read(`roles/${slug}.md`) }));
-    return { id, purpose: read("brief.md"), agents: slugs, roles };
+    return { id, purpose: read("purpose.md"), agents: slugs, roles };
   }
 
   function live(teamId: string): { team: Team; scoped: TeamRepo } {
@@ -148,9 +148,20 @@ export function createTeams(deps: {
       }
       const id = teamSlug(input.name, (slug) => creating.has(slug) || repo.teamSlugUsed(slug));
       const { roles } = readTemplate(input.template);
+      if (roles.some(({ slug }) => slug !== "lead" && slug === input.lead)) {
+        throw new StudioError(
+          409,
+          "slug_used",
+          `The ${input.template} template already has an agent named "${input.lead}".`,
+          "Give the lead another name.",
+        );
+      }
       const settings = repo.settings();
       const scoped = repo.forTeam(id);
-      const hired = roles.map(({ slug, role }) => newAgent(scoped, id, slug, role, settings.defaultModel));
+      // The template's lead role is hired under the name the owner gave the lead.
+      const hired = roles.map(({ slug, role }) =>
+        newAgent(scoped, id, slug === "lead" ? input.lead : slug, role, settings.defaultModel),
+      );
       creating.add(id);
       try {
         const token = await a12s.createToken(id);
@@ -159,7 +170,7 @@ export function createTeams(deps: {
           name: input.name,
           purpose: input.purpose,
           accent: input.accent,
-          leadAgentId: agentId(id, "lead"),
+          leadAgentId: agentId(id, input.lead),
           dailyBudgetUsd: settings.defaultDailyBudgetUsd,
           paused: false,
           a12sToken: token,
@@ -220,7 +231,7 @@ export function createTeams(deps: {
     },
 
     // A new name is in every agent's instructions, so it reaches them as a fresh spec, which a12s applies at their
-    // next idle moment. The brief is loaded by the team layer's hook and needs none.
+    // next idle moment. The purpose is loaded by the team layer's hook and needs none.
     async patchTeam(teamId: string, patch: Pick<PatchTeamBody, "name" | "purpose" | "accent" | "dailyBudgetUsd">) {
       const { team, scoped } = live(teamId);
       const next = { ...team, ...patch };

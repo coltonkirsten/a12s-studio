@@ -135,9 +135,12 @@ test("GET /rules/<layer> answers the caller's own text, and only to a caller", a
   assert.equal(owner.text, "# Owner rules, for every agent\nBe brief.");
   assert.equal(
     (await layer(s, "notes-researcher", "team")).text,
-    "# Team: notes\nThe notes team.\n\n## Team rules\nCite sources.",
+    "# Team: notes\n\n## Purpose\nThe notes team.\n\n## Team rules\nCite sources.",
   );
-  assert.equal((await layer(s, "web-dev", "team")).text, "# Team: web\nThe web team.\n\n## Team rules\nNone.");
+  assert.equal(
+    (await layer(s, "web-dev", "team")).text,
+    "# Team: web\n\n## Purpose\nThe web team.\n\n## Team rules\nNone.",
+  );
   assert.match((await layer(s, "web-dev", "role")).text, /^# Your role\nWrites and tests the website's code\./);
   assert.match((await layer(s, "notes-researcher", "role")).text, /^# Your role\n(?!Writes and tests)/);
 
@@ -242,7 +245,7 @@ test("the limits: owner rules and a role 8,000 characters, team rules 4,000, a r
   assert.equal((await layer(s, "web-dev", "owner")).text, "# Owner rules, for every agent\nNone.");
 });
 
-test("editing a brief, a rule or a role makes no putAgent call", async (t) => {
+test("editing a purpose, a rule or a role makes no putAgent call", async (t) => {
   let puts = 0;
   const wrap = (fake: FakeA12s): A12s => ({
     ...fake,
@@ -253,7 +256,7 @@ test("editing a brief, a rule or a role makes no putAgent call", async (t) => {
   });
   const s = await setup(t, { wrap });
   const before = puts;
-  await s.owner("PATCH", "/api/teams/web", { purpose: "A new brief." });
+  await s.owner("PATCH", "/api/teams/web", { purpose: "A new purpose." });
   await s.owner("PUT", "/api/rules", { body: "Be brief." });
   await s.owner("PUT", "/api/teams/web/rules", { body: "Small PRs." });
   await s.owner("PATCH", "/api/agents/web-dev", { role: "Only tests." });

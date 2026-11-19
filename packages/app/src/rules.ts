@@ -62,5 +62,5 @@ export function text(layer: Layer, team: TeamRepo, caller: Caller): string {
   if (layer === "role") return `# Your role\n${current(team.roleRules(caller.agentId)) ?? NONE}`;
   const row = team.team();
   if (!row) throw new StudioError(404, "not_found", "Your team no longer exists.");
-  return `# Team: ${row.name}\n${row.purpose}\n\n## Team rules\n${current(team.teamRules()) || NONE}`;
+  return `# Team: ${row.name}\n\n## Purpose\n${row.purpose || NONE}\n\n## Team rules\n${current(team.teamRules()) || NONE}`;
 }

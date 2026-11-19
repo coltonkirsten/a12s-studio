@@ -12,9 +12,9 @@ async function setup(t: { after(fn: () => unknown): void }, opts: Parameters<typ
   return s;
 }
 
-const body = { name: "Web", purpose: "The site.", accent: "#336699", template: "website" };
+const body = { name: "Web", purpose: "The site.", accent: "#336699", template: "website", lead: "lead" };
 
-test("the templates list their brief and agents, blank first and lead first", async (t) => {
+test("the templates list their purpose and agents, blank first and lead first", async (t) => {
   const s = await setup(t);
   const templates = s.app.teams.templates();
   assert.deepEqual(
@@ -41,7 +41,7 @@ test("creating a team makes its token, its agents and its rows", async (t) => {
     ],
   );
   assert.deepEqual([...s.a12s.agents.keys()], ["web-lead", "web-dev"]);
-  // The brief and the roles are loaded by the hooks, not written into the instructions.
+  // The purpose and the roles are loaded by the hooks, not written into the instructions.
   const instructions = s.a12s.agents.get("web-dev")?.spec.instructions ?? "";
   assert.doesNotMatch(instructions, /The site\.|# Your role|Writes and tests/);
   assert.match(
@@ -51,7 +51,7 @@ test("creating a team makes its token, its agents and its rows", async (t) => {
   await assert.rejects(s.a12s.forTeam(team.a12sToken).wake("other-lead"), { code: "out_of_prefix" });
 });
 
-test("a new brief puts no spec; a new name puts every agent's", async (t) => {
+test("a new purpose puts no spec; a new name puts every agent's", async (t) => {
   const puts: string[] = [];
   const wrap = (fake: FakeA12s): A12s => ({
     ...fake,
@@ -63,7 +63,7 @@ test("a new brief puts no spec; a new name puts every agent's", async (t) => {
   const s = await setup(t, { wrap });
   await s.app.teams.createTeam(body);
   puts.length = 0;
-  await s.app.teams.patchTeam("web", { purpose: "A new brief." });
+  await s.app.teams.patchTeam("web", { purpose: "A new purpose." });
   assert.deepEqual(puts, []);
   await s.app.teams.patchTeam("web", { name: "Website" });
   assert.deepEqual(puts, ["web-lead replace", "web-dev replace"]);
@@ -91,6 +91,34 @@ test("the blank template makes a team of one lead", async (t) => {
       .map((a) => a.id),
     ["web-lead"],
   );
+});
+
+test("the lead is hired under the name the owner gives it, with the template's lead role", async (t) => {
+  const s = await setup(t);
+  const team = await s.app.teams.createTeam({ ...body, lead: "maya" });
+  assert.equal(team.leadAgentId, "web-maya");
+  const scoped = s.app.repo.forTeam(team.id);
+  assert.deepEqual(
+    scoped.agents().map((a) => a.id),
+    ["web-maya", "web-dev"],
+  );
+  assert.match(
+    s.db.prepare("SELECT body FROM rules WHERE agent_id = 'web-maya'").get()?.body as string,
+    /^Plans the work/,
+  );
+
+  for (const [lead, code] of [
+    ["dev", "slug_used"],
+    ["owner", "bad_slug"],
+    ["Maya Lee", "bad_slug"],
+  ] as const) {
+    await assert.rejects(s.app.teams.createTeam({ ...body, lead }), { code }, lead);
+  }
+  assert.deepEqual(
+    s.app.repo.teams().map((x) => x.id),
+    ["web"],
+  );
+  assert.deepEqual([...s.a12s.agents.keys()], ["web-maya", "web-dev"]);
 });
 
 test("a team whose agents cannot all be created leaves nothing behind", async (t) => {

@@ -47,6 +47,19 @@
   font-size: var(--size-small);
 }
 
+.inspector-power {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  align-items: center;
+  gap: 6px;
+}
+
+.inspector-power .problem {
+  flex-basis: 100%;
+  text-align: right;
+}
+
 .inspector-tabs {
   display: flex;
   gap: 2px;

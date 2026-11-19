@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { Rev } from "./api.ts";
 import { parseRoute } from "./logic/route.ts";
+import { Icon } from "./parts/icons.tsx";
 import { HireSheet } from "./screens/hire.tsx";
 import { Inspector } from "./screens/inspector/inspector.tsx";
 import { NeedsYou } from "./screens/needs-you.tsx";
@@ -13,6 +14,8 @@ import { useStudio } from "./stream.ts";
 export function App() {
   const [hash, setHash] = useState(location.hash);
   const [sheet, setSheet] = useState<"team" | "hire" | null>(null);
+  // Hidden, the sidebar gives its column to the page, so one team fills the window.
+  const [sidebar, setSidebar] = useState(true);
   useEffect(() => {
     const onHash = () => setHash(location.hash);
     addEventListener("hashchange", onHash);
@@ -29,7 +32,16 @@ export function App() {
   const close = () => setSheet(null);
   return (
     <Rev.Provider value={state.rev}>
-      <div className="app" data-depth={!team ? 0 : route.thread ? 2 : 1}>
+      <div className="app" data-depth={!team ? 0 : route.thread ? 2 : 1} data-sidebar={sidebar ? "shown" : "hidden"}>
+        <button
+          type="button"
+          className="icon-button sidebar-toggle"
+          title={sidebar ? "Hide the sidebar" : "Show the sidebar"}
+          aria-expanded={sidebar}
+          onClick={() => setSidebar(!sidebar)}
+        >
+          <Icon name="sidebar" />
+        </button>
         <Sidebar state={state} route={shown} connected={connected} onNewTeam={() => setSheet("team")} />
         <main className="main">
           {!team ? (

@@ -3,15 +3,42 @@ import type { AgentView } from "@a12s-studio/contract/state";
 import { type ChangeEvent, useContext, useState } from "react";
 import { api, Rev, useAction, useRead } from "../../api.ts";
 import { MODELS, type SettingsDraft, settingsDraft, settingsPatch } from "../../logic/agent-settings.ts";
-import { title } from "../../logic/names.ts";
+import { displayName, title } from "../../logic/names.ts";
 import { Problem } from "../../parts/problem.tsx";
 
-/** Every limit of one agent. A change reaches its computer at its next idle moment. */
-export function Settings({ agent }: { agent: AgentView }) {
+/** Every limit of one agent, and removing it. A change reaches its computer at its next idle moment. */
+export function Settings({ agent, lead }: { agent: AgentView; lead: boolean }) {
   const rev = useContext(Rev);
   const loaded = useRead(() => api.agent(agent.id), `${agent.id}:${rev}`);
   if (!loaded.data) return <Problem problem={loaded.problem} />;
-  return <Form key={JSON.stringify(loaded.data)} agent={agent} current={loaded.data} />;
+  return (
+    <>
+      <Form key={JSON.stringify(loaded.data)} agent={agent} current={loaded.data} />
+      {/* A team keeps its lead: a message nobody is addressed in goes to the lead. */}
+      {!lead && <Remove agent={agent} />}
+    </>
+  );
+}
+
+function Remove({ agent }: { agent: AgentView }) {
+  const [sure, setSure] = useState(false);
+  const action = useAction();
+  return (
+    <section className="inspector-section">
+      <div className={action.pending ? "inspector-actions pending" : "inspector-actions"}>
+        {sure ? (
+          <button type="button" className="button danger" onClick={() => action.run(() => api.fire(agent.id))}>
+            Remove {displayName(agent.id)}
+          </button>
+        ) : (
+          <button type="button" className="button quiet danger" onClick={() => setSure(true)}>
+            Remove from the team…
+          </button>
+        )}
+      </div>
+      <Problem problem={action.problem} />
+    </section>
+  );
 }
 
 function Form({ agent, current }: { agent: AgentView; current: AgentSettings }) {

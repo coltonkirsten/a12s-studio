@@ -11,12 +11,20 @@ export type Drives = {
   save(drive: string, file: string): Promise<void>;
   // Makes the drive hold exactly the files of a tar that `save` wrote.
   load(drive: string, file: string): Promise<void>;
+  // Makes an empty home drive that `list` did not name, refusing one that exists in any form.
+  create(drive: string): Promise<void>;
 };
 
 // Has tar, gzip and find, and is a few megabytes; Docker pulls it the first time.
 const TOOLS_IMAGE = "busybox:1.37";
+// a12s names an agent computer's home drive home-<computer> (M8).
+const HOME = "home-";
 
-function docker(args: string[], stdin: number | "ignore", stdout: number | "ignore"): Promise<void> {
+function docker(
+  args: string[],
+  stdin: number | "ignore" = "ignore",
+  stdout: number | "ignore" = "ignore",
+): Promise<void> {
   return new Promise((resolve, reject) => {
     const child = spawn("docker", args, { stdio: [stdin, stdout, "pipe"] });
     let errors = "";
@@ -46,7 +54,8 @@ export function fleetOf(folder: string): string {
 
 export function fleetDrives(fleet: string): Drives {
   // Measured (build-spec section 2, M8): a12s keeps the drive named `name` in the Docker volume a12s-<fleet>-<name>.
-  const mount = (drive: string, mode: "ro" | "rw") => ["-v", `a12s-${fleet}-${drive}:/drive:${mode}`];
+  const volume = (drive: string) => `a12s-${fleet}-${drive}`;
+  const mount = (drive: string, mode: "ro" | "rw") => ["-v", `${volume(drive)}:/drive:${mode}`];
   const run = ["run", "--rm", "--network", "none"];
   return {
     async list() {
@@ -76,5 +85,19 @@ export function fleetDrives(fleet: string): Drives {
           "ignore",
         ),
       ),
+    async create(drive) {
+      // `docker volume create` answers an existing volume as if it had made it, so a volume a12s does not list is
+      // refused here rather than emptied by the load that follows.
+      const held = await docker(["volume", "inspect", volume(drive)]).then(
+        () => true,
+        () => false,
+      );
+      if (held) throw new Error(`Docker already has the volume ${volume(drive)}, which a12s does not list`);
+      // The labels a12s puts on a home drive it makes (M8), so a12s takes this volume as the computer's own when the
+      // computer is put again.
+      const labels = { "a12s.fleet": fleet, "a12s.drive": drive, "a12s.computer": drive.slice(HOME.length) };
+      const flags = Object.entries(labels).flatMap(([key, value]) => ["--label", `${key}=${value}`]);
+      await docker(["volume", "create", ...flags, volume(drive)]);
+    },
   };
 }

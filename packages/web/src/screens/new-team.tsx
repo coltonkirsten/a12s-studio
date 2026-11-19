@@ -1,4 +1,5 @@
 import type { ErrorBody, Template } from "@a12s-studio/contract/api";
+import { AGENT_SLUG, agentSlug } from "@a12s-studio/contract/names";
 import type { StudioState, TeamView } from "@a12s-studio/contract/state";
 import { useEffect, useState } from "react";
 import { api, useAccess, useAction } from "../api.ts";
@@ -40,8 +41,12 @@ function TeamForm({ state, onClose, created }: FormProps) {
   );
   const [templates, setTemplates] = useState<Template[]>([]);
   const [loadProblem, setLoadProblem] = useState<ErrorBody | null>(null);
+  const [leadName, setLeadName] = useState("Lead");
   const action = useAction();
   const { template, name, purpose } = draft;
+  const lead = agentSlug(leadName);
+  // The template's other agents keep their names, so the lead cannot take one of them.
+  const leadTaken = template?.agents.some((slug) => slug !== "lead" && slug === lead) ?? false;
 
   useEffect(() => {
     api.templates().then(
@@ -54,12 +59,12 @@ function TeamForm({ state, onClose, created }: FormProps) {
     );
   }, []);
 
-  const ready = name.trim() && purpose.trim() && template;
+  const ready = name.trim() && purpose.trim() && template && AGENT_SLUG.test(lead) && !leadTaken;
 
   function create(): void {
     if (!ready || !template || action.pending) return;
     action.run(
-      () => api.createTeam({ name: name.trim(), purpose: purpose.trim(), accent, template: template.id }),
+      () => api.createTeam({ name: name.trim(), purpose: purpose.trim(), accent, template: template.id, lead }),
       ({ id }) => {
         if (!id) return onClose();
         location.hash = href(id);
@@ -104,6 +109,17 @@ function TeamForm({ state, onClose, created }: FormProps) {
           placeholder="Describe what the team works on, in a paragraph."
           onChange={(event) => setDraft({ ...draft, purpose: event.target.value })}
         />
+      </label>
+      <label className="field">
+        <span>Lead</span>
+        <input value={leadName} placeholder="Name the lead" onChange={(event) => setLeadName(event.target.value)} />
+        {leadName && (
+          <small className={leadTaken ? "field-problem" : "field-hint"}>
+            {leadTaken
+              ? `The template already has ${lead}.`
+              : `Called @${lead} in threads. Messages you do not address go to the lead.`}
+          </small>
+        )}
       </label>
       <div className="field">
         <span>Colour</span>

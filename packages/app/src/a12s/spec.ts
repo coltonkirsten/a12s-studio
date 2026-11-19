@@ -83,7 +83,7 @@ exit 0
 `;
 
 // The whole spec of an agent computer. Fleet defaults are not used, so this is the one place a spec is decided.
-// The rules, the brief and the role are not in it: a changed spec restarts the agent computer, and the hooks load
+// The rules, the purpose and the role are not in it: a changed spec restarts the agent computer, and the hooks load
 // them instead (build-spec section 6).
 export function agentSpec(team: Pick<Team, "name">, agent: Agent): AgentSpec {
   const resources = {

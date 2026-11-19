@@ -12,7 +12,6 @@ import type { BrokerClient } from "./broker-client.ts";
 import { blockedReason, freeDiskGb, overBudget } from "./dispatcher.ts";
 import { type Live, presenceOf } from "./live.ts";
 import type { Message, Repo, TeamRepo } from "./repo.ts";
-import { boardStatus } from "./router.ts";
 import { roleLine } from "./rules.ts";
 import type { Scheduler } from "./scheduler.ts";
 
@@ -68,17 +67,6 @@ export function deriveState(
   const teams: TeamView[] = repo.teams().map((team) => {
     const scoped = repo.forTeam(team.id);
     const waiting = scoped.undelivered();
-    for (const { message, more } of scoped.forOwner()) {
-      if (message.threadId) {
-        needsYou.push({
-          kind: "message",
-          teamId: team.id,
-          threadId: message.threadId,
-          message: messageView(message),
-          more,
-        });
-      }
-    }
     for (const t of scoped.failedTurns()) {
       needsYou.push({
         kind: "failed_turn",
@@ -162,10 +150,10 @@ export function deriveState(
         id: t.id,
         title: t.title,
         ownerId: t.ownerAgentId,
-        status: boardStatus(t),
+        status: t.status,
         updatedAt: t.updatedAt,
         preview: (t.last?.body ?? "").slice(0, PREVIEW),
-        forYou: t.forOwner,
+        unread: t.unread,
       })),
     };
   });

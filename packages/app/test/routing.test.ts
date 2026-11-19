@@ -249,7 +249,7 @@ test("an answer that names no receiver is refused with who to name; named, it re
   const { thread } = ownerThread(s.app.repo.forTeam("web"), { body: "Which colour?", to: "dev" });
   await s.app.dispatcher.run();
   sleepAll(s.a12s);
-  const cards = () => deriveState(s.app, null).needsYou.filter((n) => n.kind === "message").length;
+  const unread = () => deriveState(s.app, null).teams[0]?.threads.find((x) => x.id === thread)?.unread;
   const written = () => s.db.prepare("SELECT count(*) AS n FROM messages").get()?.n;
   const before = written();
 
@@ -267,7 +267,7 @@ test("an answer that names no receiver is refused with who to name; named, it re
   await s.app.dispatcher.run();
   assert.match(pending(s.a12s, "web-lead").at(-1)?.body ?? "", /from dev\n---\nJSON lines\./);
   assert.notEqual(s.a12s.agents.get("web-lead")?.phase, "Asleep", "the asker is woken by the answer");
-  assert.equal(cards(), 1, "the owner's question shows its answer");
+  assert.equal(unread(), 1, "the owner's thread shows its answer as unread");
 });
 
 test("the owner's messages are sent first", async (t) => {
@@ -379,42 +379,35 @@ test("a restart after a12s took the send but before it was recorded replaces, no
   assert.deepEqual(row(s, message), { delivery: "sent", a12s: inbox[0]?.id });
 });
 
-test("a thread needs the owner from an agent's message to them until they write there or mark it read", async (t) => {
+test("a thread is unread from an agent's message to the owner until the owner opens it or writes there", async (t) => {
   const s = await setup(t);
   const web = s.app.repo.forTeam("web");
+  const unread = (thread: string) => deriveState(s.app, null).teams[0]?.threads.find((x) => x.id === thread)?.unread;
   const status = async (thread: unknown) =>
     ((await s.tool("web-dev", "read", { status: "all" })).threads as { id: string; status: string }[]).find(
       (b) => b.id === thread,
     )?.status;
-  const cards = () => deriveState(s.app, null).needsYou.filter((n) => n.kind === "message");
 
-  const asked = await s.tool("web-lead", "post", { to: "owner", title: "Colour", body: "Blue or green?" });
-  const thread = String(asked.thread);
-  assert.equal(await status(thread), "needs_you");
+  const { thread } = ownerThread(web, { body: "Which colour?", to: "lead" });
+  assert.equal(unread(thread), 0, "the owner's own message is read");
+  await tick();
+  for (const body of ["Blue or green?", "Or teal?"]) await s.tool("web-lead", "post", { to: "owner", thread, body });
+  await s.tool("web-lead", "post", { to: "dev", thread, body: "Hold the palette." });
+  assert.equal(unread(thread), 2, "messages to the owner, and only those");
+  assert.equal(await status(thread), "open", "agents see the thread's own status");
+  assert.deepEqual(deriveState(s.app, null).needsYou, [], "a message to the owner is not a Needs You card");
+
   await tick();
   ownerPost(web, thread, { body: "Green." });
-  assert.equal(await status(thread), "open", "writing in the thread is reading it");
-
-  await tick();
-  for (const body of ["One.", "Two.", "Three."]) await s.tool("web-lead", "post", { to: "owner", thread, body });
-  assert.equal(await status(thread), "needs_you");
-  const [card, ...others] = cards();
-  assert.equal(others.length, 0, "one card for the thread");
-  assert.ok(card?.kind === "message");
-  assert.deepEqual([card.message.body, card.more, card.threadId], ["Three.", 2, thread]);
-  assert.equal(deriveState(s.app, null).teams[0]?.threads.find((x) => x.id === thread)?.forYou, 3);
-
-  await tick();
-  markSeen(web, thread);
-  assert.equal(await status(thread), "open", "Mark read");
-  assert.equal(cards().length, 0);
+  assert.equal(unread(thread), 0, "writing in the thread is reading it");
 
   await tick();
   await s.tool("web-lead", "post", { to: "owner", thread, body: "Done, and here it is." });
-  assert.equal(cards().length, 1);
   changeThread(web, thread, { status: "done" });
-  assert.equal(await status(thread), "done");
-  assert.equal(cards().length, 0, "a thread set to done needs nobody");
+  assert.equal(unread(thread), 1, "a done thread still shows what came after the owner looked");
+  await tick();
+  markSeen(web, thread);
+  assert.equal(unread(thread), 0, "opening the thread reads it");
 });
 
 test("an unaddressed owner message goes to the thread's owner and wakes it", async (t) => {

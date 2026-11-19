@@ -6,7 +6,6 @@ import { DatabaseSync } from "node:sqlite";
 import { test } from "node:test";
 import { migrations, openDb, tx } from "../src/db.ts";
 import { createRepo } from "../src/repo.ts";
-import { boardStatus } from "../src/router.ts";
 
 test("migrations apply to a new file and re-apply as a no-op", () => {
   const file = join(mkdtempSync(join(tmpdir(), "studio-db-")), "studio.db");
@@ -88,10 +87,9 @@ test("migration 2 turns asks, replies and notes into one kind of message and kee
   const repo = createRepo(db).forTeam("web");
   assert.deepEqual([repo.message("m_reply")?.causeId, repo.message("m_reply")?.depth], ["m_done", 1]);
   assert.deepEqual([repo.message("m_ask")?.causeId, repo.message("m_ask")?.depth], [null, 0]);
-  const board = new Map(repo.board({ status: "all", limit: 10 }).map((t) => [t.id, boardStatus(t)]));
-  assert.equal(board.get("th_open"), "needs_you", "the unanswered ask still needs the owner, with what came after");
-  assert.equal(repo.board({ status: "all", limit: 10 }).find((t) => t.id === "th_open")?.forOwner, 2);
-  assert.equal(board.get("th_answered"), "open");
+  const board = new Map(repo.board({ status: "all", limit: 10 }).map((t) => [t.id, t.unread]));
+  assert.equal(board.get("th_open"), 2, "the unanswered ask is still unread, with what came after");
+  assert.equal(board.get("th_answered"), 0);
   assert.deepEqual([...repo.dispatchable().keys()], ["web-dev"], "a queued note is now a message to deliver");
   db.close();
 });
@@ -165,9 +163,9 @@ test("migration 4 gives every message a receiver, and no thread newly needs the 
     ["owner", "owner", "owner", "owner", "web-dev"],
   );
   assert.deepEqual([repo.message("m_record")?.causeId, repo.message("m_record")?.depth], ["m_seen", 1]);
-  const board = new Map(repo.board({ status: "all", limit: 10 }).map((t) => [t.id, boardStatus(t)]));
-  assert.equal(board.get("th_quiet"), "open", "what was written to nobody asks for nobody now");
-  assert.equal(board.get("th_waiting"), "needs_you");
+  const board = new Map(repo.board({ status: "all", limit: 10 }).map((t) => [t.id, t.unread]));
+  assert.equal(board.get("th_quiet"), 0, "what was written to nobody is read now");
+  assert.ok((board.get("th_waiting") ?? 0) > 0);
   assert.deepEqual([...repo.dispatchable().keys()], ["web-dev"]);
   db.close();
 });
