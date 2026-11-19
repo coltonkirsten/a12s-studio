@@ -29,7 +29,7 @@ import type { Runs } from "../runs.ts";
 import type { Scheduler } from "../scheduler.ts";
 import { deriveState, messagesPage, messageView, type Stream } from "../state.ts";
 import type { createTeams } from "../teams.ts";
-import { steps } from "../transcript.ts";
+import { shares, steps } from "../transcript.ts";
 import { bridgeTerminal } from "./terminal.ts";
 
 export type OwnerDeps = {
@@ -61,6 +61,8 @@ const DURATION = z.string().min(1).max(20);
 const TURN_LIST = 20;
 const CALL_TEXT_MAX = 4000;
 const RUN_LIST = 50;
+// The runs list across every team: enough to hold a few days of a busy Studio's threads.
+const RUN_ALL = 500;
 
 const schemas = {
   createTeam: z.strictObject({
@@ -539,10 +541,11 @@ export function ownerRoutes(deps: OwnerDeps): Route[] {
         if (thread) {
           const teamId = repo.threadTeam(thread);
           if (teamId === undefined) throw new StudioError(404, "not_found", `No thread ${thread}.`);
-          return { runs: repo.forTeam(teamId).runs({ threadId: thread }, RUN_LIST) };
+          return { runs: repo.forTeam(teamId).runs({ threadId: thread }, RUN_ALL) };
         }
         if (agent) return { runs: repo.forTeam(teamOf(agent)).runs({ agentId: agent }, RUN_LIST) };
-        throw new StudioError(400, "bad_request", "Name a thread or an agent.", "Add ?thread=<id> or ?agent=<id>.");
+        const newest = repo.teams().flatMap((team) => repo.forTeam(team.id).runs(null, RUN_ALL));
+        return { runs: newest.sort((a, b) => (b.index.lastAt ?? 0) - (a.index.lastAt ?? 0)).slice(0, RUN_ALL) };
       },
     },
     {
@@ -551,7 +554,13 @@ export function ownerRoutes(deps: OwnerDeps): Route[] {
       run({ params, query }): RunResponse {
         const run = runOf(params[0] ?? "");
         const full = query.get("full") === "1";
-        return { run, steps: steps(runs.lines(run.turn), full ? Number.POSITIVE_INFINITY : CALL_TEXT_MAX, full) };
+        const lines = runs.lines(run.turn);
+        const cost = run.costUsd;
+        return {
+          run,
+          steps: steps(lines, full ? Number.POSITIVE_INFINITY : CALL_TEXT_MAX, full),
+          agents: shares(lines).map(({ agent, share }) => ({ agent, costUsd: cost === null ? null : cost * share })),
+        };
       },
     },
     {

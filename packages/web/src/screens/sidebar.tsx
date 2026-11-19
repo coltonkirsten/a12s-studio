@@ -3,24 +3,28 @@ import { type CSSProperties, useState } from "react";
 import { createPortal } from "react-dom";
 import { api } from "../api.ts";
 import { budgetUsed, usd } from "../logic/money.ts";
-import { href, type Route } from "../logic/route.ts";
+import { href, type Route, runsHref } from "../logic/route.ts";
 import { Icon } from "../parts/icons.tsx";
 import { Dot } from "../parts/presence.tsx";
 import { Switch } from "../parts/switch.tsx";
 import { SettingsSheet } from "./settings.tsx";
 
-type Props = { state: StudioState; route: Route; connected: boolean; onNewTeam: () => void };
+type Props = { state: StudioState; route: Route; runs: boolean; connected: boolean; onNewTeam: () => void };
 
-export function Sidebar({ state, route, connected, onNewTeam }: Props) {
+export function Sidebar({ state, route, runs, connected, onNewTeam }: Props) {
   const needs = state.needsYou.length;
   const [settings, setSettings] = useState(false);
   return (
     <nav className="sidebar">
       <div className="sidebar-scroll">
-        <a className={route.team ? "side-row" : "side-row selected"} href={href()}>
+        <a className={route.team || runs ? "side-row" : "side-row selected"} href={href()}>
           <Icon name="tray" />
           <span className="side-name">Needs You</span>
           {needs > 0 && <span className="count">{needs}</span>}
+        </a>
+        <a className={runs ? "side-row selected" : "side-row"} href={runsHref()}>
+          <Icon name="runs" />
+          <span className="side-name">Runs</span>
         </a>
         <div className="section-head">
           <span>Teams</span>

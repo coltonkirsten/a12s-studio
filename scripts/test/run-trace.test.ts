@@ -21,9 +21,10 @@ const run: RunSummary = {
     firstAt: Date.UTC(2026, 0, 1, 9, 0, 0),
     lastAt: Date.UTC(2026, 0, 1, 9, 0, 41),
     tools: [
-      { name: "Bash", calls: 3, errors: 2, ms: 7500 },
-      { name: "Read", calls: 1, errors: 0, ms: 100 },
+      { name: "Bash", calls: 3, errors: 2, ms: 7500, maxMs: 5000, maxInput: 30 },
+      { name: "Read", calls: 1, errors: 0, ms: 100, maxMs: 100, maxInput: 20 },
     ],
+    stallMs: 0,
     errors: 2,
     retries: { tool: 2, api: 0 },
     hooks: { runs: 4, errors: 0 },
@@ -32,6 +33,8 @@ const run: RunSummary = {
 };
 
 const tool: RunStep = {
+  id: "c1",
+  child: null,
   at: Date.UTC(2026, 0, 1, 9, 0, 3),
   kind: "tool",
   agent: "a1",

@@ -1,6 +1,13 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { href, inspectHref, parseRoute, type Route, settingsHref } from "./route.ts";
+import { href, inspectHref, parseRoute, parseRuns, type Route, runsHref, settingsHref } from "./route.ts";
+
+test("the run explorer's pages round-trip through parseRuns; other pages are not runs", () => {
+  assert.deepEqual(parseRuns(runsHref()), { group: null, turn: null });
+  assert.deepEqual(parseRuns(runsHref("th_a")), { group: "th_a", turn: null });
+  assert.deepEqual(parseRuns(runsHref("web:none", "t_1")), { group: "web:none", turn: "t_1" });
+  assert.equal(parseRuns("#/website/th_abc"), null);
+});
 
 const at = (team: string | null, thread: string | null, settings = false, inspect: string | null = null): Route => ({
   team,

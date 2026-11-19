@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { assign, index, steps, wholeLines } from "../src/transcript.ts";
+import { assign, index, shares, steps, wholeLines } from "../src/transcript.ts";
 
 const at = (s: number) => new Date(Date.UTC(2026, 0, 1, 0, 0, s)).toISOString();
 const ms = (s: number) => Date.UTC(2026, 0, 1, 0, 0, s);
@@ -83,7 +83,7 @@ test("each line goes to the Turn that started last before it; lines past keeping
 
 test("the steps of a Turn: prompts, text, tool calls with their results and times, hooks, errors", () => {
   const got = steps(TURN, 4000, false).map(({ at: _, ...s }) => s);
-  const base = { agent: null, name: "", output: null, isError: false, ms: null };
+  const base = { id: null, child: null, agent: null, name: "", output: null, isError: false, ms: null };
   assert.deepEqual(got, [
     { ...base, kind: "hook", name: "SessionStart:startup", text: "# Owner rules\nNone.", ms: 12 },
     {
@@ -99,16 +99,26 @@ test("the steps of a Turn: prompts, text, tool calls with their results and time
     {
       ...base,
       kind: "tool",
+      id: "c1",
       name: "Bash",
       text: '{"command":"npm test"}',
       output: "exit 1: missing script",
       isError: true,
       ms: 2000,
     },
-    { ...base, kind: "tool", name: "Bash", text: '{"command":"npm run test"}', output: "ok\n[image]", ms: 3000 },
     {
       ...base,
       kind: "tool",
+      id: "c2",
+      name: "Bash",
+      text: '{"command":"npm run test"}',
+      output: "ok\n[image]",
+      ms: 3000,
+    },
+    {
+      ...base,
+      kind: "tool",
+      id: "c3",
       agent: "sub1",
       name: "Read",
       text: '{"file_path":"/home/agent/a.md"}',
@@ -125,7 +135,7 @@ test("the steps of a Turn: prompts, text, tool calls with their results and time
   assert.equal(steps([user(0, "x".repeat(10))], 4, false)[0]?.text, "xxxx…");
 });
 
-test("the index counts tools, errors, retries, hooks and sub-agents", () => {
+test("the index counts tools, errors, retries, hooks and sub-agents, and finds the longest wait on the model", () => {
   const lines = [...TURN, "not json"];
   assert.deepEqual(index(lines, 1234), {
     lines: TURN.length + 1,
@@ -134,9 +144,11 @@ test("the index counts tools, errors, retries, hooks and sub-agents", () => {
     firstAt: ms(0),
     lastAt: ms(14),
     tools: [
-      { name: "Bash", calls: 2, errors: 1, ms: 5000 },
-      { name: "Read", calls: 1, errors: 0, ms: 1000 },
+      { name: "Bash", calls: 2, errors: 1, ms: 5000, maxMs: 3000, maxInput: 26 },
+      { name: "Read", calls: 1, errors: 0, ms: 1000, maxMs: 1000, maxInput: 32 },
     ],
+    // From the steered message to the answer; the three seconds of the second Bash call are a tool's, not a stall.
+    stallMs: 1000,
     errors: 2,
     retries: { tool: 1, api: 1 },
     hooks: { runs: 1, errors: 0 },
@@ -160,4 +172,35 @@ test("a run's steps are in the order they were written, whichever file was sent 
     index([...sub, ...main], 0).tools.map((t) => t.name),
     ["Agent", "Read"],
   );
+});
+
+test("a stall is a gap no tool call spans", () => {
+  const lines = [
+    user(0, "Go."),
+    call(1, "c1", "Bash", {}),
+    result(61, "c1", "ok"),
+    assistant(301, [{ type: "text", text: "Done." }]),
+  ];
+  assert.equal(index(lines, 0).stallMs, 240_000);
+});
+
+test("an Agent call names the sub-agent it started, and each agent's share of the spend is by priced tokens", () => {
+  const side = { isSidechain: true, agentId: "a1" };
+  const usage = (input: number, output: number) => ({ input_tokens: input, output_tokens: output });
+  const said = (s: number, id: string, u: unknown, extra = {}) =>
+    line({ type: "assistant", timestamp: at(s), message: { id, role: "assistant", content: [], usage: u }, ...extra });
+  const lines = [
+    // One response written as two lines, with its usage on each: counted once.
+    said(1, "m1", usage(100, 0)),
+    said(1, "m1", usage(100, 0)),
+    call(2, "c1", "Agent", {}),
+    said(3, "m2", usage(0, 20), side),
+    result(4, "c1", "done", false, { toolUseResult: { agentId: "a1" } }),
+  ];
+  assert.equal(steps(lines, 100, false).find((s) => s.id === "c1")?.child, "a1");
+  assert.deepEqual(shares(lines), [
+    { agent: null, share: 0.5 },
+    { agent: "a1", share: 0.5 },
+  ]);
+  assert.deepEqual(shares([user(0, "Go.")]), []);
 });

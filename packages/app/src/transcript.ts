@@ -99,7 +99,18 @@ export function steps(lines: string[], max: number, full: boolean): RunStep[] {
     const at = timeOf(line);
     const agent = line.isSidechain === true ? str(line.agentId) || null : null;
     const step = (kind: RunStep["kind"], name: string, text: string, isError = false, ms: number | null = null) => {
-      const made: RunStep = { at, kind, agent, name, text: cut(text, max), output: null, isError, ms };
+      const made: RunStep = {
+        id: null,
+        child: null,
+        at,
+        kind,
+        agent,
+        name,
+        text: cut(text, max),
+        output: null,
+        isError,
+        ms,
+      };
       out.push(made);
       return made;
     };
@@ -119,6 +130,7 @@ export function steps(lines: string[], max: number, full: boolean): RunStep[] {
             call.step.output = cut(resultText(b.content), max);
             call.step.isError = b.is_error === true;
             call.step.ms = at !== null && call.at !== null ? at - call.at : null;
+            call.step.child = str(record(line.toolUseResult)?.agentId) || null;
           } else if (b?.type === "text") step("prompt", "", str(b.text));
         }
         break;
@@ -132,7 +144,11 @@ export function steps(lines: string[], max: number, full: boolean): RunStep[] {
           const b = record(block);
           if (b?.type === "text" && str(b.text)) step("text", "", str(b.text));
           else if (b?.type === "thinking" && str(b.thinking)) step("text", "thinking", str(b.thinking));
-          else if (b?.type === "tool_use") calls.set(str(b.id), { step: step("tool", str(b.name), json(b.input)), at });
+          else if (b?.type === "tool_use") {
+            const made = step("tool", str(b.name), json(b.input));
+            made.id = str(b.id) || null;
+            calls.set(str(b.id), { step: made, at });
+          }
         }
         break;
       }
@@ -174,19 +190,23 @@ export function index(lines: string[], bytes: number): RunIndex {
     firstAt: times.reduce<number | null>((a, t) => (a === null || t < a ? t : a), null),
     lastAt: times.reduce<number | null>((a, t) => (a === null || t > a ? t : a), null),
     tools: [],
+    stallMs: 0,
     errors: 0,
     retries: { tool: 0, api: 0 },
     hooks: { runs: 0, errors: 0 },
     subAgents: 0,
   };
   const agents = new Set<string>();
-  for (const s of steps(lines, 0, false)) {
+  const all = steps(lines, Number.POSITIVE_INFINITY, false);
+  for (const s of all) {
     if (s.agent) agents.add(s.agent);
     if (s.kind === "tool") {
-      const tool = tools.get(s.name) ?? { name: s.name, calls: 0, errors: 0, ms: 0 };
+      const tool = tools.get(s.name) ?? { name: s.name, calls: 0, errors: 0, ms: 0, maxMs: 0, maxInput: 0 };
       tools.set(s.name, tool);
       tool.calls++;
       tool.ms += s.ms ?? 0;
+      tool.maxMs = Math.max(tool.maxMs, s.ms ?? 0);
+      tool.maxInput = Math.max(tool.maxInput, s.text.length);
       const key = `${s.agent ?? ""}\0${s.name}`;
       if (failing.has(key)) result.retries.tool++;
       if (s.isError) {
@@ -204,5 +224,46 @@ export function index(lines: string[], bytes: number): RunIndex {
   }
   result.tools = [...tools.values()];
   result.subAgents = agents.size;
+  result.stallMs = stall(times, all);
   return result;
+}
+
+// The longest gap between two lines that no tool call spans: time the agent waited on its model.
+function stall(times: number[], all: RunStep[]): number {
+  const calls = all.flatMap((s) => (s.kind === "tool" && s.at !== null && s.ms !== null ? [[s.at, s.at + s.ms]] : []));
+  const sorted = [...times].sort((a, b) => a - b);
+  let longest = 0;
+  for (let i = 1; i < sorted.length; i++) {
+    const [from = 0, to = 0] = [sorted[i - 1], sorted[i]];
+    if (calls.some(([start = 0, end = 0]) => start <= from && end >= to)) continue;
+    longest = Math.max(longest, to - from);
+  }
+  return longest;
+}
+
+// Input, cache writes, cache reads and output priced relative to input, as every Claude model prices them.
+const WEIGHT = { input_tokens: 1, cache_creation_input_tokens: 1.25, cache_read_input_tokens: 0.1, output_tokens: 5 };
+
+// Each agent's share of a run's model spend, the agent itself as null. The harness writes a response's usage on every
+// line of that response, so each message id counts once.
+export function shares(lines: string[]): { agent: string | null; share: number }[] {
+  const seen = new Set<string>();
+  const spent = new Map<string | null, number>();
+  for (const line of lines.map(parse)) {
+    const message = record(line?.message);
+    const usage = record(message?.usage);
+    if (line?.type !== "assistant" || !usage) continue;
+    const agent = line.isSidechain === true ? str(line.agentId) || null : null;
+    const key = `${agent ?? ""}\0${str(message?.id) || str(line.uuid)}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    let weighted = 0;
+    for (const [field, weight] of Object.entries(WEIGHT)) {
+      const n = usage[field];
+      if (typeof n === "number") weighted += n * weight;
+    }
+    spent.set(agent, (spent.get(agent) ?? 0) + weighted);
+  }
+  const total = [...spent.values()].reduce((a, b) => a + b, 0);
+  return [...spent].map(([agent, weighted]) => ({ agent, share: total > 0 ? weighted / total : 0 }));
 }

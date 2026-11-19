@@ -128,6 +128,12 @@ test("the Stop hook sends each transcript's new lines, and each Turn's run holds
     ],
   );
   assert.equal(list.runs[0]?.index.subAgents, 1);
+  // With no agent or thread named, the runs of every team, newest first.
+  const all = (await s.owner("GET", "/api/runs")).body as RunsResponse;
+  assert.deepEqual(
+    all.runs.map((r) => r.turn),
+    ["t_second", "t_first"],
+  );
   const one = (await s.owner("GET", "/api/runs/t_first")).body as RunResponse;
   assert.deepEqual(
     one.steps.map((step) => [step.kind, step.name, step.output, step.ms]),

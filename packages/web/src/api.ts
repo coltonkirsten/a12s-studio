@@ -5,6 +5,7 @@ import type {
   FileView,
   HireBody,
   InboxResponse,
+  MessagesPage,
   NewThreadBody,
   PatchAgentBody,
   PatchSettingsBody,
@@ -14,6 +15,8 @@ import type {
   PowerBody,
   PutFileBody,
   RulesPage,
+  RunResponse,
+  RunsResponse,
   Template,
   TurnEventsResponse,
   TurnsResponse,
@@ -117,6 +120,11 @@ export const api = {
   turns: (agent: string) => read<TurnsResponse>(`/agents/${at(agent)}/turns`, ["turns"], "Turns"),
   turnEvents: (agent: string, turn: string) =>
     read<TurnEventsResponse>(`/agents/${at(agent)}/turns/${at(turn)}/events`, ["calls"], "tool calls"),
+  runs: () => read<RunsResponse>("/runs", ["runs"], "runs"),
+  run: (turn: string, full: boolean) =>
+    read<RunResponse>(`/runs/${at(turn)}${full ? "?full=1" : ""}`, ["steps", "agents"], "run"),
+  transcript: (turn: string) => `/api/runs/${at(turn)}/transcript`,
+  messages: (thread: string) => read<MessagesPage>(`/threads/${at(thread)}/messages`, ["messages"], "messages"),
   inbox: (agent: string) => read<InboxResponse>(`/agents/${at(agent)}/inbox`, ["messages"], "inbox"),
   removeInbox: (agent: string, message: string) => write("DELETE", `/agents/${at(agent)}/inbox/${at(message)}`),
   clearInbox: (agent: string) => write("POST", `/agents/${at(agent)}/inbox/clear`),

@@ -1,0 +1,380 @@
+/* The run explorer: wider than a reading page, since its lanes and waterfall are read across. */
+.runs-page > * {
+  max-width: 1080px;
+}
+
+.runs-trail {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 20px;
+  color: var(--text-2);
+  font-size: var(--size-title);
+  font-weight: 600;
+}
+
+.runs-trail a {
+  color: inherit;
+  text-decoration: none;
+}
+
+.runs-trail a:hover {
+  color: var(--text);
+}
+
+.runs-trail span:last-child,
+.runs-trail a:last-child {
+  color: var(--text);
+}
+
+.runs-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.runs-row {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 10px 12px;
+  border-radius: var(--radius-m);
+  color: inherit;
+  text-decoration: none;
+  border-left: 3px solid transparent;
+}
+
+.runs-row:hover {
+  background: var(--fill);
+}
+
+.runs-row.flagged {
+  border-left-color: var(--red);
+}
+
+.runs-row-top {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+}
+
+.runs-title {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 600;
+}
+
+.runs-row time,
+.runs-row-meta {
+  color: var(--text-2);
+  font-size: var(--size-small);
+}
+
+.runs-row-meta {
+  display: flex;
+  gap: 12px;
+}
+
+.runs-cost {
+  font-variant-numeric: tabular-nums;
+}
+
+.run-flags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 2px;
+}
+
+/* A flag says what is wrong in words; the red only draws the eye to it. */
+.run-flag {
+  padding: 1px 7px;
+  border-radius: var(--radius-s);
+  background: color-mix(in srgb, var(--red) 12%, transparent);
+  color: var(--text);
+  font-size: var(--size-caption);
+}
+
+.run-flag::before {
+  content: "";
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  margin-right: 5px;
+  border-radius: 50%;
+  background: var(--red);
+  vertical-align: 1px;
+}
+
+.lanes {
+  position: relative;
+}
+
+.lanes-summary {
+  margin: 0 0 12px;
+  color: var(--text-2);
+  font-size: var(--size-small);
+}
+
+.lanes svg {
+  display: block;
+  overflow: visible;
+}
+
+.lane-rule {
+  stroke: var(--hairline);
+  stroke-width: 1;
+}
+
+.lane-label {
+  fill: var(--text);
+  font-size: var(--size-small);
+  font-weight: 500;
+}
+
+.axis-label {
+  fill: var(--text-3);
+  font-size: var(--size-caption);
+}
+
+.lane-break rect {
+  fill: var(--fill);
+}
+
+.run-block {
+  cursor: pointer;
+  outline: none;
+}
+
+.run-block rect:not(.hit) {
+  fill: color-mix(in srgb, var(--accent) 28%, var(--bg));
+  stroke: var(--accent);
+  stroke-width: 1;
+}
+
+.run-block:hover rect:not(.hit),
+.run-block:focus-visible rect:not(.hit) {
+  fill: color-mix(in srgb, var(--accent) 45%, var(--bg));
+}
+
+.run-block.bad rect:not(.hit) {
+  stroke: var(--red);
+  stroke-width: 2;
+}
+
+.run-block text {
+  fill: var(--text);
+  font-size: var(--size-caption);
+  font-variant-numeric: tabular-nums;
+  pointer-events: none;
+}
+
+.hit {
+  fill: transparent;
+  stroke: transparent;
+}
+
+.message-arrow .arrow {
+  fill: none;
+  stroke: var(--text-2);
+  stroke-width: 1.5;
+}
+
+.message-arrow .hit {
+  fill: none;
+  stroke-width: 12;
+}
+
+.message-arrow:hover .arrow {
+  stroke: var(--text);
+  stroke-width: 2;
+}
+
+.arrow-head {
+  fill: var(--text-2);
+}
+
+.sender-dot {
+  fill: var(--text-2);
+  stroke: var(--bg);
+  stroke-width: 2;
+}
+
+.run-tip {
+  position: absolute;
+  z-index: 5;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  max-width: 360px;
+  padding: 8px 10px;
+  border-radius: var(--radius-m);
+  background: var(--raised);
+  box-shadow: var(--shadow);
+  font-size: var(--size-small);
+  pointer-events: none;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.run-tip span {
+  color: var(--text-2);
+}
+
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+}
+
+.waterfall-head {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  margin-bottom: 8px;
+  color: var(--text-2);
+  font-size: var(--size-small);
+}
+
+.waterfall-download {
+  margin-left: auto;
+  color: var(--accent);
+}
+
+.waterfall-rows {
+  margin: 16px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.waterfall-row,
+.waterfall-agent {
+  padding-left: calc(var(--depth) * 20px);
+}
+
+.waterfall-line {
+  display: grid;
+  grid-template-columns: minmax(0, 2fr) minmax(0, 3fr) 120px;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  padding: 4px 8px;
+  border-radius: var(--radius-s);
+  text-align: left;
+}
+
+.waterfall-line:hover,
+.waterfall-row.open .waterfall-line {
+  background: var(--fill);
+}
+
+.waterfall-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-2);
+  font-size: var(--size-small);
+}
+
+.waterfall-name strong {
+  color: var(--text);
+  font-weight: 600;
+}
+
+.waterfall-track {
+  position: relative;
+  height: 12px;
+  border-radius: var(--radius-xs);
+  background: var(--fill);
+}
+
+.waterfall-bar {
+  position: absolute;
+  top: 0;
+  height: 12px;
+  min-width: 3px;
+  border-radius: 4px;
+  background: var(--accent);
+}
+
+.waterfall-bar.failed {
+  background: var(--red);
+}
+
+.waterfall-mark {
+  position: absolute;
+  top: -1px;
+  width: 3px;
+  height: 14px;
+  border-radius: 2px;
+  background: var(--red);
+}
+
+.waterfall-ms {
+  display: flex;
+  align-items: center;
+  white-space: nowrap;
+  justify-content: flex-end;
+  gap: 6px;
+  color: var(--text-2);
+  font-size: var(--size-small);
+  font-variant-numeric: tabular-nums;
+}
+
+.waterfall-agent {
+  margin: 8px 0 2px;
+  border-left: 2px solid var(--hairline);
+}
+
+.waterfall-agent-name {
+  display: flex;
+  gap: 12px;
+  padding: 2px 8px;
+  font-size: var(--size-small);
+  font-weight: 600;
+}
+
+.waterfall-agent-text {
+  margin: 2px 8px 6px;
+  color: var(--text-2);
+  font-size: var(--size-small);
+  white-space: pre-wrap;
+  max-height: 7.5em;
+  overflow: hidden;
+}
+
+.waterfall-detail {
+  padding: 4px 8px 12px;
+}
+
+.waterfall-detail h4 {
+  margin: 8px 0 4px;
+  color: var(--text-2);
+  font-size: var(--size-caption);
+  font-weight: 600;
+}
+
+.waterfall-detail pre {
+  margin: 0;
+  padding: 8px 10px;
+  max-height: 320px;
+  overflow: auto;
+  border-radius: var(--radius-s);
+  background: var(--fill);
+  font: var(--size-small) / 1.45 var(--mono);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.waterfall-agent-task {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}

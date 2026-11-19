@@ -4,7 +4,8 @@ const AGENT = "[a-z][a-z0-9-]{0,29}";
 export const TEAM_SLUG = new RegExp(`^${TEAM}$`);
 export const AGENT_SLUG = new RegExp(`^${AGENT}$`);
 export const AGENT_ID = new RegExp(`^${TEAM}-${AGENT}$`);
-const RESERVED_TEAM_SLUGS: readonly string[] = ["studio", "broker", "owner", "system", "a12s"];
+// "runs" is the path of the run explorer in the UI, beside the team pages.
+const RESERVED_TEAM_SLUGS: readonly string[] = ["studio", "broker", "owner", "system", "a12s", "runs"];
 
 function plain(name: string): string {
   return name
