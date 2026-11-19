@@ -43,6 +43,7 @@ function agent(
     model: "sonnet",
     presence,
     line: null,
+    since: null,
     turn: null,
     work: [],
     queued: 0,
@@ -235,6 +236,7 @@ const teams: Omit<TeamView, "threads">[] = [
       // Its Turn has ended and its work runs on: working, with the work listed.
       agent("website-lead", "Plans the work, talks to you, reviews", "working", {
         line: "Working in the background",
+        since: now - 7 * MIN,
         work: [
           {
             id: "task-fixture-1",
@@ -256,6 +258,7 @@ const teams: Omit<TeamView, "threads">[] = [
       }),
       agent("website-dev", "Writes and tests the code", "working", {
         line: "Running tests",
+        since: now - 40_000,
         turn: { id: "turn-fixture", threadId: "th_fixturemenu", startedAt: now - 2 * MIN, text: "" },
       }),
       agent("website-writer", "Writes page copy", "asleep", { model: "haiku" }),

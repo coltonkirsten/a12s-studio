@@ -17,13 +17,16 @@ import { onTurnFinished, systemMessage } from "./router.ts";
 
 // A sub-agent or background work of an agent. `call` is the tool call that started it, which a sub-agent's own calls
 // name as their parent; `background` once a12s has reported it as work that outlives the Turn.
-type Work = Omit<WorkItem, "id"> & { call: string | null; background: boolean };
+// `tool`: the sub-agent's call its line names, so the line ends with that call.
+type Work = Omit<WorkItem, "id"> & { call: string | null; background: boolean; tool: string | null };
+
+// What the model of a running Turn is doing between tool calls, and since when.
+type Step = { line: string; at: number };
 
 // What an agent is doing, known only from a12s events; never stored.
 export type AgentLive = {
   phase?: Phase;
   error?: string;
-  line: string | null;
   // whole: every event of the Turn so far was seen, so its text and Messages are complete.
   turn: {
     id: string;
@@ -33,7 +36,11 @@ export type AgentLive = {
     messages: TurnRecord["messages"];
     whole: boolean;
   } | null;
-  tools: Set<string>;
+  // The agent's own calls running now, each with its line and start.
+  tools: Map<string, Step>;
+  // Null until the model streams something in the Turn, or after its last running call ended: the Turn's own start
+  // or that end then stands.
+  step: Step | null;
   // By item id: the launching call's id until a12s names it as a background task, then the task's.
   work: Map<string, Work>;
   // The thread of the work item that ended last, for the Turn with no Messages that the harness starts after it.
@@ -48,6 +55,8 @@ const POST_AGAIN =
   "a12s Studio could not be reached during part of your last Turn, and a Studio tool call in it failed. " +
   "What you posted then was not received. Use read to see what did arrive, and post again what is missing.";
 const IN_BACKGROUND = "Working in the background";
+const THINKING = "Thinking";
+const WRITING = "Writing";
 const STUDIO_LINES: Record<string, string> = {
   read: "Checking the board",
   update_thread: "Checking the board",
@@ -66,9 +75,15 @@ export function presenceOf(phase: Phase | undefined, hasWork: boolean): Presence
   return "awake";
 }
 
-// The line of an agent with no Turn running.
-function idleLine(rec: AgentLive): void {
-  if (!rec.turn) rec.line = rec.work.size > 0 ? IN_BACKGROUND : null;
+// What an agent is doing now and since when, from its state alone: the latest running call, else what the model
+// streams, else thinking since the Turn started; with no Turn, its background work.
+export function doingOf(rec: AgentLive): Step | null {
+  if (!rec.turn) {
+    const started = [...rec.work.values()].map((w) => w.startedAt);
+    return started.length > 0 ? { line: IN_BACKGROUND, at: Math.min(...started) } : null;
+  }
+  const calls = [...rec.tools.values()];
+  return calls.at(-1) ?? rec.step ?? { line: THINKING, at: rec.turn.startedAt };
 }
 
 function workOf(rec: AgentLive, call: string): [string, Work] | undefined {
@@ -94,9 +109,9 @@ function syncWork(rec: AgentLive, background: BackgroundItem[]): void {
       line: null,
       call: item.toolUseId ?? null,
       background: true,
+      tool: null,
     });
   }
-  idleLine(rec);
 }
 
 // Section 5.9: one line for each message that reaches its agent.
@@ -155,6 +170,12 @@ export function doingNow(tool: string, input: unknown): string {
   return `Using ${tool}`;
 }
 
+// The line while the model writes out a tool call, before its input is complete.
+export function composing(tool: string): string {
+  if (tool === `${TOOL_PREFIX}post`) return "Writing a post";
+  return `Preparing ${tool.startsWith(TOOL_PREFIX) ? tool.slice(TOOL_PREFIX.length) : tool}`;
+}
+
 // One Fleet-wide a12s feed, folded into a record per agent, the turns table and delivered marks. `changed` is
 // called for every in-memory change the state shows; `text` for each streamed chunk.
 export function createLive(deps: {
@@ -174,7 +195,7 @@ export function createLive(deps: {
   function record(agent: string): AgentLive {
     let rec = agents.get(agent);
     if (!rec) {
-      rec = { line: null, turn: null, tools: new Set(), work: new Map(), lastThread: null };
+      rec = { turn: null, tools: new Map(), step: null, work: new Map(), lastThread: null };
       agents.set(agent, rec);
     }
     return rec;
@@ -183,16 +204,25 @@ export function createLive(deps: {
   function setPhase(rec: AgentLive, phase: Phase, error: string | undefined): void {
     rec.phase = phase;
     rec.error = error;
-    if (phase !== "Busy") {
-      rec.turn = null;
-      rec.tools.clear();
-    }
+    if (phase !== "Busy") endTurn(rec);
     // No harness session lives through any other phase, so none of its work does.
     if (phase !== "Busy" && phase !== "Ready") {
       rec.work.clear();
       rec.lastThread = null;
     }
-    idleLine(rec);
+  }
+
+  function endTurn(rec: AgentLive): void {
+    rec.turn = null;
+    rec.tools.clear();
+    rec.step = null;
+  }
+
+  // Pushes a change of what the model is doing only when its line changes, since text streams in many small chunks.
+  function setStep(rec: AgentLive, line: string, at: number): void {
+    if (rec.step?.line === line) return;
+    rec.step = { line, at };
+    if (rec.tools.size === 0) changed();
   }
 
   // Only a current agent of a current team has Turns worth recording; the Fleet may hold other agent computers.
@@ -250,9 +280,8 @@ export function createLive(deps: {
           ev.messageIds.length === 0 ? rec.lastThread : (scoped.messagesByA12sIds(ev.messageIds)[0]?.threadId ?? null);
         rec.lastThread = null;
         const messages = ev.messageIds.map((id) => ({ id, steered: false }));
+        endTurn(rec);
         rec.turn = { id: ev.turn, threadId, startedAt: ev.at, text: "", messages, whole: true };
-        rec.line = "Working";
-        rec.tools.clear();
         changed();
         return;
       }
@@ -267,22 +296,26 @@ export function createLive(deps: {
           rec.turn = { id: ev.turn, threadId: null, startedAt: ev.at, text: "", messages: [], whole: false };
         rec.turn.text += ev.text;
         deps.text({ agent: ev.agent, turn: ev.turn, text: ev.text });
-        if (rec.tools.size === 0 && rec.line !== "Writing") {
-          rec.line = "Writing";
-          changed();
-        }
+        setStep(rec, WRITING, ev.at);
         return;
       }
+      case "thinking":
+        setStep(rec, THINKING, ev.at);
+        return;
+      case "tool.composing":
+        setStep(rec, composing(ev.name), ev.at);
+        return;
       case "tool.started": {
         if (ev.parent) {
           const work = workOf(rec, ev.parent)?.[1];
           if (!work) return;
           work.line = doingNow(ev.name, ev.input);
+          work.tool = ev.id;
           changed();
           return;
         }
-        rec.tools.add(ev.id);
-        rec.line = doingNow(ev.name, ev.input);
+        rec.tools.set(ev.id, { line: doingNow(ev.name, ev.input), at: ev.at });
+        rec.step = null;
         if (ev.name === "Agent" || ev.name === "Task") {
           rec.work.set(ev.id, {
             kind: "agent",
@@ -292,19 +325,27 @@ export function createLive(deps: {
             line: null,
             call: ev.id,
             background: false,
+            tool: null,
           });
         }
         changed();
         return;
       }
       case "tool.finished": {
-        if (ev.parent) return;
-        rec.tools.delete(ev.id);
-        const [id, work] = workOf(rec, ev.id) ?? [];
-        if (id && !work?.background) {
-          rec.work.delete(id);
+        if (ev.parent) {
+          const work = workOf(rec, ev.parent)?.[1];
+          if (work?.tool !== ev.id) return;
+          work.line = THINKING;
+          work.tool = null;
           changed();
+          return;
         }
+        rec.tools.delete(ev.id);
+        // The model reads the result next.
+        if (rec.tools.size === 0 && rec.turn) rec.step = { line: THINKING, at: ev.at };
+        const [id, work] = workOf(rec, ev.id) ?? [];
+        if (id && !work?.background) rec.work.delete(id);
+        changed();
         return;
       }
       case "task.started": {
@@ -317,10 +358,10 @@ export function createLive(deps: {
           startedAt: ev.at,
           line: null,
           call: ev.toolUseId ?? null,
+          tool: null,
           ...launched?.[1],
           background: true,
         });
-        idleLine(rec);
         changed();
         return;
       }
@@ -329,7 +370,6 @@ export function createLive(deps: {
         if (!work) return;
         rec.work.delete(ev.id);
         rec.lastThread = work.threadId;
-        idleLine(rec);
         changed();
         return;
       }
@@ -355,11 +395,9 @@ export function createLive(deps: {
           const turn = await fetchTurn(scoped, ev.agent, ev.turn);
           if (turn) recordTurn(scoped, turn, lostCalls(turn));
         }
-        rec.turn = null;
-        rec.tools.clear();
+        endTurn(rec);
         // A foreground sub-agent's call ends with its Turn, even when the Turn was interrupted before it finished.
         for (const [id, work] of rec.work) if (!work.background) rec.work.delete(id);
-        idleLine(rec);
         changed();
         void dispatcher.run();
         return;

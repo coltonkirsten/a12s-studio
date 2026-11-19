@@ -12,6 +12,7 @@ function agent(id: string, turn: string | null, text = ""): AgentView {
     model: "sonnet",
     presence: turn ? "working" : "asleep",
     line: null,
+    since: null,
     turn: turn ? { id: turn, threadId: null, startedAt: 0, text } : null,
     work: [],
     queued: 0,

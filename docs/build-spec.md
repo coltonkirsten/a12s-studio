@@ -906,6 +906,7 @@ type AgentView = { id, slug, roleLine, model,
                    presence: "unknown" | "asleep" | "awake" | "working" | "waiting" | "error",
                    waitingFor?: "cap" | "budget" | "paused" | "disk",
                    line: string | null,                              // what it is doing now
+                   since: number | null,                             // when that started
                    turn: { id, threadId, startedAt, text } | null,   // text: last 4000 chars so far
                    work: WorkItem[],                                 // sub-agents and background tasks running now, oldest first
                    queued: number, error?: string };                 // queued: messages it has not received yet
@@ -937,18 +938,26 @@ later; every feed that becomes ready is followed by a resync.
 | a12s event | Effect |
 |---|---|
 | `agent_computer.phase` | Presence: `Asleep` → asleep; `Busy` → working; `Ready` with at least one work item → working; `Error` → error (with its message); any other → awake; unknown until a12s has reported a phase. An agent with a queued message that `blockedReason` holds shows waiting. A phase other than `Busy` or `Ready` empties the agent's work items: no harness session lives through it. Recorded for any agent computer name, because a new agent reports its phases before its row is committed. Runs the dispatcher. |
-| `turn.started` | Marks each Studio message whose `a12s_message_id` is in `inbox.messages` as `delivered`, with this Turn and `steered` 0. Sets the Turn's thread to that of the first one; a Turn with no Messages (the harness starts one by itself when background work ends) takes the thread of the work item that ended last, once. Line: "Working". Clears text. |
+| `turn.started` | Marks each Studio message whose `a12s_message_id` is in `inbox.messages` as `delivered`, with this Turn and `steered` 0. Sets the Turn's thread to that of the first one; a Turn with no Messages (the harness starts one by itself when background work ends) takes the thread of the work item that ended last, once. Clears text, the running calls and the model's step. |
 | `turn.steered` | Marks each Studio message whose `a12s_message_id` it lists as `delivered`, with this Turn and `steered` 1. The Turn keeps its thread, line and text. |
-| `text.delta` | Appends to the Turn's text and emits `live`. If no tool is running, line: "Writing". |
-| `tool.started` | With no `parent`: sets the agent's line from the table below; an `Agent` or `Task` call also adds a work item of kind agent (id: the call's id; description: the call's `description`; thread: the Turn's). With a `parent` (a sub-agent's call): sets the line of the work item whose launching call is the `parent`, from the same table. A background sub-agent's calls arrive between Turns too, with no Turn. |
-| `tool.finished` | With no `parent`: removes the work item that call started, unless a12s has reported it as background work. Nothing for the lines; the inspector's log shows it. |
+| `text.delta` | Appends to the Turn's text and emits `live`. Step: "Writing". |
+| `thinking` | Step: "Thinking". |
+| `tool.composing` | Step: "Writing a post" for the Studio `post` tool, else "Preparing <tool>" (a Studio tool without its prefix). |
+| `tool.started` | With no `parent`: adds a running call with its line from the table below and its start, and clears the step; an `Agent` or `Task` call also adds a work item of kind agent (id: the call's id; description: the call's `description`; thread: the Turn's). With a `parent` (a sub-agent's call): sets the line of the work item whose launching call is the `parent`, from the same table. A background sub-agent's calls arrive between Turns too, with no Turn. |
+| `tool.finished` | With no `parent`: removes the running call and the work item that call started, unless a12s has reported it as background work; when no call is left running, step: "Thinking", from this event. With a `parent`: when it is the call the sub-agent's line names, that line becomes "Thinking". |
 | `task.started` | Work that runs on in the background: a sub-agent or a command the agent ran in the background, or a process it detached. Marks the work item whose launching call is `toolUseId` as background, or adds one: kind agent for the a12s kinds `local_agent` and `agent`, task for any other; a12s's `id` and `description`; the thread of the running Turn, if any. |
 | `task.finished` | Removes the work item, whatever its status, and keeps its thread for the Turn that follows. |
-| `turn.finished` | Writes the `turns` row (section 7.4), applies sections 5.5 and 5.6, clears the line and text, removes the work items that are not background work (their calls end with the Turn), runs the dispatcher. A Turn followed whole (every event from `turn.started` on, no resync since) is stored from its events; any other is read from a12s `turns`, which has all its text, Messages and tool calls; a12s stores the Turn before it sends the event. |
+| `turn.finished` | Writes the `turns` row (section 7.4), applies sections 5.5 and 5.6, clears the running calls, the step and the text, removes the work items that are not background work (their calls end with the Turn), runs the dispatcher. A Turn followed whole (every event from `turn.started` on, no resync since) is stored from its events; any other is read from a12s `turns`, which has all its text, Messages and tool calls; a12s stores the Turn before it sends the event. |
 | `service.phase` | For an add-on instance, its status: `Ready` → ready; `Error` or `Unhealthy` → error (with its message); any other → starting. Other Services are ignored. |
 | `gap`, or a new feed | Resync: `status()` for phases and background work (an item a12s no longer lists is removed; one it lists that is not known is added with a12s's id, kind, description, start time and launching call, and no thread; a known one keeps its thread and line; work that is not background is dropped); for each agent, recent Turns not yet in `turns`, stored the same way; for each `sent` message, its a12s state, with the Turn that took it (whether it joined that Turn is read from the Turn's record when the Turn is stored); `services()` for add-on statuses. Running Turns are no longer whole. |
 
 The same resync runs at app start, which is how state survives a restart.
+
+**The line** is derived from the record each time the state is built, never stored: during a Turn, the latest
+running call's line since it started; else the step (a step does not change while its line stays the same) since its
+event; else "Thinking" since the Turn started. With no Turn: "Working in the background" since the oldest work item
+started, while there is one; else none. `thinking` and `tool.composing` come from Claude Code only; with another
+harness the step is "Writing" or "Thinking".
 
 **Work that outlives a Turn.** a12s keeps an agent's harness session alive between Turns. A sub-agent or a command
 the agent runs in the background, and a process it detaches, run on after the Turn that started them has ended.

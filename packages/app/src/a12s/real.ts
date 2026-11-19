@@ -135,6 +135,10 @@ export function toEvent(ev: SdkEvent): A12sEvent | null {
       return { type: ev.type, agent, at, turn: ev.turn, messageIds: (ev.data.inbox?.messages ?? []).map((m) => m.id) };
     case "text.delta":
       return { type: ev.type, agent, at, turn: ev.turn, text: ev.data.text };
+    case "thinking":
+      return { type: ev.type, agent, at, turn: ev.turn };
+    case "tool.composing":
+      return { type: ev.type, agent, at, turn: ev.turn, id: ev.data.id, name: ev.data.name };
     case "tool.started": {
       const { id, name, input, parent } = ev.data;
       return { type: ev.type, agent, at, ...turnOf(ev.turn), id, name, input, ...(parent ? { parent } : {}) };

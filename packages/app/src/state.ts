@@ -10,7 +10,7 @@ import type {
 } from "@a12s-studio/contract/state";
 import type { BrokerClient } from "./broker-client.ts";
 import { blockedReason, freeDiskGb, overBudget } from "./dispatcher.ts";
-import { type Live, presenceOf } from "./live.ts";
+import { doingOf, type Live, presenceOf } from "./live.ts";
 import type { Message, Repo, TeamRepo } from "./repo.ts";
 import { roleLine } from "./rules.ts";
 import type { Scheduler } from "./scheduler.ts";
@@ -116,6 +116,7 @@ export function deriveState(
             ? blocked(presence === "asleep")
             : null;
         if (waitingFor) presence = "waiting";
+        const doing = rec ? doingOf(rec) : null;
         return {
           id: agent.id,
           slug: agent.slug,
@@ -123,7 +124,8 @@ export function deriveState(
           model: agent.model,
           presence,
           ...(waitingFor ? { waitingFor } : {}),
-          line: rec?.line ?? null,
+          line: doing?.line ?? null,
+          since: doing?.at ?? null,
           turn: rec?.turn
             ? {
                 id: rec.turn.id,
