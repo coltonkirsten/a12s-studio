@@ -1536,6 +1536,10 @@ is refused with 409 `in_use` when `access` differs, so a change of outside calls
 next turn-on; when only the image differs, each instance is written again with the new image. `DELETE` is refused
 with 409 `in_use` while any team has the add-on on.
 
+The owner adds a manifest in the global settings by pasting its JSON. The browser checks only that every field is
+there with its type and no other (`logic/addons.ts`); the rules on values are the server's, and its refusal is shown
+as it comes.
+
 ### 10.2 An instance
 
 A team's instance of an add-on is the a12s Service named `<team>-addon-<id>` (`addonName` in `names.ts`). The name
@@ -1578,6 +1582,10 @@ Turning on (`PUT /teams/:team/addons/:addon`):
 4. The `team_addons` row with the grant ids, when it is new. If step 3 failed, the grants of step 2 are revoked and
    no row is written.
 5. `putAgent` for each of the team's agents with the fresh spec.
+
+In Team settings the switch asks first. Turning on shows the grants the manifest adds and each of their hosts the
+team has no credential for, with the credential form for it; Turn on is offered once none is missing. Turning off
+asks once. The add-on card in Needs You turns the add-on off at once.
 
 Turning off (`DELETE /teams/:team/addons/:addon`):
 

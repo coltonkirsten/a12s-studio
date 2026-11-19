@@ -13,10 +13,12 @@ import type {
 } from "@a12s-studio/contract/broker-admin";
 import { OWNER_PORT, type RequestId, type ThreadId, teamSlug } from "@a12s-studio/contract/names";
 import type {
+  AddonManifest,
   AgentView,
   MessageView,
   NeedsYouItem,
   StudioState,
+  TeamAddon,
   TeamView,
   ThreadView,
 } from "@a12s-studio/contract/state";
@@ -263,7 +265,10 @@ const teams: Omit<TeamView, "threads">[] = [
       }),
       agent("website-writer", "Writes page copy", "asleep", { model: "haiku" }),
     ],
-    addons: [],
+    addons: [
+      { id: "narrate", status: "ready", spentTodayUsd: 1.35 },
+      { id: "slides", status: "error", error: "The image could not be pulled.", spentTodayUsd: 0 },
+    ],
   },
   {
     id: "notes",
@@ -358,10 +363,21 @@ const access: Record<string, TeamAccess> = {
         updatedAt: now - DAY * 20,
         rejectedAt: now - 25 * MIN,
       },
+      ...["api.speech.example", "api.render.example"].map((host) => ({
+        host,
+        scheme: "bearer" as const,
+        username: null,
+        headerName: null,
+        createdAt: now - DAY * 3,
+        updatedAt: now - DAY * 3,
+        rejectedAt: null,
+      })),
     ],
     grants: [
       grant("fixturewrite", "github.com", ["GET", "POST"], ["/example/site.git/**", "/example/site/**"], null),
       grant("fixtureapi", "api.github.com", ["GET"], ["/repos/example/site/**"], now + DAY * 2),
+      grant("fixturenarrate", "api.speech.example", ["POST"], ["/v1/speech"], null),
+      grant("fixtureslides", "api.render.example", ["POST", "GET"], ["/v2/jobs", "/v2/jobs/*"], null),
     ],
     requests: [
       request(
@@ -392,14 +408,42 @@ const access: Record<string, TeamAccess> = {
   },
 };
 
+// The library, and the grants each team's add-ons brought, which turning one off revokes.
+const library: AddonManifest[] = [
+  {
+    id: "narrate",
+    name: "Narrate",
+    description: "Turns a script into an audio file.",
+    image: "registry.example/narrate:1.2.0",
+    access: [{ host: "api.speech.example", methods: ["POST"], paths: ["/v1/speech"] }],
+  },
+  {
+    id: "slides",
+    name: "Slides to video",
+    description: "Renders a slide deck with its narration into a video.",
+    image: "registry.example/slides:0.4.1",
+    access: [{ host: "api.render.example", methods: ["POST", "GET"], paths: ["/v2/jobs", "/v2/jobs/*"] }],
+  },
+];
+const addonGrants = new Map<string, string[]>([
+  ["website/narrate", ["g_fixturenarrate"]],
+  ["website/slides", ["g_fixtureslides"]],
+]);
+
 function teamAccess(team: string): TeamAccess {
   access[team] ??= { credentials: [], grants: [], requests: [], audit: [] };
   return access[team];
 }
 
-/** The broker's three cards, derived the way the app derives them from its attention answer. */
+/** The broker's three cards, derived the way the app derives them from its attention answer, and the add-on card. */
 function needsYou(): NeedsYouItem[] {
-  const items: NeedsYouItem[] = [];
+  const items: NeedsYouItem[] = teams.flatMap((team) =>
+    team.addons.flatMap((a) =>
+      a.status === "error"
+        ? [{ kind: "addon_error", teamId: team.id, addonId: a.id, error: a.error ?? "" } as const]
+        : [],
+    ),
+  );
   for (const [teamId, a] of Object.entries(access)) {
     const stored = (host: string) => a.credentials.some((c) => c.host === host);
     for (const r of a.requests.filter((x) => x.status === "pending")) {
@@ -447,7 +491,7 @@ function stateFor(open: string | null): StudioState {
     a12s: "up",
     broker: "up",
     settings,
-    addons: [],
+    addons: library,
     needsYou: needsYou(),
     open: threads.find((t) => t.id === open) ?? null,
     teams: teams.map((team) => ({
@@ -676,8 +720,86 @@ function accessWrite(
   return undefined;
 }
 
+const inUse = (addon: string) => teams.filter((t) => t.addons.some((a) => a.id === addon)).map((t) => t.name);
+
+function libraryWrite(addon: string, b: Record<string, unknown>, method: string): void {
+  const stored = library.findIndex((m) => m.id === addon);
+  const on = inUse(addon);
+  if (method === "DELETE") {
+    if (stored < 0) throw new Refusal({ code: "not_found", message: "There is no such add-on." });
+    if (on.length > 0) {
+      throw new Refusal({
+        code: "in_use",
+        message: `${addon} is on for ${on.join(", ")}.`,
+        fix: "Turn it off in those teams' settings first.",
+      });
+    }
+    library.splice(stored, 1);
+    return;
+  }
+  const manifest = b as AddonManifest;
+  if (manifest.id !== addon) {
+    throw new Refusal({ code: "bad_request", message: "id: must equal the add-on in the address." });
+  }
+  if (stored >= 0 && on.length > 0 && JSON.stringify(library[stored]?.access) !== JSON.stringify(manifest.access)) {
+    throw new Refusal({
+      code: "in_use",
+      message: `${addon} is on for ${on.join(", ")}, and this changes the calls it makes.`,
+      fix: "Turn it off in those teams' settings first, so each sees the new calls when turning it on again.",
+    });
+  }
+  library.splice(stored < 0 ? library.length : stored, stored < 0 ? 0 : 1, manifest);
+}
+
+// Turning on makes its grants and starts it; it is ready a moment later, as an a12s Service would be.
+function switchAddon(teamId: string, addon: string, method: string): void {
+  const team = teams.find((t) => t.id === teamId);
+  const manifest = library.find((m) => m.id === addon);
+  if (!team || !manifest) throw new Refusal({ code: "not_found", message: "There is no such team or add-on." });
+  const a = teamAccess(teamId);
+  const key = `${teamId}/${addon}`;
+  if (method === "DELETE") {
+    for (const g of a.grants) {
+      if (addonGrants.get(key)?.includes(g.id) && g.revokedAt === null) {
+        g.revokedAt = Date.now();
+        audit(a, { action: "grant.revoke", host: g.host, grantId: g.id });
+      }
+    }
+    addonGrants.delete(key);
+    team.addons = team.addons.filter((x) => x.id !== addon);
+    return;
+  }
+  const missing = manifest.access.map((x) => x.host).filter((host) => !a.credentials.some((c) => c.host === host));
+  if (missing.length > 0) {
+    throw new Refusal({
+      code: "no_credential",
+      message: `${team.name} has no credential for ${missing.join(", ")}.`,
+      fix: `Store a credential for ${missing.join(", ")} under Access first.`,
+    });
+  }
+  if (team.addons.some((x) => x.id === addon)) return;
+  addonGrants.set(
+    key,
+    manifest.access.map((x) => addGrant(a, { host: x.host, methods: x.methods, paths: x.paths }, null).id),
+  );
+  const instance: TeamAddon = { id: addon, status: "starting", spentTodayUsd: 0 };
+  team.addons.push(instance);
+  setTimeout(() => {
+    instance.status = "ready";
+    changed();
+  }, 2500);
+}
+
 function write(b: Record<string, unknown>, path: string, method: string): string | undefined {
   const [, kind, id, sub, item, verb] = path.split("/").slice(1).map(decodeURIComponent);
+  if (kind === "addons" && id) {
+    libraryWrite(id, b, method);
+    return undefined;
+  }
+  if (kind === "teams" && id && sub === "addons" && item) {
+    switchAddon(id, item, method);
+    return undefined;
+  }
   if (kind === "teams" && id && ["credentials", "grants", "requests"].includes(String(sub))) {
     return accessWrite(id, b, method, String(sub), item ?? "", verb);
   }
@@ -754,7 +876,7 @@ createServer(async (req, res) => {
     id = write(b, url.pathname, method);
   } catch (error) {
     if (!(error instanceof Refusal)) throw error;
-    res.statusCode = error.body.code === "not_found" ? 404 : 409;
+    res.statusCode = error.body.code === "not_found" ? 404 : error.body.code === "bad_request" ? 400 : 409;
     return res.end(JSON.stringify(error.body));
   }
   // A short delay so the in-progress look of a control can be seen.

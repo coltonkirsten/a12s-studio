@@ -61,7 +61,7 @@ export function App() {
           ) : !team ? (
             <NeedsYou state={state} />
           ) : route.settings ? (
-            <TeamSettings key={team.id} team={team} />
+            <TeamSettings key={team.id} team={team} library={state.addons} />
           ) : (
             <TeamScreen key={team.id} state={state} team={team} route={shown} onHire={() => setSheet("hire")} />
           )}
