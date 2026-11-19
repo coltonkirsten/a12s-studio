@@ -157,6 +157,7 @@ export function deriveState(
         preview: (t.last?.body ?? "").slice(0, PREVIEW),
         unread: t.unread,
       })),
+      addons: [],
     };
   });
 
@@ -179,6 +180,7 @@ export function deriveState(
     a12s: live.up() ? "up" : "down",
     broker: broker.up() ? "up" : "down",
     settings,
+    addons: [],
     teams,
     needsYou,
     open,

@@ -11,6 +11,27 @@ export type Settings = {
   defaultCompactMinTokens: number;
 };
 
+// One outside call an add-on makes: it becomes one broker grant (host, methods, path patterns) for each team that
+// turns the add-on on.
+export type AddonAccess = { host: string; methods: string[]; paths: string[] };
+
+// An add-on as the owner gives it; no other field is accepted (section 10.1).
+export type AddonManifest = {
+  id: string;
+  name: string;
+  description: string;
+  image: string;
+  access: AddonAccess[];
+};
+
+// An add-on a team has on: its instance's status and what it reported spending today.
+export type TeamAddon = {
+  id: string;
+  status: "starting" | "ready" | "error";
+  error?: string;
+  spentTodayUsd: number;
+};
+
 export type Presence = "unknown" | "asleep" | "awake" | "working" | "waiting" | "error";
 export type WaitingFor = "cap" | "budget" | "paused" | "disk";
 export type ThreadStatus = "open" | "done";
@@ -63,6 +84,7 @@ export type TeamView = {
   budget: { dailyUsd: number; spentTodayUsd: number; held: boolean };
   agents: AgentView[];
   threads: ThreadSummary[];
+  addons: TeamAddon[];
 };
 
 // How a message reached its agent: the Turn that received it (null where the record does not name one), whether it
@@ -104,13 +126,16 @@ export type NeedsYouItem =
   | { kind: "failed_turn"; teamId: string; agentId: string; turnId: string; error: string | null; at: number }
   | { kind: "budget"; teamId: string; dailyUsd: number; spentTodayUsd: number }
   | { kind: "credential_rejected"; teamId: string; host: string; at: number }
-  | { kind: "grant_expiring"; teamId: string; grantId: GrantId; host: string; paths: string[]; expiresAt: number };
+  | { kind: "grant_expiring"; teamId: string; grantId: GrantId; host: string; paths: string[]; expiresAt: number }
+  | { kind: "addon_error"; teamId: string; addonId: string; error: string };
 
 export type StudioState = {
   rev: number;
   a12s: "up" | "down";
   broker: "up" | "down";
   settings: Settings;
+  // The library; which teams have an add-on on is in each team's addons.
+  addons: AddonManifest[];
   teams: TeamView[];
   needsYou: NeedsYouItem[];
   open: ThreadView | null;

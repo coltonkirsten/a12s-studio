@@ -44,8 +44,10 @@ function state(agents: AgentView[]): StudioState {
         budget: { dailyUsd: 25, spentTodayUsd: 0, held: false },
         agents,
         threads: [],
+        addons: [],
       },
     ],
+    addons: [],
     needsYou: [],
     open: null,
   };
