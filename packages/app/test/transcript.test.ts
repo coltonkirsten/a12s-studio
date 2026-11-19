@@ -143,3 +143,21 @@ test("the index counts tools, errors, retries, hooks and sub-agents", () => {
     subAgents: 1,
   });
 });
+
+test("a run's steps are in the order they were written, whichever file was sent first", () => {
+  const side = { isSidechain: true, agentId: "a1" };
+  const sub = [call(3, "c2", "Read", {}, side), result(4, "c2", "text", false, side)];
+  const main = [user(1, "Go."), call(2, "c1", "Agent", {}), result(5, "c1", "done")];
+  const order = (lines: string[]) => steps(lines, 100, false).map((s) => [s.kind, s.name, s.output]);
+  const expected = [
+    ["prompt", "", null],
+    ["tool", "Agent", "done"],
+    ["tool", "Read", "text"],
+  ];
+  assert.deepEqual(order([...sub, ...main]), expected);
+  assert.deepEqual(order([...main, ...sub]), expected);
+  assert.deepEqual(
+    index([...sub, ...main], 0).tools.map((t) => t.name),
+    ["Agent", "Read"],
+  );
+});

@@ -78,12 +78,24 @@ const CONTEXT = new Set(["instructions", "nested_memory", "compact_summary"]);
 
 // The steps a transcript records. `max` cuts each text; `full` also keeps the lines that only restate the
 // harness's own context.
+// A run's file holds each source file's lines as they were sent, the main session's and each sub-agent's in turn, so
+// the lines are put in the order they were written; a line with no time of its own stays after the one before it.
+function inTimeOrder(lines: string[]): Line[] {
+  let last = Number.NEGATIVE_INFINITY;
+  return lines
+    .map((raw, i) => {
+      const line = parse(raw);
+      last = timeOf(line) ?? last;
+      return { line, at: last, i };
+    })
+    .sort((a, b) => a.at - b.at || a.i - b.i)
+    .flatMap((x) => (x.line ? [x.line] : []));
+}
+
 export function steps(lines: string[], max: number, full: boolean): RunStep[] {
   const out: RunStep[] = [];
   const calls = new Map<string, { step: RunStep; at: number | null }>();
-  for (const raw of lines) {
-    const line = parse(raw);
-    if (!line) continue;
+  for (const line of inTimeOrder(lines)) {
     const at = timeOf(line);
     const agent = line.isSidechain === true ? str(line.agentId) || null : null;
     const step = (kind: RunStep["kind"], name: string, text: string, isError = false, ms: number | null = null) => {
