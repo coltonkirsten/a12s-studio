@@ -169,7 +169,7 @@ function AddAddon({ onClose }: { onClose: () => void }) {
       className={action.pending ? "pending" : undefined}
       onSubmit={(event) => {
         event.preventDefault();
-        if (manifest && !action.pending) action.run(() => api.putAddon(manifest), onClose);
+        if (manifest && !action.pending) action.run(() => api.putAddon(manifest.id, manifest.manifest), onClose);
       }}
     >
       <label className="field">

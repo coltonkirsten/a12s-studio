@@ -1536,9 +1536,8 @@ is refused with 409 `in_use` when `access` differs, so a change of outside calls
 next turn-on; when only the image differs, each instance is written again with the new image. `DELETE` is refused
 with 409 `in_use` while any team has the add-on on.
 
-The owner adds a manifest in the global settings by pasting its JSON. The browser checks only that every field is
-there with its type and no other (`logic/addons.ts`); the rules on values are the server's, and its refusal is shown
-as it comes.
+The owner adds a manifest in the global settings by pasting its JSON. The browser only reads the JSON and its id;
+every rule on the fields is the server's, and its refusal is shown as it comes.
 
 ### 10.2 An instance
 

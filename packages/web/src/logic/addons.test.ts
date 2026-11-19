@@ -12,44 +12,18 @@ const NARRATE = {
   access: [{ host: "api.speech.example", methods: ["POST"], paths: ["/v1/speech"] }],
 };
 
-const without = (field: string) => Object.fromEntries(Object.entries(NARRATE).filter(([k]) => k !== field));
-
-test("readManifest takes a manifest with every field and no other", () => {
-  assert.deepEqual(readManifest(JSON.stringify(NARRATE)), NARRATE);
-  assert.deepEqual(readManifest(JSON.stringify({ ...NARRATE, access: [] })), { ...NARRATE, access: [] });
-});
-
-test("readManifest says what is wrong with anything else", () => {
-  const access = (entry: unknown) => JSON.stringify({ ...NARRATE, access: [entry] });
+test("readManifest reads the JSON and its id and leaves every other rule to the server", () => {
+  assert.deepEqual(readManifest(JSON.stringify(NARRATE)), { id: "narrate", manifest: NARRATE });
+  const odd = { ...NARRATE, settings: {} };
+  assert.deepEqual(readManifest(JSON.stringify(odd)), { id: "narrate", manifest: odd });
   const rows: [string, string][] = [
     ["", "This is not JSON."],
     ["{", "This is not JSON."],
-    ["[]", "A manifest is one JSON object."],
-    ["null", "A manifest is one JSON object."],
-    ['"narrate"', "A manifest is one JSON object."],
-    [JSON.stringify({ ...NARRATE, settings: {} }), "“settings” is not a manifest field."],
-    [JSON.stringify(without("id")), "A manifest needs an id, a name and a description."],
-    [JSON.stringify({ ...NARRATE, name: 7 }), "A manifest needs an id, a name and a description."],
-    [JSON.stringify(without("image")), "A manifest needs an image."],
-    [JSON.stringify(without("access")), "A manifest needs access: the list of outside calls it makes, empty for none."],
-    [
-      JSON.stringify({ ...NARRATE, access: {} }),
-      "A manifest needs access: the list of outside calls it makes, empty for none.",
-    ],
-    [access("api.speech.example"), "The access entry 1 is not an object."],
-    [
-      access({ ...NARRATE.access[0], port: 443 }),
-      "The access entry 1 has a field “port”, which a manifest does not take.",
-    ],
-    [access({ methods: ["POST"], paths: ["/"] }), "The access entry 1 needs a host."],
-    [
-      access({ host: "api.speech.example", methods: "POST", paths: ["/"] }),
-      "The access entry 1 needs methods and paths, each a list of text.",
-    ],
-    [
-      access({ host: "api.speech.example", methods: ["POST"], paths: [1] }),
-      "The access entry 1 needs methods and paths, each a list of text.",
-    ],
+    ["[]", "A manifest is a JSON object with an id."],
+    ["null", "A manifest is a JSON object with an id."],
+    ['"narrate"', "A manifest is a JSON object with an id."],
+    [JSON.stringify({ ...NARRATE, id: 7 }), "A manifest is a JSON object with an id."],
+    [JSON.stringify({ ...NARRATE, id: "" }), "A manifest is a JSON object with an id."],
   ];
   for (const [text, problem] of rows) assert.equal(readManifest(text), problem, text);
 });

@@ -29,7 +29,6 @@ import type {
   CreateGrantBody,
   PutCredentialBody,
 } from "@a12s-studio/contract/broker-admin";
-import type { AddonManifest } from "@a12s-studio/contract/state";
 import { createContext, useCallback, useContext, useEffect, useRef, useState } from "react";
 
 const UNREACHABLE: ErrorBody = {
@@ -109,7 +108,7 @@ export const api = {
   approve: (team: string, request: string, body: ApproveBody) =>
     write("POST", `/teams/${at(team)}/requests/${at(request)}/approve`, body),
   deny: (team: string, request: string) => write("POST", `/teams/${at(team)}/requests/${at(request)}/deny`),
-  putAddon: (manifest: AddonManifest) => write("PUT", `/addons/${at(manifest.id)}`, manifest),
+  putAddon: (id: string, manifest: unknown) => write("PUT", `/addons/${at(id)}`, manifest),
   removeAddon: (addon: string) => write("DELETE", `/addons/${at(addon)}`),
   addonOn: (team: string, addon: string) => write("PUT", `/teams/${at(team)}/addons/${at(addon)}`, {}),
   addonOff: (team: string, addon: string) => write("DELETE", `/teams/${at(team)}/addons/${at(addon)}`),
