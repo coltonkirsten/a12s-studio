@@ -17,12 +17,12 @@ const VARIABLES: { name: string; scripts: string[] | null; fix: string }[] = [
   },
   {
     name: "E2E_GITHUB_REPO",
-    scripts: ["p2"],
+    scripts: ["p2", "p4"],
     fix: "Export E2E_GITHUB_REPO as <owner>/<repo> of a throwaway private repository.",
   },
   {
     name: "E2E_GITHUB_TOKEN",
-    scripts: ["p2"],
+    scripts: ["p2", "p4"],
     fix: "Export E2E_GITHUB_TOKEN with a fine-grained token for that repository only, contents read and write.",
   },
 ];

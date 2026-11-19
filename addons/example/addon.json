@@ -1,0 +1,7 @@
+{
+  "id": "example",
+  "name": "Repo facts",
+  "description": "Looks up a GitHub repository's description, default branch and stars.",
+  "image": "a12s-studio/example-addon:1.0.0",
+  "access": [{ "host": "api.github.com", "methods": ["GET"], "paths": ["/repos/*/*"] }]
+}

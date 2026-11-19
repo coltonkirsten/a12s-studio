@@ -16,6 +16,8 @@ const STATE_FRAME = "event: state\ndata: ";
 
 // A model's Turn includes waking its agent computer, so each wait for an agent allows a few minutes.
 export const ANSWER_MS = 5 * 60_000;
+// The Fleet a run makes and removes; a Service's container is a12s-<fleet>-<name>.
+export const FLEET = "studio-e2e";
 
 // The app or the broker process, as run.ts started it.
 type HostProcess = { stop(): Promise<void>; start(): void };

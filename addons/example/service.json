@@ -1,0 +1,8 @@
+{
+  "a12s": 1,
+  "name": "repo-facts",
+  "version": "1.0.0",
+  "user": 1000,
+  "ports": { "mcp": { "port": 8080, "protocol": "http", "mcp": { "path": "/mcp" } } },
+  "health": { "http": { "port": 8080, "path": "/healthz" } }
+}
