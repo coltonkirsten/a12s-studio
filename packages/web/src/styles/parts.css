@@ -1412,3 +1412,19 @@
   font-family: var(--font);
   font-style: italic;
 }
+
+/* Add-ons */
+
+.addon-image {
+  font: var(--size-small) / 1.5 var(--mono);
+  color: var(--text-2);
+  overflow-wrap: anywhere;
+}
+
+.row-main > .preview {
+  margin: 6px 0 0;
+}
+
+.group.form > .part-hint {
+  margin: 0 0 12px;
+}

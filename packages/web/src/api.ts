@@ -108,6 +108,10 @@ export const api = {
   approve: (team: string, request: string, body: ApproveBody) =>
     write("POST", `/teams/${at(team)}/requests/${at(request)}/approve`, body),
   deny: (team: string, request: string) => write("POST", `/teams/${at(team)}/requests/${at(request)}/deny`),
+  putAddon: (id: string, manifest: unknown) => write("PUT", `/addons/${at(id)}`, manifest),
+  removeAddon: (addon: string) => write("DELETE", `/addons/${at(addon)}`),
+  addonOn: (team: string, addon: string) => write("PUT", `/teams/${at(team)}/addons/${at(addon)}`, {}),
+  addonOff: (team: string, addon: string) => write("DELETE", `/teams/${at(team)}/addons/${at(addon)}`),
   rules: (before?: number) => read<RulesPage>(`/rules${page(before)}`, ["versions"], "rules"),
   putRules: (body: string) => write("PUT", "/rules", { body }),
   teamRules: (team: string, before?: number) =>

@@ -56,7 +56,10 @@ export function Sidebar({ state, route, runs, connected, onNewTeam }: Props) {
       </footer>
       {/* The sidebar's backdrop filter would hold a fixed sheet inside it, so the sheet is drawn on the page. */}
       {settings &&
-        createPortal(<SettingsSheet settings={state.settings} onClose={() => setSettings(false)} />, document.body)}
+        createPortal(
+          <SettingsSheet settings={state.settings} library={state.addons} onClose={() => setSettings(false)} />,
+          document.body,
+        )}
     </nav>
   );
 }

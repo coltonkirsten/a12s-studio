@@ -1,10 +1,12 @@
 import type { WriteResult } from "@a12s-studio/contract/api";
-import type { Settings } from "@a12s-studio/contract/state";
+import type { AddonManifest, Settings } from "@a12s-studio/contract/state";
 import { useState } from "react";
 import { api, useAction } from "../api.ts";
+import { readManifest } from "../logic/addons.ts";
 import { MODELS } from "../logic/agent-settings.ts";
 import { parseUsd } from "../logic/money.ts";
 import { title } from "../logic/names.ts";
+import { GrantLines } from "../parts/access/grants.tsx";
 import { Problem } from "../parts/problem.tsx";
 import { Sheet } from "../parts/sheet.tsx";
 import { Versions } from "../parts/versions.tsx";
@@ -90,8 +92,125 @@ function Choice({
   );
 }
 
+const EXAMPLE = `{
+  "id": "narrate",
+  "name": "Narrate",
+  "description": "Turns a script into an audio file.",
+  "image": "registry.example/narrate:1.2.0",
+  "access": [
+    { "host": "api.speech.example", "methods": ["POST"], "paths": ["/v1/speech"] }
+  ]
+}`;
+
+/** The add-on library: what each one is and calls. Teams turn them on in their own settings. */
+function Library({ library }: { library: AddonManifest[] }) {
+  const [adding, setAdding] = useState(false);
+  return (
+    <section className="sheet-section">
+      <h3>Add-ons</h3>
+      <p className="part-hint">Each team turns these on in its own settings.</p>
+      {library.length > 0 && (
+        <ul className="group">
+          {library.map((manifest) => (
+            <LibraryRow key={manifest.id} manifest={manifest} />
+          ))}
+        </ul>
+      )}
+      {adding ? (
+        <div className="group form">
+          <AddAddon onClose={() => setAdding(false)} />
+        </div>
+      ) : (
+        <button type="button" className="button quiet add" onClick={() => setAdding(true)}>
+          Add an add-on…
+        </button>
+      )}
+    </section>
+  );
+}
+
+function LibraryRow({ manifest: m }: { manifest: AddonManifest }) {
+  const [removing, setRemoving] = useState(false);
+  const action = useAction();
+  return (
+    <li className={action.pending ? "row pending" : "row"}>
+      <div className="row-main">
+        <span className="row-title">{m.name}</span>
+        <span className="row-sub">{m.description}</span>
+        <code className="addon-image">{m.image}</code>
+        <div className="preview">
+          <small>{m.access.length === 0 ? "Makes no outside calls" : "Calls"}</small>
+          {m.access.map((call) => (
+            <GrantLines key={`${call.host} ${call.methods} ${call.paths}`} grant={call} />
+          ))}
+        </div>
+        <Problem problem={action.problem} />
+      </div>
+      {removing ? (
+        <button type="button" className="button danger" onClick={() => action.run(() => api.removeAddon(m.id))}>
+          Remove from library
+        </button>
+      ) : (
+        <button type="button" className="button quiet" onClick={() => setRemoving(true)}>
+          Remove…
+        </button>
+      )}
+    </li>
+  );
+}
+
+function AddAddon({ onClose }: { onClose: () => void }) {
+  const [text, setText] = useState("");
+  const action = useAction();
+  const read = text.trim() === "" ? null : readManifest(text);
+  const manifest = read === null || typeof read === "string" ? null : read;
+  return (
+    <form
+      className={action.pending ? "pending" : undefined}
+      onSubmit={(event) => {
+        event.preventDefault();
+        if (manifest && !action.pending) action.run(() => api.putAddon(manifest.id, manifest.manifest), onClose);
+      }}
+    >
+      <label className="field">
+        <span>Manifest</span>
+        <textarea
+          className="mono"
+          rows={9}
+          value={text}
+          placeholder={EXAMPLE}
+          spellCheck={false}
+          onChange={(event) => setText(event.target.value)}
+        />
+        <small className={typeof read === "string" ? "field-problem" : "field-hint"}>
+          {typeof read === "string"
+            ? read
+            : "The add-on’s manifest as JSON. One with the id of an add-on already here replaces it."}
+        </small>
+      </label>
+      <Problem problem={action.problem} />
+      <div className="form-actions">
+        <button type="button" className="button quiet" onClick={onClose}>
+          Cancel
+        </button>
+        <button type="submit" className="button primary" disabled={!manifest}>
+          Add to library
+        </button>
+      </div>
+    </form>
+  );
+}
+
 /** The global limits and the defaults new teams and agents start with. Each applies as soon as it is saved. */
-export function SettingsSheet({ settings, onClose }: { settings: Settings; onClose: () => void }) {
+export function SettingsSheet({
+  settings,
+  library,
+  onClose,
+}: {
+  settings: Settings;
+  library: AddonManifest[];
+  onClose: () => void;
+}) {
   const patch = api.patchSettings;
   return (
     <Sheet title="Settings" onClose={onClose}>
@@ -148,6 +267,7 @@ export function SettingsSheet({ settings, onClose }: { settings: Settings; onClo
           save={api.putRules}
         />
       </section>
+      <Library library={library} />
       <div className="sheet-actions">
         <button type="button" className="button primary" onClick={onClose}>
           Done

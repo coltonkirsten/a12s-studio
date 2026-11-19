@@ -124,6 +124,7 @@ function Card({ item, team }: { item: NeedsYouItem; team: TeamView }) {
           <a className="button quiet" href={settingsHref(item.teamId)}>
             Open team settings
           </a>
+          <ActionButton label="Turn off" write={() => api.addonOff(item.teamId, item.addonId)} />
         </Actions>,
       );
   }
