@@ -52,12 +52,13 @@ test("the hooks load the three rule layers and the notes at a session's start, a
         hooks: ["owner", "team", "role"].map((layer) => ({ ...command(`load-rules ${layer} changed`), timeout: 10 })),
       },
     ],
+    Stop: [{ hooks: [{ ...command("send-transcript"), timeout: 30 }] }],
   });
-  // The two scripts are the spec's, with its URL filled in.
-  for (const name of ["bin/load-rules", "bin/load-notes"]) {
+  // The three scripts are the spec's, with its URL filled in.
+  for (const name of ["bin/load-rules", "bin/load-notes", "bin/send-transcript"]) {
     const script = new RegExp(`  ${name}: \\|\n((?:    .*\n)+)`).exec(doc)?.[1];
     assert.ok(script, `${name} is in the build spec`);
-    assert.equal(files[name], script.replaceAll(/^ {4}/gm, "").replace("<STUDIO_URL>", STUDIO_URL), name);
+    assert.equal(files[name], script.replaceAll(/^ {4}/gm, "").replaceAll("<STUDIO_URL>", STUDIO_URL), name);
   }
 });
 
@@ -78,7 +79,7 @@ test("the spec pins the harness, keeps the agent's own settings and adds nothing
     uses: ["studio", { name: "broker", mcp: false }],
     egress: { allow: ["*"] },
   });
-  assert.deepEqual(Object.keys(files), ["bin/load-rules", "bin/load-notes", ".gitconfig"]);
+  assert.deepEqual(Object.keys(files), ["bin/load-rules", "bin/load-notes", "bin/send-transcript", ".gitconfig"]);
   assert.equal(
     files[".gitconfig"],
     `[url "${BROKER_URL}/github.com/"]\n    insteadOf = https://github.com/\n    insteadOf = git@github.com:\n` +

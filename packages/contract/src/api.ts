@@ -96,3 +96,52 @@ export type FileView =
     };
 
 export type PutFileBody = { content: string; encoding: "utf-8" | "base64" };
+
+// What a Turn's transcript shows at a glance, built when its lines arrive. A tool retry is a call to the tool whose
+// previous call, by the same agent or sub-agent, failed; an API retry is the harness asking the model again after
+// an API error.
+export type RunIndex = {
+  lines: number;
+  bytes: number;
+  // Lines that are not JSON, as a line cut at the end of a transcript is.
+  unparsed: number;
+  firstAt: number | null;
+  lastAt: number | null;
+  // Each tool in the order it was first called; ms is the time from the calls to their results.
+  tools: { name: string; calls: number; errors: number; ms: number }[];
+  errors: number;
+  retries: { tool: number; api: number };
+  hooks: { runs: number; errors: number };
+  subAgents: number;
+};
+
+// A Turn whose transcript Studio holds. status and the times are a12s's, null until the Turn is stored.
+export type RunSummary = {
+  turn: string;
+  team: string;
+  agent: string;
+  thread: ThreadId | null;
+  session: string;
+  status: "completed" | "failed" | "interrupted" | null;
+  error: string | null;
+  startedAt: number | null;
+  finishedAt: number | null;
+  costUsd: number | null;
+  index: RunIndex;
+};
+export type RunsResponse = { runs: RunSummary[] };
+
+// One step of a Turn as its transcript records it, in the order written. agent is the sub-agent's id, null for the
+// agent itself. A tool step's text is its input and output its result (null until there is one); a hook step's text
+// is what the hook printed. Texts are cut at a few thousand characters unless the full run is asked for.
+export type RunStep = {
+  at: number | null;
+  kind: "prompt" | "text" | "tool" | "hook" | "context" | "error";
+  agent: string | null;
+  name: string;
+  text: string;
+  output: string | null;
+  isError: boolean;
+  ms: number | null;
+};
+export type RunResponse = { run: RunSummary; steps: RunStep[] };

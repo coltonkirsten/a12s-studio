@@ -1,5 +1,6 @@
 import { BROKER_URL, STUDIO_URL } from "@a12s-studio/contract/names";
 import type { Agent, Team } from "../repo.ts";
+import { CHUNK_MAX } from "../transcript.ts";
 import type { AgentSpec } from "./port.ts";
 
 // The Claude Code bundle the installed a12s release documents; a version without a bundle fails the write.
@@ -82,6 +83,21 @@ f="$HOME/memory/notes.md"
 exit 0
 `;
 
+// Run capture: sends Studio what each session transcript, a sub-agent's included, gained since Studio last took it.
+// Studio answers how much of each file it holds and takes whole lines, so a lost or partial send is sent again.
+const SEND_TRANSCRIPT = `#!/bin/sh
+cd "\${CLAUDE_CONFIG_DIR:-$HOME/.claude}/projects" 2>/dev/null || exit 0
+held=$(curl -sf --max-time 5 "${STUDIO_URL}/transcripts") || exit 0
+find . -type f -name '*.jsonl' | sed 's|^\\./||' | while read -r f; do
+  n=$(printf '%s\\n' "$held" | awk -v f="$f" '$2 == f { print $1 }')
+  n=\${n:-0}
+  [ $(($(wc -c < "$f"))) -gt "$n" ] || continue
+  tail -c +$((n + 1)) "./$f" | head -c ${CHUNK_MAX} | curl -sf --max-time 25 -o /dev/null --data-binary @- \\
+    -H 'content-type: application/octet-stream' "${STUDIO_URL}/transcripts/$f?offset=$n"
+done
+exit 0
+`;
+
 // The whole spec of an agent computer. Fleet defaults are not used, so this is the one place a spec is decided.
 // The rules, the brief and the role are not in it: a changed spec restarts the agent computer, and the hooks load
 // them instead (build-spec section 6).
@@ -116,6 +132,8 @@ export function agentSpec(team: Pick<Team, "name">, agent: Agent): AgentSpec {
               })),
             },
           ],
+          // The end of every Turn the harness completes; an interrupted Turn's lines go with the next one's.
+          Stop: [{ hooks: [{ type: "command", command: `${BIN}/send-transcript`, timeout: 30 }] }],
         },
       },
     },
@@ -125,6 +143,7 @@ export function agentSpec(team: Pick<Team, "name">, agent: Agent): AgentSpec {
     files: {
       "bin/load-rules": LOAD_RULES,
       "bin/load-notes": LOAD_NOTES,
+      "bin/send-transcript": SEND_TRANSCRIPT,
       ".gitconfig": `[url "${BROKER_URL}/github.com/"]
     insteadOf = https://github.com/
     insteadOf = git@github.com:

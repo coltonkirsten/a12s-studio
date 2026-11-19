@@ -6,6 +6,7 @@ import { createDispatcher } from "./dispatcher.ts";
 import { createLive } from "./live.ts";
 import { createOwnerServer } from "./owner/server.ts";
 import { createRepo } from "./repo.ts";
+import { createRuns } from "./runs.ts";
 import { createScheduler } from "./scheduler.ts";
 import { createStream } from "./state.ts";
 import { createTeams } from "./teams.ts";
@@ -19,6 +20,8 @@ export function createApp(deps: {
   webDir: string;
   // Attachments, app/files/<message>/<name>.
   filesDir: string;
+  // Run capture, app/runs/<turn>.jsonl.
+  runsDir: string;
   ownerLogin: string;
 }) {
   const { a12s } = deps;
@@ -29,8 +32,9 @@ export function createApp(deps: {
   const scheduler = createScheduler({ repo, broker, dispatcher, changed: stream.changed });
   const teams = createTeams({ repo, a12s, broker, dispatcher, templatesDir: deps.templatesDir });
   const live = createLive({ repo, a12s, dispatcher, changed: stream.changed, text: stream.live });
+  const runs = createRuns({ repo, live, dir: deps.runsDir });
   const { filesDir } = deps;
-  const agentServer = createAgentServer({ repo, a12s, broker, dispatcher, scheduler, live, filesDir });
+  const agentServer = createAgentServer({ repo, a12s, broker, dispatcher, scheduler, live, runs, filesDir });
   const ownerServer = createOwnerServer({
     repo,
     a12s,
@@ -40,9 +44,10 @@ export function createApp(deps: {
     teams,
     live,
     stream,
+    runs,
     filesDir,
     ownerLogin: deps.ownerLogin,
     webDir: deps.webDir,
   });
-  return { repo, broker, dispatcher, scheduler, teams, live, stream, agentServer, ownerServer };
+  return { repo, broker, dispatcher, scheduler, teams, live, stream, runs, agentServer, ownerServer };
 }

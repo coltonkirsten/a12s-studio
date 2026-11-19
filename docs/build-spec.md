@@ -143,6 +143,8 @@ packages/
     src/dispatcher.ts   the one queue: pause, budget, awake cap, delivery
     src/teams.ts        create, hire, fire, delete, pause and resume
     src/rules.ts        the instruction layers: versions, who may write, the text an agent loads
+    src/runs.ts         run capture: the transcript lines the Stop hook sends, filed per Turn, kept 30 days
+    src/transcript.ts   reading a harness transcript: lines to Turns, steps, the index (pure)
     src/addons.ts       the add-on library; turning an add-on on and off for a team
     src/a12s/           port.ts (interface), real.ts (a12s HTTP API), fake.ts (in-memory), spec.ts (agentSpec, addonSpec)
     src/live.ts         a12s events -> presence, line, text, turns
@@ -167,6 +169,7 @@ packages/
 teams/                  templates: blank/, website/, research-notes/
 addons/example/         a reference add-on: Dockerfile, service.json, addon.json and one small server
 scripts/                setup.sh, backup.ts, restore.ts, drives.ts (a home drive saved and loaded through Docker),
+                        run-trace.ts (prints runs from the owner API),
                         test/ (run by `npm test`; typed by `tsc -p scripts`)
 launchd/
 .github/workflows/ci.yml
@@ -307,6 +310,26 @@ CREATE TABLE turns (                                   -- one row per finished a
 CREATE INDEX turns_spend ON turns (team_id, finished_at);
 CREATE INDEX turns_agent ON turns (agent_id, finished_at DESC);
 
+CREATE TABLE runs (                                    -- a Turn's part of the harness transcript (section 7.8)
+  turn_id TEXT PRIMARY KEY,                            -- its lines are the file app/runs/<turn_id>.jsonl
+  team_id TEXT NOT NULL REFERENCES teams(id),
+  agent_id TEXT NOT NULL REFERENCES agents(id),
+  session TEXT NOT NULL,
+  bytes INTEGER NOT NULL,                              -- the file's length once its lines were committed
+  last_at INTEGER NOT NULL,                            -- its newest line's time; 30 days on, the run is pruned
+  summary TEXT NOT NULL                                -- JSON RunIndex: tools, errors, durations, retries, hooks
+) STRICT;
+CREATE INDEX runs_agent ON runs (agent_id, last_at DESC);
+CREATE INDEX runs_age ON runs (last_at);
+
+CREATE TABLE run_sources (                             -- how much of each transcript file an agent has sent
+  team_id TEXT NOT NULL REFERENCES teams(id),
+  agent_id TEXT NOT NULL REFERENCES agents(id),
+  path TEXT NOT NULL,                                  -- under the harness's projects folder
+  bytes INTEGER NOT NULL,
+  PRIMARY KEY (agent_id, path)
+) STRICT;
+
 CREATE TABLE addons (                                  -- the library (section 10.1)
   id TEXT PRIMARY KEY,
   manifest TEXT NOT NULL,                              -- JSON, as the owner gave it
@@ -361,6 +384,7 @@ The app's agent listener (`7410`) is the external Service `studio`. It serves:
 - `GET /rules/<layer>`: the caller's own text of one instruction layer (`owner`, `team` or `role`), as plain text.
   The hook of section 6 reads it.
 - `POST /usage`: an add-on instance reports the cost of paid work (section 10.4).
+- `GET /transcripts` and `POST /transcripts/<path>?offset=`: run capture's Stop hook (section 7.8).
 - `GET /healthz`: `{ ok: true }`. The one route that needs no caller; it reads nothing.
 
 `caller.ts` is the only reader of the caller header:
@@ -695,6 +719,9 @@ harness:
             - { type: command, command: /home/agent/bin/load-rules owner changed, timeout: 10 }
             - { type: command, command: /home/agent/bin/load-rules team changed, timeout: 10 }
             - { type: command, command: /home/agent/bin/load-rules role changed, timeout: 10 }
+      Stop:
+        - hooks:
+            - { type: command, command: /home/agent/bin/send-transcript, timeout: 30 }
 image: slim
 credentials: [anthropic]
 instructions: <core> + <add-ons>
@@ -713,6 +740,18 @@ files:
     #!/bin/sh
     f="$HOME/memory/notes.md"
     [ -s "$f" ] && { echo "Your notes, from ~/memory/notes.md:"; head -c 9000 "$f"; }
+    exit 0
+  bin/send-transcript: |
+    #!/bin/sh
+    cd "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/projects" 2>/dev/null || exit 0
+    held=$(curl -sf --max-time 5 "<STUDIO_URL>/transcripts") || exit 0
+    find . -type f -name '*.jsonl' | sed 's|^\./||' | while read -r f; do
+      n=$(printf '%s\n' "$held" | awk -v f="$f" '$2 == f { print $1 }')
+      n=${n:-0}
+      [ $(($(wc -c < "$f"))) -gt "$n" ] || continue
+      tail -c +$((n + 1)) "./$f" | head -c 33554432 | curl -sf --max-time 25 -o /dev/null --data-binary @- \
+        -H 'content-type: application/octet-stream' "<STUDIO_URL>/transcripts/$f?offset=$n"
+    done
     exit 0
   .gitconfig: |
     [url "<BROKER_URL>/github.com/"]
@@ -1030,6 +1069,7 @@ GET    /agents/:agent                 (the six fields PATCH takes, as they are n
 GET    /agents/:agent/turns           GET /agents/:agent/turns/:turn/events
 GET    /agents/:agent/inbox           DELETE /agents/:agent/inbox/:id    POST /agents/:agent/inbox/clear
 GET    /agents/:agent/files?path=     PUT /agents/:agent/files?path=   { content, encoding: "utf-8" | "base64" }
+GET    /runs?thread=|agent=           GET /runs/:turn?full=1             GET /runs/:turn/transcript   (section 7.8)
 GET    /agents/:agent/terminal?rows=&cols=   (WebSocket, bridged to a12s's terminal upgrade)
 GET    /files/:message/:name          (an attachment, downloaded)
 GET    /teams/:team/access            (credentials without values, grants, requests)
@@ -1129,6 +1169,42 @@ All of it is drawn from the open thread's `MessageView`s and `ThreadView.chain`;
   and the cost, from `chain`. Older messages page in as they do in the conversation.
 
 Nothing here warns, colours or counts toward a limit. The view exists so that a loop is seen by looking.
+
+### 7.8 Run capture
+
+What an agent did in a Turn, as its harness recorded it: every prompt and steered message, every tool call with its
+input, result and time, the agent's text, API errors and retries, and the rules, notes and instructions loaded at a
+session's start. Claude Code writes this as its session transcript, one JSON object per line, under
+`~/.claude/projects/<folder>/<session>.jsonl` in the agent's home, with each sub-agent's in
+`<session>/subagents/agent-<id>.jsonl`. Studio keeps a copy of each Turn's part; nothing else records tool calls.
+
+*Why the hook sends it.* a12s's files API reads at most the first 1 MiB of a file, and a session's transcript grows
+past that within days. The harness runs the `Stop` hook at the end of every Turn it completes, inside the agent
+computer, where the whole file is. `bin/send-transcript` asks `GET /transcripts` how many bytes Studio holds of each
+file (`<bytes> <path>` lines, for the caller only) and sends each file's new bytes, at most 32 MiB at a time, to
+`POST /transcripts/<path>?offset=<bytes held>`. Studio takes the whole lines of the body and answers how far into the
+file it now holds. A send that fails, or a cut last line, is sent again by the next Turn's hook; an offset that is
+not what Studio holds is refused with `409`. The hook prints nothing and always exits 0, so it never changes a Turn.
+
+*Filing.* `runs.ts` gives each line to the Turn of the same agent that started last at or before the line's
+`timestamp` (the stored Turns from the last 30 days and the one running now); a line with no time goes with the one
+before it. So an interrupted Turn, whose hook never ran, gets its lines when the next Turn's hook sends them. Lines
+are appended to `app/runs/<turn>.jsonl` exactly as written, then the file is read again and its index
+(`transcript.ts`, contract `RunIndex`: each tool's calls, failures and time, errors, tool and API retries, hook runs,
+sub-agents) is stored in `runs` in the same transaction as the file's new `run_sources.bytes`. A file is cut back to
+the committed `bytes` before an append, so a crash between the two writes repeats nothing.
+
+*Limits.* A run is kept 30 days after its newest line; each send prunes older runs and their files. Runs belong to
+no current team or agent: deleting a team or firing an agent leaves them. A send is refused with `507` while free
+disk is under `min_free_disk_gb`; the bytes stay in the agent's transcript and go with a later send. Measured on
+real Turns of a research lead (sonnet): 5 to 280 KB a Turn, median 29 KB.
+
+*Reading.* `GET /runs?thread=` or `?agent=` answers `RunsResponse`, the 50 newest runs with their index and what
+a12s said of the Turn (status, times, cost; null until the Turn is stored). `GET /runs/:turn` answers `RunResponse`:
+the run and its steps (`RunStep`), texts cut at 4,000 characters; with `full=1` uncut, with every context line the
+harness added. `GET /runs/:turn/transcript` downloads the lines as they were written. A run is looked up by its own
+row, so it is found after its team is gone. `scripts/run-trace.ts <turn | thread | agent>` prints the same, one line
+per step, `--full` for everything. Transcript text is the agent's data, shown and never acted on.
 
 ## 8. Templates
 
